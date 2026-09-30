@@ -1,6 +1,8 @@
 #include "server.h"
 #include "../network/protocol.h"
 #include "../world/world.h"
+#include "../inventory/inventory.h"
+#include "../item/item.h"
 #include <errno.h>
 #include <math.h>
 #include <signal.h>
@@ -38,8 +40,12 @@ typedef struct {
     float yaw, pitch;
     bool grounded;
     int selected;
+    int gamemode;
+    bool transaction_pending;
+    int16_t rejected_action;
     uint64_t chunks_sent;
-    int16_t inventory[9];
+    mc_inventory inventory;
+    mc_nbt player_data;
 } server_peer;
 typedef struct {
     mc_world world;
@@ -84,20 +90,23 @@ static void disconnect_peer(server_peer *peer, const char *reason) {
     peer->closing = true;
     peer->close_at = mc_time_ms();
 }
-static void send_slot(mc_buf *packet, int16_t item) {
-    mc_put_i16(packet, item);
-    if (item >= 0) {
-        mc_put_u8(packet, 1);
-        mc_put_i16(packet, 0);
-        mc_put_u8(packet, 0); /* absent NBT root is TAG_End, not legacy -1 length */
-    }
-}
 static void inventory_slot(server_peer *peer, int index) {
     mc_buf packet;
     packet_start(&packet, 0x2f);
     mc_put_u8(&packet, 0);
-    mc_put_i16(&packet, (int16_t)(36 + index));
-    send_slot(&packet, peer->inventory[index]);
+    mc_put_i16(&packet, (int16_t)index);
+    mc_slot_write(&packet, &peer->inventory.slots[index]);
+    queue_packet(peer, &packet);
+}
+static void inventory_resync(server_peer *peer) {
+    mc_buf packet;
+    packet_start(&packet, 0x30);
+    mc_put_u8(&packet, 0); mc_put_i16(&packet, MC_PLAYER_INVENTORY_SIZE);
+    for (int i = 0; i < MC_PLAYER_INVENTORY_SIZE; ++i) mc_slot_write(&packet, &peer->inventory.slots[i]);
+    queue_packet(peer, &packet);
+    packet_start(&packet, 0x2f);
+    mc_put_u8(&packet, 255); mc_put_i16(&packet, -1);
+    mc_slot_write(&packet, &peer->inventory.cursor);
     queue_packet(peer, &packet);
 }
 static void player_info(mc_buf *packet, const server_peer *peer, bool add) {
@@ -108,7 +117,7 @@ static void player_info(mc_buf *packet, const server_peer *peer, bool add) {
     if (add) {
         mc_put_string(packet, peer->name);
         mc_put_varint(packet, 0);
-        mc_put_varint(packet, 1);
+        mc_put_varint(packet, peer->gamemode);
         mc_put_varint(packet, 0);
         mc_put_u8(packet, 0);
     }
@@ -127,7 +136,7 @@ static void spawn_player(mc_buf *packet, const server_peer *peer) {
     mc_put_i32(packet, (int32_t)floor(peer->z * 32.0));
     mc_put_u8(packet, angle_byte(peer->yaw));
     mc_put_u8(packet, angle_byte(peer->pitch));
-    mc_put_i16(packet, peer->inventory[peer->selected]);
+    mc_put_i16(packet, peer->inventory.slots[MC_HOTBAR_START + peer->selected].item_id);
     mc_put_u8(packet, 0x7f);
 }
 static void send_position(server_peer *peer) {
@@ -139,13 +148,21 @@ static void send_position(server_peer *peer) {
     queue_packet(peer, &packet);
 }
 static void send_equipment(mc_server *server, server_peer *peer) {
-    mc_buf packet;
-    packet_start(&packet, 4);
-    mc_put_varint(&packet, peer->entity);
-    mc_put_i16(&packet, 0);
-    send_slot(&packet, peer->inventory[peer->selected]);
-    broadcast(server, &packet, peer);
-    mc_buf_free(&packet);
+    for (int equipment = 0; equipment < 5; ++equipment) {
+        mc_buf packet; packet_start(&packet, 4);
+        mc_put_varint(&packet, peer->entity); mc_put_i16(&packet, (int16_t)equipment);
+        int index = equipment == 0 ? MC_HOTBAR_START + peer->selected : 9 - equipment;
+        mc_slot_write(&packet, &peer->inventory.slots[index]);
+        broadcast(server, &packet, peer); mc_buf_free(&packet);
+    }
+}
+static void send_equipment_to(server_peer *recipient, const server_peer *subject) {
+    for (int equipment = 0; equipment < 5; ++equipment) {
+        mc_buf packet; packet_start(&packet, 4);
+        mc_put_varint(&packet, subject->entity); mc_put_i16(&packet, (int16_t)equipment);
+        int index = equipment == 0 ? MC_HOTBAR_START + subject->selected : 9 - equipment;
+        mc_slot_write(&packet, &subject->inventory.slots[index]); queue_packet(recipient, &packet);
+    }
 }
 static void chat(mc_server *server, const char *name, const char *message) {
     mc_buf packet;
@@ -160,10 +177,217 @@ static void chat(mc_server *server, const char *name, const char *message) {
     broadcast(server, &packet, NULL);
     mc_buf_free(&packet);
 }
+static void nbt_name(mc_buf *buffer, int type, const char *name) {
+    size_t length = strlen(name);
+    mc_put_u8(buffer, (uint8_t)type); mc_put_i16(buffer, (int16_t)length);
+    mc_put_bytes(buffer, name, length);
+}
+static void nbt_int(mc_buf *buffer, int type, const char *name, int value) {
+    nbt_name(buffer, type, name);
+    if (type == 1) mc_put_u8(buffer, (uint8_t)value);
+    else if (type == 2) mc_put_i16(buffer, (int16_t)value);
+    else mc_put_i32(buffer, value);
+}
+static void stored_slot(mc_buf *buffer, const mc_slot *slot, int index) {
+    if (index >= 0) nbt_int(buffer, 1, "Slot", index);
+    const char *resource = mc_item_resource_name(slot->item_id);
+    if (!resource) { buffer->failed = true; return; }
+    nbt_name(buffer, 8, "id"); mc_put_i16(buffer, (int16_t)strlen(resource));
+    mc_put_bytes(buffer, resource, strlen(resource));
+    nbt_int(buffer, 1, "Count", slot->count);
+    nbt_int(buffer, 2, "Damage", slot->damage);
+    if (slot->nbt.size) {
+        mc_nbt_view tag;
+        if (!mc_nbt_root(&slot->nbt, &tag) || tag.type != 10) { buffer->failed = true; return; }
+        nbt_name(buffer, 10, "tag"); mc_put_bytes(buffer, tag.data, tag.size);
+    }
+    mc_put_u8(buffer, 0);
+}
+static int persisted_index(int window_index) {
+    if (window_index >= 36) return window_index - 36;
+    if (window_index >= 9) return window_index;
+    if (window_index >= 5) return 108 - window_index;
+    return -1;
+}
+static int window_index(int stored_index) {
+    if (stored_index >= 0 && stored_index <= 8) return stored_index + 36;
+    if (stored_index >= 9 && stored_index <= 35) return stored_index;
+    if (stored_index >= 100 && stored_index <= 103) return 108 - stored_index;
+    return -1;
+}
+static bool known_player_field(const mc_nbt *field) {
+    static const char *const names[] = {"Inventory", "SelectedItemSlot", "C919Crafting", "C919Cursor"};
+    if (!field->data || field->size < 3) return false;
+    size_t length = ((size_t)field->data[1] << 8) | field->data[2];
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; ++i)
+        if (strlen(names[i]) == length && field->size >= 3 + length && !memcmp(field->data + 3, names[i], length)) return true;
+    return false;
+}
+static bool player_path(const mc_server *server, const server_peer *peer, char *directory, char *path) {
+    if (strlen(server->save_path) > 3900) return false;
+    char uuid[37]; mc_uuid_string(peer->uuid, uuid);
+    snprintf(directory, 4096, "%s.players", server->save_path);
+    snprintf(path, 4096, "%s.players/%s.dat", server->save_path, uuid);
+    return true;
+}
+static bool save_inventory(mc_server *server, server_peer *peer, char *error, size_t error_size) {
+    char directory[4096], path[4096];
+    if (!player_path(server, peer, directory, path)) { snprintf(error, error_size, "Player data path is too long"); return false; }
+    if (mc_mkdir(directory) && errno != EEXIST) { snprintf(error, error_size, "Could not create player data directory: %s", strerror(errno)); return false; }
+    mc_buf buffer; mc_buf_init(&buffer);
+    if (peer->player_data.size) {
+        mc_nbt_view root;
+        if (!mc_nbt_root(&peer->player_data, &root) || root.type != 10) {
+            snprintf(error, error_size, "Player data root must be a compound"); mc_buf_free(&buffer); return false;
+        }
+        /* Preserve the original root name and every unknown encoded field. */
+        mc_put_bytes(&buffer, peer->player_data.data, peer->player_data.size - root.size);
+        mc_buf input = {(uint8_t *)root.data, root.size, root.size, 0, false};
+        while (input.pos < input.len && !input.failed) {
+            mc_nbt field; mc_nbt_init(&field);
+            if (!mc_nbt_read(&input, &field)) input.failed = true;
+            if (field.size && !known_player_field(&field)) mc_put_bytes(&buffer, field.data, field.size);
+            bool end = !field.size;
+            mc_nbt_free(&field);
+            if (end) break;
+        }
+        if (input.failed) buffer.failed = true;
+    } else nbt_name(&buffer, 10, "");
+    int count = 0;
+    for (int i = 5; i < MC_PLAYER_INVENTORY_SIZE; ++i) if (peer->inventory.slots[i].item_id >= 0) ++count;
+    nbt_name(&buffer, 9, "Inventory"); mc_put_u8(&buffer, 10); mc_put_i32(&buffer, count);
+    for (int i = 5; i < MC_PLAYER_INVENTORY_SIZE; ++i) if (peer->inventory.slots[i].item_id >= 0)
+        stored_slot(&buffer, &peer->inventory.slots[i], persisted_index(i));
+    count = 0;
+    for (int i = 1; i <= 4; ++i) if (peer->inventory.slots[i].item_id >= 0) ++count;
+    nbt_name(&buffer, 9, "C919Crafting"); mc_put_u8(&buffer, 10); mc_put_i32(&buffer, count);
+    for (int i = 1; i <= 4; ++i) if (peer->inventory.slots[i].item_id >= 0)
+        stored_slot(&buffer, &peer->inventory.slots[i], i);
+    nbt_name(&buffer, 10, "C919Cursor"); stored_slot(&buffer, &peer->inventory.cursor, -1);
+    nbt_int(&buffer, 3, "SelectedItemSlot", peer->selected);
+    mc_put_u8(&buffer, 0);
+    mc_nbt saved; mc_nbt_init(&saved);
+    buffer.pos = 0;
+    bool ok = !buffer.failed && mc_nbt_read(&buffer, &saved) && buffer.pos == buffer.len &&
+              mc_nbt_save_gzip(&saved, path, error, error_size);
+    if (ok) { mc_nbt_free(&peer->player_data); peer->player_data = saved; }
+    else { mc_nbt_free(&saved); if (buffer.failed) snprintf(error, error_size, "Player inventory metadata exceeds its storage limit"); }
+    mc_buf_free(&buffer); return ok;
+}
+static bool nbt_integer(const mc_nbt_view *compound, const char *name, int64_t *value) {
+    mc_nbt_view field;
+    return mc_nbt_find(compound, name, &field) && mc_nbt_get_integer(&field, value);
+}
+static bool load_stored_slot(const mc_nbt_view *compound, mc_slot *slot) {
+    int64_t id, count, damage;
+    mc_nbt_view id_field;
+    if (compound->type != 10 || !mc_nbt_find(compound, "id", &id_field)) return false;
+    if (id_field.type == 8) {
+        char resource[128]; int16_t item;
+        if (!mc_nbt_get_string(&id_field, resource, sizeof resource) || !mc_item_from_resource_name(resource, &item)) return false;
+        id = item;
+    } else if (!mc_nbt_get_integer(&id_field, &id)) return false;
+    if (!nbt_integer(compound, "Count", &count) ||
+        !nbt_integer(compound, "Damage", &damage) || id < -1 || id > INT16_MAX || count < 0 || count > 127 ||
+        damage < 0 || damage > INT16_MAX || !mc_slot_set(slot, (int16_t)id, (uint8_t)count, (int16_t)damage)) return false;
+    mc_nbt_view tag;
+    if (mc_nbt_find(compound, "tag", &tag)) {
+        if (tag.type != 10 || id < 0) return false;
+        mc_buf encoded; mc_buf_init(&encoded); nbt_name(&encoded, 10, ""); mc_put_bytes(&encoded, tag.data, tag.size);
+        bool ok = !encoded.failed && mc_nbt_read(&encoded, &slot->nbt);
+        mc_buf_free(&encoded); if (!ok) return false;
+    }
+    return true;
+}
+static bool load_inventory(mc_server *server, server_peer *peer, char *error, size_t error_size) {
+    char directory[4096], path[4096]; struct stat info;
+    if (!player_path(server, peer, directory, path)) { snprintf(error, error_size, "Player data path is too long"); return false; }
+    if (stat(path, &info)) {
+        if (errno != ENOENT) { snprintf(error, error_size, "Could not inspect player data"); return false; }
+        for (int i = 0; i < 9; ++i) mc_slot_set(&peer->inventory.slots[36 + i], creative_palette[i], 64, 0);
+        return save_inventory(server, peer, error, error_size);
+    }
+    if (!mc_nbt_load_gzip(&peer->player_data, path, error, error_size)) return false;
+    mc_nbt_view root, list;
+    if (!mc_nbt_root(&peer->player_data, &root) || root.type != 10 || !mc_nbt_find(&root, "Inventory", &list) || list.type != 9) goto invalid;
+    const char *lists[2] = {"Inventory", "C919Crafting"};
+    bool present[MC_PLAYER_INVENTORY_SIZE] = {false};
+    for (int which = 0; which < 2; ++which) {
+        if (!mc_nbt_find(&root, lists[which], &list)) continue;
+        if (list.type != 9 || list.size < 5 || list.data[0] != 10) goto invalid;
+        mc_buf list_bytes = {(uint8_t *)list.data, list.size, list.size, 1, false};
+        int entries = mc_get_i32(&list_bytes);
+        if (entries < 0 || entries > MC_PLAYER_INVENTORY_SIZE) goto invalid;
+        for (int i = 0; i < entries; ++i) {
+            mc_nbt_view entry; int64_t slot_id;
+            if (!mc_nbt_list_get(&list, (size_t)i, &entry) || !nbt_integer(&entry, "Slot", &slot_id)) goto invalid;
+            if (slot_id < 0 || slot_id > 103) goto invalid;
+            int slot_index = which ? (int)slot_id : window_index((int)slot_id);
+            if (slot_index < (which ? 1 : 5) || slot_index >= (which ? 5 : 45) || present[slot_index]) goto invalid;
+            mc_slot *slot = &peer->inventory.slots[slot_index];
+            if (!load_stored_slot(&entry, slot)) goto invalid;
+            present[slot_index] = true;
+        }
+    }
+    mc_nbt_view cursor;
+    if (mc_nbt_find(&root, "C919Cursor", &cursor) && !load_stored_slot(&cursor, &peer->inventory.cursor)) goto invalid;
+    int64_t selected;
+    if (nbt_integer(&root, "SelectedItemSlot", &selected)) {
+        if (selected < 0 || selected > 8) goto invalid;
+        peer->selected = (int)selected;
+    }
+    return true;
+invalid:
+    snprintf(error, error_size, "Unsupported or invalid player inventory; original player file was preserved"); return false;
+}
+static bool persist_inventory(mc_server *server, server_peer *peer) {
+    char error[256] = "Player data encoding failed";
+    if (save_inventory(server, peer, error, sizeof error)) return true;
+    fprintf(stderr, "Player %s inventory save failed: %s\n", peer->name, error);
+    disconnect_peer(peer, "Player inventory save failed; mutation was not committed.");
+    return false;
+}
+static bool inventory_capacity(const server_peer *peer, const mc_inventory *inventory) {
+    size_t remaining = MC_MAX_PACKET - 8192u;
+    for (int i = 0; i <= MC_PLAYER_INVENTORY_SIZE; ++i) {
+        const mc_slot *slot = i == MC_PLAYER_INVENTORY_SIZE ? &inventory->cursor : &inventory->slots[i];
+        if (slot->nbt.size > remaining) return false;
+        remaining -= slot->nbt.size;
+    }
+    if (peer->player_data.size) {
+        mc_nbt_view root;
+        if (!mc_nbt_root(&peer->player_data, &root) || root.type != 10) return false;
+        size_t prefix = peer->player_data.size - root.size;
+        if (prefix > remaining) return false;
+        remaining -= prefix;
+        mc_buf input = {(uint8_t *)root.data, root.size, root.size, 0, false};
+        while (input.pos < input.len) {
+            mc_nbt field; mc_nbt_init(&field);
+            if (!mc_nbt_read(&input, &field)) { mc_nbt_free(&field); return false; }
+            bool end = !field.size;
+            if (!known_player_field(&field)) {
+                if (field.size > remaining) { mc_nbt_free(&field); return false; }
+                remaining -= field.size;
+            }
+            mc_nbt_free(&field); if (end) break;
+        }
+    }
+    return true;
+}
+static bool commit_inventory(mc_server *server, server_peer *peer, mc_inventory *next) {
+    mc_inventory previous = peer->inventory;
+    peer->inventory = *next; mc_inventory_init(next);
+    if (!persist_inventory(server, peer)) {
+        mc_inventory_free(&peer->inventory); peer->inventory = previous;
+        return false;
+    }
+    mc_inventory_free(&previous); return true;
+}
 static void remove_peer(mc_server *server, server_peer *peer) {
     bool was_player = peer->state == STATE_PLAY;
     int32_t entity = peer->entity;
     if (was_player) {
+        persist_inventory(server, peer);
         mc_buf packet;
         player_info(&packet, peer, false);
         broadcast(server, &packet, peer);
@@ -176,6 +400,7 @@ static void remove_peer(mc_server *server, server_peer *peer) {
     }
     mc_conn_close(&peer->conn);
     mc_buf_free(&peer->conn.rx); mc_buf_free(&peer->conn.tx);
+    mc_inventory_free(&peer->inventory); mc_nbt_free(&peer->player_data);
     memset(peer, 0, sizeof *peer);
 }
 static bool valid_name(const char *name) {
@@ -224,8 +449,16 @@ static void join_game(mc_server *server, server_peer *peer) {
     if (!select_spawn(server, peer)) { disconnect_peer(peer, "No clear spawn with player headroom is available."); return; }
     peer->entity = server->next_entity++;
     peer->keepalive_at = mc_time_ms();
-    for (int i = 0; i < 9; ++i) peer->inventory[i] = creative_palette[i];
+    peer->gamemode = 1;
     mc_offline_uuid(peer->name, peer->uuid);
+    char error[256] = "Could not decode player inventory";
+    if (!load_inventory(server, peer, error, sizeof error)) {
+        fprintf(stderr, "Player %s data load failed: %s\n", peer->name, error);
+        disconnect_peer(peer, "Player data could not be loaded; the existing file was preserved."); return;
+    }
+    if (!inventory_capacity(peer, &peer->inventory)) {
+        disconnect_peer(peer, "Player inventory metadata exceeds the supported size; the existing file was preserved."); return;
+    }
     mc_uuid_string(peer->uuid, uuid);
     packet_start(&packet, 2);
     mc_put_string(&packet, uuid); mc_put_string(&packet, peer->name);
@@ -233,7 +466,7 @@ static void join_game(mc_server *server, server_peer *peer) {
     peer->state = STATE_PLAY;
     packet_start(&packet, 1);
     mc_put_i32(&packet, peer->entity);
-    mc_put_u8(&packet, 1); mc_put_u8(&packet, 0); mc_put_u8(&packet, 0);
+    mc_put_u8(&packet, (uint8_t)peer->gamemode); mc_put_u8(&packet, 0); mc_put_u8(&packet, 0);
     mc_put_u8(&packet, (uint8_t)server->max_players);
     mc_put_string(&packet, "flat"); mc_put_u8(&packet, 0);
     queue_packet(peer, &packet);
@@ -243,20 +476,17 @@ static void join_game(mc_server *server, server_peer *peer) {
     packet_start(&packet, 5);
     mc_put_position(&packet, (int)floor(peer->x), (int)peer->y, (int)floor(peer->z));
     queue_packet(peer, &packet);
-    packet_start(&packet, 0x30);
-    mc_put_u8(&packet, 0); mc_put_i16(&packet, 45);
-    for (int i = 0; i < 45; ++i) send_slot(&packet, i >= 36 ? peer->inventory[i - 36] : -1);
-    queue_packet(peer, &packet);
-    packet_start(&packet, 9); mc_put_u8(&packet, 0); queue_packet(peer, &packet);
+    inventory_resync(peer);
+    packet_start(&packet, 9); mc_put_u8(&packet, (uint8_t)peer->selected); queue_packet(peer, &packet);
     send_position(peer);
     for (int i = 0; i < SERVER_CONNECTIONS; ++i) {
         server_peer *other = &server->peers[i];
         if (!playing(other)) continue;
         player_info(&packet, other, true); queue_packet(peer, &packet);
         if (other != peer) {
-            spawn_player(&packet, other); queue_packet(peer, &packet);
+            spawn_player(&packet, other); queue_packet(peer, &packet); send_equipment_to(peer, other);
             player_info(&packet, peer, true); queue_packet(other, &packet);
-            spawn_player(&packet, peer); queue_packet(other, &packet);
+            spawn_player(&packet, peer); queue_packet(other, &packet); send_equipment_to(other, peer);
         }
     }
     printf("Player %s joined (entity %d).\n", peer->name, peer->entity);
@@ -331,18 +561,35 @@ static void change_block(mc_server *server, server_peer *peer, int x, int y, int
     block_packet(&packet, &server->world, x, y, z);
     broadcast(server, &packet, NULL); mc_buf_free(&packet);
 }
-/* Accept the exact NBT-free Slot format supported by this palette. */
-static bool read_slot(mc_buf *packet, int16_t *item) {
-    *item = mc_get_i16(packet);
-    if (*item == -1) return !packet->failed;
-    int count = mc_get_u8(packet), damage = mc_get_i16(packet), nbt = mc_get_u8(packet);
-    if (*item < 0 || count < 1 || count > 64 || damage != 0 || nbt != 0) packet->failed = true;
-    return !packet->failed;
+static void confirm_transaction(server_peer *peer, int16_t action, bool accepted) {
+    mc_buf packet; packet_start(&packet, 0x32);
+    mc_put_u8(&packet, 0); mc_put_i16(&packet, action); mc_put_u8(&packet, accepted);
+    queue_packet(peer, &packet);
 }
-static bool palette_item(int16_t item) {
-    if (item == -1) return true;
-    for (int i = 0; i < 9; ++i) if (creative_palette[i] == item) return true;
-    return false;
+static void handle_inventory_click(mc_server *server, server_peer *peer, mc_buf *packet) {
+    int window = mc_get_u8(packet), index = mc_get_i16(packet), button = mc_get_u8(packet);
+    int16_t action = mc_get_i16(packet); int mode = mc_get_u8(packet);
+    mc_slot claimed, returned, dropped;
+    mc_slot_init(&claimed); mc_slot_init(&returned); mc_slot_init(&dropped);
+    bool parsed = mc_slot_read(packet, &claimed) && complete(packet);
+    if (!parsed) { disconnect_peer(peer, "Malformed inventory click packet."); goto done; }
+    mc_inventory next; mc_inventory_init(&next);
+    bool valid = window == 0 && !peer->transaction_pending &&
+        !(peer->gamemode != 1 && (mode == 3 || (mode == 5 && button >= 8))) &&
+        mc_inventory_copy(&next, &peer->inventory) &&
+        mc_inventory_click_result(&next, index, button, mode, &returned, &dropped) &&
+        dropped.item_id < 0 && inventory_capacity(peer, &next);
+    /* Vanilla applies a legitimate action before checking its client return
+       stack. A mismatch locks the window and resyncs the resulting state. */
+    bool committed = valid && commit_inventory(server, peer, &next);
+    bool accepted = committed && mc_slot_equal(&returned, &claimed);
+    mc_inventory_free(&next);
+    confirm_transaction(peer, action, accepted);
+    if (!accepted && !peer->transaction_pending) { peer->transaction_pending = true; peer->rejected_action = action; }
+    inventory_resync(peer);
+    if (committed) send_equipment(server, peer);
+done:
+    mc_slot_free(&claimed); mc_slot_free(&returned); mc_slot_free(&dropped);
 }
 static void handle_movement(mc_server *server, server_peer *peer, mc_buf *packet, int id) {
     double x = peer->x, y = peer->y, z = peer->z;
@@ -398,41 +645,63 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
             disconnect_peer(peer, "Invalid digging packet."); return;
         }
         if (status == 0 || status == 2) change_block(server, peer, x, y, z, 0);
+        if (status == 3 || status == 4) inventory_resync(peer);
         return;
     }
     if (id == 8) {
-        int x, y, z; int16_t claimed_item;
+        int x, y, z; mc_slot claimed_item; mc_slot_init(&claimed_item);
         mc_get_position(packet, &x, &y, &z); uint8_t face = mc_get_u8(packet);
-        read_slot(packet, &claimed_item);
+        mc_slot_read(packet, &claimed_item);
         uint8_t cursor_x = mc_get_u8(packet), cursor_y = mc_get_u8(packet), cursor_z = mc_get_u8(packet);
         if (!complete(packet) || cursor_x > 16 || cursor_y > 16 || cursor_z > 16 ||
-            (face > 5 && face != 255)) { disconnect_peer(peer, "Invalid block placement packet."); return; }
-        if (face == 255) return; /* right click in air */
+            (face > 5 && face != 255)) { mc_slot_free(&claimed_item); disconnect_peer(peer, "Invalid block placement packet."); return; }
+        if (face == 255) { mc_slot_free(&claimed_item); return; } /* right click in air */
         static const int dx[6] = {0, 0, 0, 0, -1, 1};
         static const int dy[6] = {-1, 1, 0, 0, 0, 0};
         static const int dz[6] = {0, 0, -1, 1, 0, 0};
         int tx = x + dx[face], ty = y + dy[face], tz = z + dz[face];
-        int16_t held = peer->inventory[peer->selected];
+        const mc_slot *held = &peer->inventory.slots[MC_HOTBAR_START + peer->selected];
+        uint16_t placed = 0;
+        /* The server's full held stack is authoritative; C08's supplied Slot
+           is parsed and validated but may have a stale client-side count. */
+        bool placeable = mc_item_block_state(held->item_id, held->damage, &placed);
+        mc_slot_free(&claimed_item);
         if (!world_coordinate(x, y, z) || !reachable(peer, x, y, z) || !mc_world_get(&server->world, x, y, z) ||
-            mc_world_get(&server->world, tx, ty, tz) || held < 0 || claimed_item != held) {
+            mc_world_get(&server->world, tx, ty, tz) || held->item_id < 0 || !placeable) {
             correct_block(peer, &server->world, tx, ty, tz); return;
         }
-        change_block(server, peer, tx, ty, tz, (uint16_t)(held << 4)); return;
+        change_block(server, peer, tx, ty, tz, placed); return;
     }
     if (id == 9) {
         int selected = mc_get_i16(packet);
         if (!complete(packet) || selected < 0 || selected > 8) { disconnect_peer(peer, "Invalid hotbar selection."); return; }
-        peer->selected = selected; send_equipment(server, peer); return;
+        int old = peer->selected; peer->selected = selected;
+        if (!persist_inventory(server, peer)) { peer->selected = old; return; }
+        send_equipment(server, peer); return;
     }
     if (id == 0x10) {
-        int index = mc_get_i16(packet); int16_t item;
-        read_slot(packet, &item);
-        if (!complete(packet) || index < 36 || index > 44 || !palette_item(item)) {
-            disconnect_peer(peer, "Invalid creative hotbar item."); return;
+        int index = mc_get_i16(packet); mc_slot item; mc_slot_init(&item);
+        bool parsed = mc_slot_read(packet, &item) && complete(packet);
+        if (!parsed) { mc_slot_free(&item); disconnect_peer(peer, "Malformed creative inventory packet."); return; }
+        if (peer->gamemode != 1 || index < 1 || index >= MC_PLAYER_INVENTORY_SIZE || item.count > 64 || peer->transaction_pending) {
+            mc_slot_free(&item); inventory_resync(peer); return;
         }
-        peer->inventory[index - 36] = item; inventory_slot(peer, index - 36);
-        if (index - 36 == peer->selected) send_equipment(server, peer);
+        mc_inventory next; mc_inventory_init(&next);
+        bool ready = mc_inventory_copy(&next, &peer->inventory) && mc_slot_copy(&next.slots[index], &item);
+        mc_slot_free(&item);
+        if (!ready) { mc_inventory_free(&next); disconnect_peer(peer, "Inventory allocation failed."); return; }
+        if (!inventory_capacity(peer, &next)) { mc_inventory_free(&next); inventory_resync(peer); return; }
+        if (commit_inventory(server, peer, &next)) { inventory_slot(peer, index); send_equipment(server, peer); }
+        mc_inventory_free(&next);
         return;
+    }
+    if (id == 0x0e) { handle_inventory_click(server, peer, packet); return; }
+    if (id == 0x0f) {
+        int window = mc_get_u8(packet); int16_t action = mc_get_i16(packet); bool accepted = get_boolean(packet);
+        if (!complete(packet) || window != 0 || !accepted || !peer->transaction_pending || action != peer->rejected_action) {
+            disconnect_peer(peer, "Invalid inventory transaction acknowledgement."); return;
+        }
+        peer->transaction_pending = false; return;
     }
     if (id == 0x0a) {
         if (!complete(packet)) { disconnect_peer(peer, "Invalid animation packet."); return; }
@@ -631,6 +900,7 @@ int mc_server_main(int argc, char **argv) {
             if (!peer) { mc_socket_close(socket); continue; }
             memset(peer, 0, sizeof *peer);
             mc_conn_init(&peer->conn, socket);
+            mc_inventory_init(&peer->inventory); mc_nbt_init(&peer->player_data);
             peer->used = true; peer->connected_at = now;
         }
         for (int i = 0; i < SERVER_CONNECTIONS; ++i) if (server->peers[i].used) tick_peer(server, &server->peers[i], now);

@@ -25,7 +25,7 @@ async function freePort() {
   return port;
 }
 function connect(port, username, errors) {
-  const state = { chunks: [], chats: [], moves: [], changes: [], spawn: null, ended: false };
+  const state = { chunks: [], chats: [], moves: [], changes: [], slots: [], windows: [], transactions: [], equipment: [], spawn: null, ended: false };
   const client = mc.createClient({ host: '127.0.0.1', port, username, auth: 'offline', version: '1.8.9' });
   client.on('error', error => { if (!state.ended) errors.push(error); });
   client.on('disconnect', packet => errors.push(new Error(JSON.stringify(packet))));
@@ -37,12 +37,17 @@ function connect(port, username, errors) {
   client.on('chat', packet => state.chats.push(packet.message));
   client.on('entity_teleport', packet => state.moves.push(packet));
   client.on('block_change', packet => state.changes.push(packet));
+  client.on('set_slot', packet => state.slots.push(packet));
+  client.on('window_items', packet => state.windows.push(packet));
+  client.on('transaction', packet => state.transactions.push(packet));
+  client.on('entity_equipment', packet => state.equipment.push(packet));
   state.client = client;
   return state;
 }
 async function main() {
   fs.mkdirSync(path.join(root, '.local/interop'), { recursive: true });
-  const world = path.join(root, '.local/interop/interop-test.c919');
+  const temporary = fs.mkdtempSync(path.join(root, '.local/interop/session-'));
+  const world = path.join(temporary, 'interop-test.c919');
   const port = await freePort();
   const server = spawn(executable, ['--port', String(port), '--world', world, '--run-seconds', '20'], { windowsHide: true });
   let log = '';
@@ -57,6 +62,28 @@ async function main() {
     await until(() => a.spawn && a.chunks.length === 25, 'independent client did not receive 25 chunks');
     const b = connect(port, 'PrismarineTwo', errors); clients.push(b);
     await until(() => b.spawn && b.chunks.length === 25, 'second independent client did not join');
+    const tag = { type: 'compound', name: '', value: {
+      display: { type: 'compound', value: { Name: { type: 'string', value: '日本語の剣' } } },
+      ench: { type: 'list', value: { type: 'compound', value: [{
+        id: { type: 'short', value: 16 }, lvl: { type: 'short', value: 5 }
+      }] } },
+      C919Ints: { type: 'intArray', value: [1, -2, 3] }
+    } };
+    const sword = { blockId: 276, itemCount: 1, itemDamage: 7, nbtData: tag };
+    a.client.write('set_creative_slot', { slot: 36, item: sword });
+    await until(() => a.slots.some(packet => packet.slot === 36 && packet.item.blockId === 276), 'NBT creative slot not synchronized');
+    assert.deepEqual(a.slots.find(packet => packet.slot === 36 && packet.item.blockId === 276).item, sword);
+    await until(() => b.equipment.some(packet => packet.slot === 0 && packet.item.blockId === 276), 'NBT equipment not synchronized');
+    assert.deepEqual(b.equipment.find(packet => packet.slot === 0 && packet.item.blockId === 276).item, sword);
+    const planks = { blockId: 5, itemCount: 31, itemDamage: 2, nbtData: tag };
+    a.client.write('set_creative_slot', { slot: 9, item: planks });
+    await until(() => a.slots.some(packet => packet.slot === 9 && packet.item.itemCount === 31), 'main inventory not synchronized');
+    a.client.write('window_click', { windowId: 0, slot: 9, mouseButton: 1, action: 1, mode: 0, item: planks });
+    await until(() => a.transactions.some(packet => packet.action === 1), 'click confirmation missing');
+    assert.equal(a.transactions.find(packet => packet.action === 1).accepted, true);
+    await until(() => a.slots.some(packet => packet.windowId === -1 && packet.item.itemCount === 16), 'split cursor not synchronized');
+    await until(() => a.windows.some(packet => packet.items[9].itemCount === 15), 'split source not synchronized');
+    assert.deepEqual(a.windows.find(packet => packet.items[9].itemCount === 15).items[9].nbtData, tag);
     assert.equal(a.chunks[0].chunkData.length, 256 + 12288 * a.chunks[0].bitMap.toString(2).replace(/0/g, '').length);
     a.client.write('chat', { message: '独立実装からのマルチプレイ検証' });
     await until(() => a.chats.length && b.chats.length, 'chat was not broadcast');
@@ -68,13 +95,15 @@ async function main() {
     await until(() => b.changes.length, 'block dig was not synchronized');
     assert.equal(b.changes.at(-1).type, 0);
     assert.equal(errors.length, 0, errors.map(String).join('\n'));
-    console.log('Prismarine minecraft-protocol 1.68.0: two 1.8.9 clients, 25 chunks each, Japanese chat, movement and digging passed.');
+    console.log('Prismarine minecraft-protocol 1.68.0: two 1.8.9 clients, full NBT slots/equipment/right-click split, 25 chunks each, Japanese chat, movement and digging passed.');
   } finally {
     for (const peer of clients) { peer.ended = true; peer.client.end('test finished'); }
     await delay(100);
     server.kill();
     await new Promise(resolve => { if (server.exitCode !== null) resolve(); else server.once('exit', resolve); });
-    fs.rmSync(world, { force: true });
+    const relative = path.relative(path.join(root, '.local/interop'), temporary);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Invalid temporary session path');
+    fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

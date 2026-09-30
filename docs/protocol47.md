@@ -43,6 +43,7 @@ Online-mode servers require the encrypted login exchange, AES-128/CFB8 stream en
 | S→C `01` | join world | entity i32, mode u8, dimension i8, difficulty u8, maximum players u8, level type String, reduced debug bool |
 | C→S `01` | chat | String, up to 100 characters |
 | S→C `02` | chat | JSON String, display position u8 |
+| S→C `04` | entity equipment | entity VarInt, equipment slot i16, Slot |
 | S→C `05` | spawn position | packed Position |
 | C→S `03` | player ground state | bool |
 | C→S `04` | player position | X/Y/Z f64, ground bool |
@@ -54,6 +55,11 @@ Online-mode servers require the encrypted login exchange, AES-128/CFB8 stream en
 | C→S `09` | selected hotbar slot | i16, range 0–8 |
 | S→C `0c` | spawn another player | entity VarInt, UUID 16 bytes, X/Y/Z i32, yaw/pitch u8, held item i16, metadata |
 | C→S `10` | creative inventory | inventory slot i16, Slot |
+| C→S `0e` | click window | window u8, slot i16, button i8, action i16, mode i8, returned Slot |
+| C→S `0f` | transaction acknowledgement | window i8, action i16, accepted bool |
+| S→C `2f` | set slot | window i8, slot i16, Slot |
+| S→C `30` | window items | window u8, count i16, Slots |
+| S→C `32` | confirm transaction | window i8, action i16, accepted bool |
 | S→C `13` | remove entities | count VarInt, entity VarInts |
 | S→C `15` | relative entity movement | entity VarInt, signed X/Y/Z i8 deltas, ground bool |
 | S→C `16` | entity orientation | entity VarInt, yaw/pitch u8, ground bool |
@@ -63,6 +69,7 @@ Online-mode servers require the encrypted login exchange, AES-128/CFB8 stream en
 | S→C `22` | several changed blocks | chunk X/Z i32, record count VarInt; each record: horizontal u8, Y u8, state VarInt |
 | S→C `23` | changed block | Position, state VarInt |
 | S→C `26` | several full chunks | sky-light bool, count VarInt, X/Z i32 and mask u16 for every chunk, then chunk data |
+| S→C `2b` | game state change | reason u8, value f32; reason 3 changes the local game mode |
 | S→C `38` | player list | action VarInt, count VarInt, action-specific entries |
 | S→C `40` | disconnect | JSON String |
 
@@ -71,6 +78,12 @@ An authoritative player position uses relative bits X=`1`, Y=`2`, Z=`4`, yaw=`8`
 Player-list ADD entries contain UUID, name, property count and properties, game-mode VarInt, latency VarInt, and an optional display JSON String. ADD must precede that player's spawn packet. An empty entity metadata list consists of its terminating byte `7f`. REMOVE entries contain only the UUID.
 
 A Slot begins with an i16 item ID. `-1` is empty. Otherwise it contains item count i8, item damage i16, and an NBT root; byte `00` represents absent NBT. Creative hotbar inventory slots are 36–44. Digging actions are start=`0`, abort=`1`, finish=`2`; faces are down=`0`, up=`1`, north=`2`, south=`3`, west=`4`, east=`5`.
+
+Slot storage preserves positive signed-byte counts through 127, including overstacked items from an external server. A creative mutation accepts counts through 64, while normal placement applies item/slot limits. Window 0 has crafting result 0, inputs 1–4, armor 5–8, main inventory 9–35 and hotbar 36–44. Crafting-result transactions and actual dropped item entities remain unsupported.
+
+The NBT codec handles target-version tags 0–11, bounded to depth 64 and 2 MiB. It preserves the exact named-root encoding and unknown fields. Strings use Java modified UTF-8, with UTF-16 surrogate-pair conversion for text getters. Compound comparisons use names and values rather than encoded field order. Invalid reads leave prior owned data unchanged. Gzip loading validates the complete stream, CRC and size; saves flush an exclusive temporary file before replacing the destination.
+
+Click Window's claimed Slot is the container operation's return value, not the new cursor. A legitimate operation is applied before comparing that return value. A mismatch produces a negative confirmation and authoritative inventory/cursor resync; further mutation stays locked until the acknowledgement matches the original rejected action. Invalid operations are rejected without committing. The native client sends one pending transaction at a time and uses the server's inventory state.
 
 ## Chunk layout
 
