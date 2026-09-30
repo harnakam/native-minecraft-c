@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(c919 VERSION 0.3.0 LANGUAGES C)
+project(c919 VERSION 0.4.0 LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -10,14 +10,21 @@ find_package(ZLIB REQUIRED)
 add_library(c919-core STATIC
     ${MC_SOURCE}/network/protocol.c
     ${MC_SOURCE}/network/transport.c
+    ${MC_SOURCE}/network/play/client/C08PacketPlayerBlockPlacement.c
     ${MC_SOURCE}/nbt/nbt.c
     ${MC_SOURCE}/item/item.c
+    ${MC_SOURCE}/item/ItemMap.c
     ${MC_SOURCE}/block/block.c
     ${MC_SOURCE}/inventory/inventory.c
+    ${MC_SOURCE}/inventory/InventoryCrafting.c
+    ${MC_SOURCE}/inventory/InventoryCraftResult.c
+    ${MC_SOURCE}/inventory/container.c
     ${MC_SOURCE}/crafting/crafting.c
     ${MC_SOURCE}/entity/item/item_entity.c
     ${MC_SOURCE}/util/transfer.c
     ${MC_SOURCE}/world/world.c
+    ${MC_SOURCE}/world/map.c
+    ${MC_SOURCE}/world/storage/MapData.c
     ${MC_SOURCE}/world/storage.c)
 target_include_directories(c919-core PUBLIC ${MC_SOURCE})
 target_link_libraries(c919-core PUBLIC ZLIB::ZLIB)
@@ -45,7 +52,7 @@ if(WIN32)
     target_link_libraries(c919-client PRIVATE opengl32 gdi32 user32)
 endif()
 if(BUILD_TESTING)
-    foreach(name protocol world item nbt inventory crafting item_entity transfer)
+    foreach(name protocol packet_placement world item nbt inventory inventory_crafting container crafting map item_entity transfer)
         add_executable(test-${name} tests/test_${name}.c)
         target_link_libraries(test-${name} PRIVATE c919-core)
         c919_warnings(test-${name})
@@ -58,6 +65,8 @@ if(BUILD_TESTING)
     set_tests_properties(inventory-network PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>" TIMEOUT 90)
     add_test(NAME drops-crafting-network COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_drops_crafting_network.py)
     set_tests_properties(drops-crafting-network PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>" TIMEOUT 90)
+    add_test(NAME workbench-network COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_workbench_network.py)
+    set_tests_properties(workbench-network PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>" TIMEOUT 90)
     add_test(NAME public-audit COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_public_audit.py)
     set_tests_properties(public-audit PROPERTIES TIMEOUT 60)
     add_test(NAME client-self-test COMMAND c919-client --self-test)
@@ -67,4 +76,6 @@ if(BUILD_TESTING)
     set_tests_properties(client-inventory PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>;C919_CLIENT=$<TARGET_FILE:c919-client>" TIMEOUT 60)
     add_test(NAME client-entities COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_entities.py)
     set_tests_properties(client-entities PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>;C919_CLIENT=$<TARGET_FILE:c919-client>" TIMEOUT 90)
+    add_test(NAME client-containers COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_containers.py)
+    set_tests_properties(client-containers PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>;C919_CLIENT=$<TARGET_FILE:c919-client>" TIMEOUT 90)
 endif()

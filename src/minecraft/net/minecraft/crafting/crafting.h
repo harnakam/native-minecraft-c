@@ -1,16 +1,36 @@
 #ifndef C919_CRAFTING_H
 #define C919_CRAFTING_H
-#include "inventory/inventory.h"
-#define MC_CRAFTING_MAX_EFFECTS 5
-typedef struct { size_t count; mc_slot dropped[MC_CRAFTING_MAX_EFFECTS]; } mc_crafting_effects;
+#include "inventory/container.h"
+#define MC_CRAFTING_MAX_EFFECTS 1024u
+typedef struct { size_t count, capacity, bytes; mc_slot *dropped; } mc_crafting_effects;
+typedef struct mc_maps mc_maps;
+typedef struct {
+    bool creative, authoritative;
+    mc_maps *maps;
+    double player_x, player_z;
+    int32_t spawn_x, spawn_z;
+    int dimension;
+} mc_crafting_context;
 void mc_crafting_effects_init(mc_crafting_effects *effects);
 void mc_crafting_effects_free(mc_crafting_effects *effects);
+bool mc_crafting_effects_append(mc_crafting_effects *effects, const mc_slot *item);
 /* Pure recipe lookup. Grid is row-major, dimensions 1..3. Results and one
    remainder per grid cell are initialized owning slots; failure leaves them
    unchanged. A valid unmatched grid succeeds with an empty result. The current
-   registry contains the complete set usable in a player 2x2 crafting grid. */
+   registry contains all static 1.8.9 recipes and dynamic player/workbench
+   recipes, including contextual map enlargement. */
 bool mc_crafting_match(const mc_slot *grid,unsigned width,unsigned height,
                        mc_slot *result,mc_slot *remaining);
+/* Pure contextual lookup never creates or changes MapData or grid slots. */
+bool mc_crafting_match_context(const mc_slot *grid,unsigned width,unsigned height,
+    const mc_crafting_context *context,mc_slot *result,mc_slot *remaining);
+/* Player, container, caller's working MapData and owning outputs are unchanged
+   on failure. A non-authoritative context preserves a supplied map-extension
+   result when local MapData is unavailable, awaiting the server's resync. */
+bool mc_container_update(mc_inventory *player,mc_container *container,mc_crafting_context *context);
+bool mc_container_click(mc_inventory *player,mc_container *container,mc_crafting_context *context,
+    int index,int button,int mode,mc_slot *returned,mc_crafting_effects *effects);
+bool mc_container_close(mc_inventory *player,mc_container *container,mc_crafting_effects *effects);
 /* Recompute derived window-0 output from input slots 1..4, without consuming. */
 bool mc_crafting_update(mc_inventory *inventory);
 /* Vanilla window-0 transactions, including output consumption and world drops.

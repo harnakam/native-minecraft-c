@@ -1,5 +1,6 @@
 #include "renderer.h"
 #include <math.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +24,8 @@ struct mc_renderer {
     HGDIOBJ previous_font;
     int width, height, hide_calls, selected, glyph_count;
     bool hidden, focused, captured, paused, chat_open, suppress_char;
-    bool inventory_open, creative_open, creative_allowed;
+    bool inventory_open, creative_open, creative_allowed, catalog_allowed, workbench;
+    uint64_t window_generation;
     bool inventory_blocked, cursor_present, drag_capture;
     int drag_button, drag_start;
     uint64_t drag_slots;
@@ -37,17 +39,27 @@ struct mc_renderer {
     glyph_cache glyphs[MC_GLYPH_CACHE];
 };
 
-typedef struct { int x,y,width,height,cell,grid_y,hotbar_y; } inventory_layout;
+typedef struct { int x,y,width,height,cell,grid_y,hotbar_y; bool workbench; } inventory_layout;
+static int inventory_slots(const mc_renderer *r) { return r->workbench ? 46 : 45; }
 static inventory_layout inventory_geometry(const mc_renderer *r) {
     inventory_layout g;
-    g.width=r->width<600 ? r->width-24 : 576; g.height=r->creative_open ? 514 : 566;
+    g.workbench=r->workbench;
+    g.width=r->width<600 ? r->width-24 : 576; g.height=r->workbench ? 590 : r->creative_open ? 514 : 566;
     g.x=(r->width-g.width)/2; g.y=(r->height-g.height)/2;
     if (g.y<12) g.y=12;
     g.cell=(g.width-36)/9; if (g.cell>58) g.cell=58;
-    g.grid_y=g.y+(r->creative_open ? 126 : 68+2*g.cell+34); g.hotbar_y=g.grid_y+(r->creative_open ? 4 : 3)*g.cell+15;
+    if (r->workbench && g.cell>52) g.cell=52;
+    g.grid_y=g.y+(r->creative_open ? 126 : 68+(r->workbench ? 3 : 2)*g.cell+34); g.hotbar_y=g.grid_y+(r->creative_open ? 4 : 3)*g.cell+15;
     return g;
 }
 static void inventory_slot_position(const inventory_layout *g,int slot,int *x,int *y) {
+    if (g->workbench) {
+        if (slot==0) { *x=g->x+18+7*g->cell; *y=g->y+68+g->cell; }
+        else if (slot<10) { *x=g->x+18+(2+(slot-1)%3)*g->cell; *y=g->y+68+((slot-1)/3)*g->cell; }
+        else if (slot<37) { *x=g->x+18+((slot-10)%9)*g->cell; *y=g->grid_y+((slot-10)/9)*g->cell; }
+        else { *x=g->x+18+(slot-37)*g->cell; *y=g->hotbar_y; }
+        return;
+    }
     if (slot==0) { *x=g->x+18+8*g->cell; *y=g->y+68+g->cell/2; }
     else if (slot<5) { *x=g->x+18+(4+(slot-1)%2)*g->cell; *y=g->y+68+((slot-1)/2)*g->cell; }
     else if (slot<9) { *x=g->x+18+(slot-5)*g->cell; *y=g->y+68; }
@@ -60,7 +72,7 @@ static bool inside(int x,int y,int left,int top,int width,int height) {
 static int inventory_hit(const mc_renderer *r,int x,int y) {
     inventory_layout g=inventory_geometry(r);
     if (inside(x,y,g.x+g.width-54,g.y+13,40,28)) return -13;
-    if (r->creative_allowed && inside(x,y,g.x+g.width-178,g.y+13,116,28)) return -10;
+    if (r->catalog_allowed && inside(x,y,g.x+g.width-178,g.y+13,116,28)) return -10;
     if (r->creative_open) {
         if (inside(x,y,g.x+18,g.y+68,70,32)) return -11;
         if (inside(x,y,g.x+g.width-88,g.y+68,70,32)) return -12;
@@ -69,11 +81,24 @@ static int inventory_hit(const mc_renderer *r,int x,int y) {
             return index<mc_item_creative_count() ? 1000+(int)index : -1;
         }
     }
-    for (int slot=r->creative_open ? 36 : 0;slot<45;slot++) {
+    for (int slot=r->creative_open ? 36 : 0;slot<inventory_slots(r);slot++) {
         int sx,sy; inventory_slot_position(&g,slot,&sx,&sy);
         if (inside(x,y,sx,sy,g.cell-4,g.cell-4)) return slot;
     }
     return inside(x,y,g.x,g.y,g.width,g.height) ? -1 : -999;
+}
+static int inventory_neighbor(const mc_renderer *r,int key) {
+    inventory_layout g=inventory_geometry(r); int x,y,best=r->inventory_focus;
+    inventory_slot_position(&g,best,&x,&y); unsigned best_score=UINT_MAX;
+    for (int i=0;i<inventory_slots(r);i++) {
+        int nx,ny; inventory_slot_position(&g,i,&nx,&ny);
+        int forward=key==VK_LEFT ? x-nx : key==VK_RIGHT ? nx-x : key==VK_UP ? y-ny : ny-y;
+        int cross=key==VK_LEFT || key==VK_RIGHT ? abs(ny-y) : abs(nx-x);
+        if (forward<=0) continue;
+        unsigned score=(unsigned)forward+3u*(unsigned)cross;
+        if (score<best_score) { best_score=score; best=i; }
+    }
+    return best;
 }
 static void inventory_activate(mc_renderer *r,int hit,int button,bool double_click) {
     if (!r->focused || r->paused || r->chat_open) return;
@@ -84,7 +109,7 @@ static void inventory_activate(mc_renderer *r,int hit,int button,bool double_cli
     else if (hit>=1000 && button==0) r->pending.creative_pick=hit-1000;
     else if (hit==-999 && !r->inventory_blocked && (button==0 || button==1)) {
         r->pending.inventory_click=true; r->pending.inventory_slot=-999; r->pending.inventory_button=button; r->pending.inventory_mode=0;
-    } else if (hit>=0 && hit<45 && !r->inventory_blocked) {
+    } else if (hit>=0 && hit<inventory_slots(r) && !r->inventory_blocked) {
         if (r->creative_open) r->pending.select_slot=hit-36;
         else {
             r->inventory_focus=hit; r->pending.inventory_click=true; r->pending.inventory_slot=hit;
@@ -95,7 +120,7 @@ static void inventory_activate(mc_renderer *r,int hit,int button,bool double_cli
 }
 static void inventory_mouse_down(mc_renderer *r,int hit,int button,bool double_click) {
     if (!r->focused || r->paused || r->chat_open || r->inventory_blocked) return;
-    if (!r->creative_open && r->cursor_present && hit>=1 && hit<45 && !double_click &&
+    if (!r->creative_open && r->cursor_present && hit>=1 && hit<inventory_slots(r) && !double_click &&
         !(GetAsyncKeyState(VK_SHIFT)&0x8000) && (button!=2 || r->creative_allowed)) {
         r->drag_capture=true; r->drag_button=button; r->drag_start=hit; r->drag_slots=UINT64_C(1)<<hit;
         SetCapture(r->window); return;
@@ -184,23 +209,24 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
             if (r->inventory_open) {
                 int delta=wparam==VK_LEFT ? -1 : wparam==VK_RIGHT ? 1 : wparam==VK_UP ? -9 : wparam==VK_DOWN ? 9 :
                     wparam==VK_TAB ? ((GetAsyncKeyState(VK_SHIFT)&0x8000) ? -1 : 1) : 0;
-                if (wparam=='C' && r->creative_allowed) r->pending.toggle_creative=true;
+                if (wparam=='C' && r->catalog_allowed) r->pending.toggle_creative=true;
                 else if (wparam==VK_PRIOR && r->creative_page) --r->creative_page;
                 else if (wparam==VK_NEXT && (r->creative_page+1u)*36u<mc_item_creative_count()) ++r->creative_page;
                 else if (delta) {
                     if (r->creative_open) r->creative_focus=(r->creative_focus+delta+45)%45;
-                    else r->inventory_focus=(r->inventory_focus+delta+45)%45;
+                    else if (wparam==VK_TAB) r->inventory_focus=(r->inventory_focus+delta+inventory_slots(r))%inventory_slots(r);
+                    else r->inventory_focus=inventory_neighbor(r,(int)wparam);
                 } else if (wparam>= '1' && wparam<='9') {
                     if (r->creative_open) r->pending.select_slot=(int)(wparam-'1');
                     else {
-                        int hit=inventory_hit(r,r->mouse_x,r->mouse_y); if (hit<0 || hit>=45) hit=r->inventory_focus;
+                        int hit=inventory_hit(r,r->mouse_x,r->mouse_y); if (hit<0 || hit>=inventory_slots(r)) hit=r->inventory_focus;
                         r->pending.inventory_click=true; r->pending.inventory_slot=hit; r->pending.inventory_button=(int)(wparam-'1'); r->pending.inventory_mode=2;
                     }
                 } else if (wparam==VK_RETURN || wparam==VK_SPACE) {
                     int hit=r->creative_open ? r->creative_focus<36 ? 1000+(int)(r->creative_page*36u)+(int)r->creative_focus : r->creative_focus : r->inventory_focus;
                     inventory_activate(r,hit,wparam==VK_SPACE ? 1 : 0,false);
                 } else if (wparam=='Q' && !r->inventory_blocked && !r->creative_open) {
-                    int hit=inventory_hit(r,r->mouse_x,r->mouse_y); if (hit<0 || hit>=45) hit=r->inventory_focus;
+                    int hit=inventory_hit(r,r->mouse_x,r->mouse_y); if (hit<0 || hit>=inventory_slots(r)) hit=r->inventory_focus;
                     r->pending.inventory_click=true; r->pending.inventory_slot=hit;
                     r->pending.inventory_button=(GetAsyncKeyState(VK_CONTROL)&0x8000) ? 1 : 0; r->pending.inventory_mode=4;
                 }
@@ -238,7 +264,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
             r->mouse_x=(int)(short)LOWORD(lparam); r->mouse_y=(int)(short)HIWORD(lparam);
             if (r->drag_capture) {
                 int hit=inventory_hit(r,r->mouse_x,r->mouse_y);
-                if (hit>=1 && hit<45) r->drag_slots|=UINT64_C(1)<<hit;
+                if (hit>=1 && hit<inventory_slots(r)) r->drag_slots|=UINT64_C(1)<<hit;
             }
             return 0;
         case WM_LBUTTONDBLCLK:
@@ -327,6 +353,7 @@ void mc_renderer_poll(mc_renderer *r, mc_input *input) {
     MSG message;
     while (PeekMessageW(&message, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
     *input = r->pending;
+    input->inventory_generation_set=true; input->inventory_generation=r->window_generation;
     memset(&r->pending, 0, sizeof(r->pending)); r->pending.select_slot = -1; r->pending.creative_pick=-1;
     input->paused = r->paused; input->chat_open = r->chat_open;
     bool active = r->focused && !r->hidden && !r->paused && !r->chat_open && !r->inventory_open && r->width > 0 && r->height > 0;
@@ -538,15 +565,16 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
     inventory_layout g=inventory_geometry(r); char line[512];
     panel(0,0,(float)r->width,(float)r->height,0.02f,0.035f,0.05f,0.76f);
     panel((float)g.x,(float)g.y,(float)g.width,(float)g.height,0.06f,0.095f,0.11f,1);
-    text(r,g.x+18,g.y+16,g.width-218,r->creative_open ? "CREATIVE CATALOG" : "PLAYER INVENTORY",0.97f,0.98f,0.94f);
+    text_line(r,g.x+18,g.y+16,g.width-(r->catalog_allowed ? 218 : 90),
+        r->workbench ? c->window_title : r->creative_open ? "CREATIVE CATALOG" : "PLAYER INVENTORY",0.97f,0.98f,0.94f);
     panel((float)(g.x+g.width-54),(float)(g.y+13),40,28,0.18f,0.24f,0.26f,1); text(r,g.x+g.width-43,g.y+17,22,"E",1,1,1);
-    if (r->creative_allowed) {
+    if (r->catalog_allowed) {
         panel((float)(g.x+g.width-178),(float)(g.y+13),116,28,0.17f,0.28f,0.29f,1);
         text(r,g.x+g.width-170,g.y+17,101,r->creative_open ? "Inventory (C)" : "Creative (C)",0.91f,0.96f,0.92f);
     }
     int hover=inventory_hit(r,r->mouse_x,r->mouse_y);
     const mc_slot *tooltip=NULL; mc_slot creative; mc_slot_init(&creative);
-    bool blocked=!c->inventory_ready || c->inventory_pending || c->inventory_sync || r->paused || !r->focused;
+    bool blocked=!mc_client_inventory_ready(c) || c->inventory_pending || c->inventory_sync || r->paused || !r->focused;
     if (r->creative_open) {
         text(r,g.x+g.width/2-73,g.y+74,150,"Page Up / Down",0.76f,0.84f,0.84f);
         panel((float)(g.x+18),(float)(g.y+68),70,32,0.16f,0.23f,0.25f,1); text(r,g.x+28,g.y+74,50,"Prev",r->creative_page ? 0.94f : 0.46f,0.86f,0.81f);
@@ -564,22 +592,30 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
             mc_slot_free(&item);
         }
     } else {
-        text_line(r,g.x+18,g.y+46,4*g.cell,"Armor",0.69f,0.81f,0.81f);
-        text_line(r,g.x+18+4*g.cell,g.y+46,5*g.cell-4,"Crafting 2 x 2",0.69f,0.81f,0.81f);
-        text_line(r,g.x+18+7*g.cell,g.y+68+g.cell/2,g.cell-4,"->",0.75f,0.85f,0.80f);
+        if (r->workbench) {
+            text_line(r,g.x+18+2*g.cell,g.y+46,3*g.cell,"Crafting 3 x 3",0.69f,0.81f,0.81f);
+            text_line(r,g.x+18+6*g.cell,g.y+68+g.cell,g.cell-4,"->",0.75f,0.85f,0.80f);
+        } else {
+            text_line(r,g.x+18,g.y+46,4*g.cell,"Armor",0.69f,0.81f,0.81f);
+            text_line(r,g.x+18+4*g.cell,g.y+46,5*g.cell-4,"Crafting 2 x 2",0.69f,0.81f,0.81f);
+            text_line(r,g.x+18+7*g.cell,g.y+68+g.cell/2,g.cell-4,"->",0.75f,0.85f,0.80f);
+        }
         text_line(r,g.x+18,g.grid_y-24,g.width-36,"Storage   |   Shift transfer / 1-9 swap / Q drop",0.69f,0.81f,0.81f);
-        for (int slot=0;slot<36;slot++) {
+        for (int slot=0;slot<(r->workbench ? 37 : 36);slot++) {
             int x,y; inventory_slot_position(&g,slot,&x,&y);
-            slot_icon(r,&c->inventory.slots[slot],x,y,g.cell-4,slot==r->inventory_focus || slot==hover,blocked);
-            if (slot==hover || (hover<0 && slot==r->inventory_focus)) tooltip=&c->inventory.slots[slot];
+            const mc_slot *item=mc_client_window_slot(c,slot);
+            slot_icon(r,item,x,y,g.cell-4,slot==r->inventory_focus || slot==hover,blocked);
+            if (slot==hover || (hover<0 && slot==r->inventory_focus)) tooltip=item;
         }
     }
-    for (int slot=36;slot<45;slot++) {
+    int hotbar_start=r->workbench ? 37 : 36;
+    for (int slot=hotbar_start;slot<inventory_slots(r);slot++) {
         int x,y; inventory_slot_position(&g,slot,&x,&y);
         bool focus=r->creative_open ? slot-36==c->selected || r->creative_focus==slot : slot==r->inventory_focus;
-        slot_icon(r,&c->inventory.slots[slot],x,y,g.cell-4,focus || slot==hover,blocked);
-        snprintf(line,sizeof(line),"%d",slot-35); text(r,x+3,y+1,20,line,0.80f,0.87f,0.84f);
-        if (slot==hover || (hover<0 && focus)) tooltip=&c->inventory.slots[slot];
+        const mc_slot *item=mc_client_window_slot(c,slot);
+        slot_icon(r,item,x,y,g.cell-4,focus || slot==hover,blocked);
+        snprintf(line,sizeof(line),"%d",slot-hotbar_start+1); text(r,x+3,y+1,20,line,0.80f,0.87f,0.84f);
+        if (slot==hover || (hover<0 && focus)) tooltip=item;
     }
     if (tooltip && tooltip->item_id>=0) {
         char name[256]; mc_client_slot_name(tooltip,name,sizeof(name));
@@ -654,6 +690,32 @@ static void draw_items(mc_renderer *r,const mc_client *c) {
     }
 }
 
+static void draw_held_map(mc_renderer *r,const mc_client *c) {
+    const mc_slot *held=&c->inventory.slots[MC_HOTBAR_START+c->selected];
+    if (held->item_id!=358 || c->inventory_open) return;
+    const mc_map_info *map=mc_maps_find_const(&c->maps,held->damage);
+    int left=r->width-184,top=16; float pixel=1.125f; char label[64];
+    panel((float)left,(float)top,168,194,0.055f,0.08f,0.09f,0.94f);
+    snprintf(label,sizeof(label),"Map %d%s",held->damage,map ? "" : " | waiting");
+    text_line(r,left+12,top+8,144,label,0.96f,0.96f,0.89f);
+    if (!map) { text_line(r,left+12,top+70,144,"Waiting for server pixels",0.76f,0.83f,0.81f); return; }
+    panel((float)(left+12),(float)(top+34),144,144,0.73f,0.72f,0.67f,1);
+    glBegin(GL_QUADS);
+    for (unsigned z=0;z<MC_MAP_SIDE;z++) for (unsigned x=0;x<MC_MAP_SIDE;x++) {
+        uint8_t rgb[3]; if (!map->colors[z*MC_MAP_SIDE+x] || !mc_map_pixel_rgb(map->colors[z*MC_MAP_SIDE+x],rgb)) continue;
+        glColor3ub(rgb[0],rgb[1],rgb[2]); float sx=left+12+x*pixel,sy=top+34+z*pixel;
+        glVertex2f(sx,sy); glVertex2f(sx+pixel,sy); glVertex2f(sx+pixel,sy+pixel); glVertex2f(sx,sy+pixel);
+    }
+    glEnd();
+    for (size_t i=0;i<map->icon_count;i++) {
+        const mc_map_icon *icon=&map->icons[i];
+        float x=left+12+(64+icon->x/2.0f)*pixel,y=top+34+(64+icon->z/2.0f)*pixel;
+        glPushMatrix(); glTranslatef(x,y,0); glRotatef(icon->direction*22.5f,0,0,1);
+        glColor3f(icon->type==1 ? 0.2f : 1,icon->type==1 ? 0.85f : 0.94f,icon->type>1 ? 0.2f : 0.9f);
+        glBegin(GL_TRIANGLES); glVertex2f(0,-5); glVertex2f(3,3); glVertex2f(-3,3); glEnd(); glPopMatrix();
+    }
+}
+
 static void draw_hud(mc_renderer *r, const mc_client *c) {
     glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glDisable(GL_FOG); glEnable(GL_BLEND);
     glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, r->width, r->height, 0, -1, 1);
@@ -718,6 +780,7 @@ static void draw_hud(mc_renderer *r, const mc_client *c) {
             else text(r,x+25,y+112,width-50,"Close the window; restart with the correct host and port.",0.59f,0.71f,0.72f);
         }
     }
+    if (!c->failed && !c->disconnected) draw_held_map(r,c);
     if (c->inventory_open && !c->failed && !c->disconnected) draw_inventory(r,c);
     glDisable(GL_BLEND); glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE);
 }
@@ -725,8 +788,15 @@ static void draw_hud(mc_renderer *r, const mc_client *c) {
 void mc_renderer_draw(mc_renderer *r, const mc_client *c) {
     if (r->width<1||r->height<1) return;
     r->selected=c->selected;
+    if (r->window_generation!=c->window_generation) {
+        r->drag_capture=false; ReleaseCapture(); r->pending.inventory_click=false; r->pending.inventory_drag=false;
+        r->pending.creative_pick=-1; r->pending.toggle_creative=false; r->inventory_focus=c->window_id ? 10 : 9;
+        r->window_generation=c->window_generation;
+    }
+    r->workbench=c->window_id!=0;
     r->inventory_open=c->inventory_open; r->creative_open=c->creative_open; r->creative_allowed=c->gamemode==1;
-    r->inventory_blocked=!c->inventory_ready || c->inventory_pending || c->inventory_sync || c->inventory_queue_index<c->inventory_queue_count;
+    r->catalog_allowed=c->gamemode==1 && !c->window_id;
+    r->inventory_blocked=!mc_client_inventory_ready(c) || c->inventory_pending || c->inventory_sync || c->inventory_queue_index<c->inventory_queue_count;
     r->cursor_present=c->inventory.cursor.item_id>=0;
     char title[512]; snprintf(title,sizeof(title),"C919 | %s | %.180s:%u",c->status,c->host,(unsigned)c->port);
     if (strcmp(title,r->title)) { WCHAR wide[512]; MultiByteToWideChar(CP_UTF8,0,title,-1,wide,512); SetWindowTextW(r->window,wide); snprintf(r->title,sizeof(r->title),"%s",title); }

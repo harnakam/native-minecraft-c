@@ -6,6 +6,9 @@
 #include "crafting/crafting.h"
 #include "entity/item/item_entity.h"
 #include "util/transfer.h"
+#include "world/map.h"
+#include "item/ItemMap.h"
+#include "network/play/client/C08PacketPlayerBlockPlacement.h"
 #include <errno.h>
 #include <math.h>
 #include <signal.h>
@@ -41,13 +44,16 @@ typedef struct {
     char name[17];
     double x, y, z;
     float yaw, pitch;
-    bool grounded;
+    bool grounded, sneaking;
     int selected;
     int gamemode;
     bool transaction_pending;
     int16_t rejected_action;
     uint64_t chunks_sent;
     mc_inventory inventory;
+    mc_container container;
+    uint8_t window_id, next_window_id;
+    int table_x, table_y, table_z;
     mc_nbt player_data;
     int creative_drop_threshold;
     int32_t tracked_items[MC_MAX_ITEM_ENTITIES];
@@ -58,9 +64,11 @@ typedef struct {
     server_peer peers[SERVER_CONNECTIONS];
     mc_socket listener;
     const char *save_path;
-    int max_players, next_entity;
+    int max_players, next_entity, spawn_x, spawn_z;
     bool fatal;
     mc_item_entities items;
+    mc_maps maps;
+    int64_t map_tick;
     uint64_t last_item_tick, last_item_save;
     uint32_t random_state;
 } mc_server;
@@ -110,8 +118,9 @@ static void inventory_slot(server_peer *peer, int index) {
 static void inventory_resync(server_peer *peer) {
     mc_buf packet;
     packet_start(&packet, 0x30);
-    mc_put_u8(&packet, 0); mc_put_i16(&packet, MC_PLAYER_INVENTORY_SIZE);
-    for (int i = 0; i < MC_PLAYER_INVENTORY_SIZE; ++i) mc_slot_write(&packet, &peer->inventory.slots[i]);
+    unsigned count = mc_container_slot_count(&peer->container);
+    mc_put_u8(&packet, peer->window_id); mc_put_i16(&packet, (int16_t)count);
+    for (unsigned i = 0; i < count; ++i) mc_slot_write(&packet, mc_container_const_get(&peer->inventory, &peer->container, (int)i));
     queue_packet(peer, &packet);
     packet_start(&packet, 0x2f);
     mc_put_u8(&packet, 255); mc_put_i16(&packet, -1);
@@ -225,7 +234,7 @@ static int window_index(int stored_index) {
     return -1;
 }
 static bool known_player_field(const mc_nbt *field) {
-    static const char *const names[] = {"Inventory", "SelectedItemSlot", "C919Crafting", "C919Cursor"};
+    static const char *const names[] = {"Inventory", "SelectedItemSlot", "C919Crafting", "C919Cursor", "C919Workbench"};
     if (!field->data || field->size < 3) return false;
     size_t length = ((size_t)field->data[1] << 8) | field->data[2];
     for (size_t i = 0; i < sizeof names / sizeof names[0]; ++i)
@@ -239,7 +248,7 @@ static bool player_path(const mc_server *server, const server_peer *peer, char *
     snprintf(path, 4096, "%s.players/%s.dat", server->save_path, uuid);
     return true;
 }
-static bool encode_inventory(const server_peer *peer, const mc_inventory *inventory, mc_nbt *output, char *error, size_t error_size) {
+static bool encode_inventory_all(const server_peer *peer, const mc_inventory *inventory, const mc_container *container, mc_nbt *output, char *error, size_t error_size) {
     mc_buf buffer; mc_buf_init(&buffer);
     if (peer->player_data.size) {
         mc_nbt_view root;
@@ -270,6 +279,14 @@ static bool encode_inventory(const server_peer *peer, const mc_inventory *invent
     for (int i = 1; i <= 4; ++i) if (inventory->slots[i].item_id >= 0)
         stored_slot(&buffer, &inventory->slots[i], i);
     nbt_name(&buffer, 10, "C919Cursor"); stored_slot(&buffer, &inventory->cursor, -1);
+    /* An open table's independent inputs are saved with every player mutation.
+       On restart they are released once through the same item-transfer journal. */
+    if (container->kind == MC_CONTAINER_WORKBENCH) {
+        count = 0;
+        for (int i = 1; i <= 9; ++i) if (container->slots[i].item_id >= 0) ++count;
+        nbt_name(&buffer, 9, "C919Workbench"); mc_put_u8(&buffer, 10); mc_put_i32(&buffer, count);
+        for (int i = 1; i <= 9; ++i) if (container->slots[i].item_id >= 0) stored_slot(&buffer, &container->slots[i], i);
+    }
     nbt_int(&buffer, 3, "SelectedItemSlot", peer->selected);
     mc_put_u8(&buffer, 0);
     mc_nbt saved; mc_nbt_init(&saved);
@@ -278,6 +295,9 @@ static bool encode_inventory(const server_peer *peer, const mc_inventory *invent
     if (ok) { mc_nbt_free(output); *output = saved; }
     else { mc_nbt_free(&saved); if (buffer.failed) snprintf(error, error_size, "Player inventory metadata exceeds its storage limit"); }
     mc_buf_free(&buffer); return ok;
+}
+static bool encode_inventory(const server_peer *peer, const mc_inventory *inventory, mc_nbt *output, char *error, size_t error_size) {
+    return encode_inventory_all(peer, inventory, &peer->container, output, error, error_size);
 }
 static bool save_inventory(mc_server *server, server_peer *peer, char *error, size_t error_size) {
     char directory[4096], path[4096];
@@ -346,6 +366,20 @@ static bool load_inventory(mc_server *server, server_peer *peer, char *error, si
     }
     mc_nbt_view cursor;
     if (mc_nbt_find(&root, "C919Cursor", &cursor) && !load_stored_slot(&cursor, &peer->inventory.cursor)) goto invalid;
+    if (mc_nbt_find(&root, "C919Workbench", &list)) {
+        if (list.type != 9 || list.size < 5 || list.data[0] != 10) goto invalid;
+        mc_buf bytes = {(uint8_t *)list.data, list.size, list.size, 1, false};
+        int count = mc_get_i32(&bytes);
+        if (count < 0 || count > 9) goto invalid;
+        mc_container_free(&peer->container); mc_container_init(&peer->container, MC_CONTAINER_WORKBENCH);
+        bool seen[10] = {false};
+        for (int i = 0; i < count; ++i) {
+            mc_nbt_view entry; int64_t index;
+            if (!mc_nbt_list_get(&list, (size_t)i, &entry) || !nbt_integer(&entry, "Slot", &index) ||
+                index < 1 || index > 9 || seen[index] || !load_stored_slot(&entry, &peer->container.slots[index])) goto invalid;
+            seen[index] = true;
+        }
+    }
     int64_t selected;
     if (nbt_integer(&root, "SelectedItemSlot", &selected)) {
         if (selected < 0 || selected > 8) goto invalid;
@@ -362,12 +396,16 @@ static bool persist_inventory(mc_server *server, server_peer *peer) {
     disconnect_peer(peer, "Player inventory save failed; mutation was not committed.");
     return false;
 }
-static bool inventory_capacity(const server_peer *peer, const mc_inventory *inventory) {
+static bool inventory_capacity_all(const server_peer *peer, const mc_inventory *inventory, const mc_container *container) {
     size_t remaining = MC_MAX_PACKET - 8192u;
     for (int i = 0; i <= MC_PLAYER_INVENTORY_SIZE; ++i) {
         const mc_slot *slot = i == MC_PLAYER_INVENTORY_SIZE ? &inventory->cursor : &inventory->slots[i];
-        if (slot->nbt.size > remaining) return false;
-        remaining -= slot->nbt.size;
+        if (remaining < 6 || slot->nbt.size > remaining - 6) return false;
+        remaining -= slot->nbt.size + 6;
+    }
+    if (container->kind == MC_CONTAINER_WORKBENCH) for (unsigned i = 0; i < 10; ++i) {
+        if (remaining < 6 || container->slots[i].nbt.size > remaining - 6) return false;
+        remaining -= container->slots[i].nbt.size + 6;
     }
     if (peer->player_data.size) {
         mc_nbt_view root;
@@ -389,23 +427,34 @@ static bool inventory_capacity(const server_peer *peer, const mc_inventory *inve
     }
     return true;
 }
-static bool commit_state(mc_server *server, server_peer *peer, mc_inventory *next, mc_item_entities *next_items) {
-    mc_nbt player_data, items_data; mc_nbt_init(&player_data); mc_nbt_init(&items_data);
+static bool inventory_capacity(const server_peer *peer, const mc_inventory *inventory) {
+    return inventory_capacity_all(peer, inventory, &peer->container);
+}
+static bool commit_state_all(mc_server *server, server_peer *peer, mc_inventory *next, mc_item_entities *next_items,
+    mc_container *next_container, mc_maps *next_maps) {
+    mc_nbt player_data, items_data, maps_data; mc_nbt_init(&player_data); mc_nbt_init(&items_data); mc_nbt_init(&maps_data);
     char uuid[37], error[256] = "Could not encode item transfer";
     if (peer) mc_uuid_string(peer->uuid, uuid);
-    bool encoded = (!peer || (next && inventory_capacity(peer, next) &&
-        encode_inventory(peer, next, &player_data, error, sizeof error))) &&
-        mc_item_entities_encode(next_items ? next_items : &server->items, &items_data);
+    const mc_container *container = peer ? (next_container ? next_container : &peer->container) : NULL;
+    bool encoded = (!peer || (next && inventory_capacity_all(peer, next, container) &&
+        encode_inventory_all(peer, next, container, &player_data, error, sizeof error))) &&
+        mc_item_entities_encode(next_items ? next_items : &server->items, &items_data) &&
+        mc_maps_encode(next_maps ? next_maps : &server->maps, &maps_data);
     bool committed = false;
-    bool ok = encoded && mc_transfer_commit(server->save_path, peer ? uuid : NULL,
-        peer ? &player_data : NULL, &items_data, &committed, error, sizeof error);
+    bool ok = encoded && mc_transfer_commit_all(server->save_path, peer ? uuid : NULL,
+        peer ? &player_data : NULL, &items_data, &maps_data, &committed, error, sizeof error);
     /* Once the durable manifest exists, recovery owns the new state. An I/O
        error while checkpointing must stop the server, never restore old items. */
     if (committed) {
         if (peer) {
             mc_inventory_free(&peer->inventory); peer->inventory = *next; mc_inventory_init(next);
             mc_nbt_free(&peer->player_data); peer->player_data = player_data; mc_nbt_init(&player_data);
+            if (next_container) {
+                mc_container_free(&peer->container); peer->container = *next_container;
+                mc_container_init(next_container, MC_CONTAINER_PLAYER);
+            }
         }
+        if (next_maps) { mc_maps_free(&server->maps); server->maps = *next_maps; mc_maps_init(next_maps); }
         if (next_items) {
             mc_item_entities_free(&server->items); server->items = *next_items; mc_item_entities_init(next_items);
         }
@@ -418,10 +467,10 @@ static bool commit_state(mc_server *server, server_peer *peer, mc_inventory *nex
                 disconnect_peer(&server->peers[i], "Item persistence failed; the committed transfer will recover on restart.");
         } else disconnect_peer(peer, "Inventory/item transfer could not be saved; the mutation was not committed.");
     }
-    mc_nbt_free(&player_data); mc_nbt_free(&items_data); return ok;
+    mc_nbt_free(&player_data); mc_nbt_free(&items_data); mc_nbt_free(&maps_data); return ok;
 }
-static bool commit_inventory(mc_server *server, server_peer *peer, mc_inventory *next) {
-    return commit_state(server, peer, next, NULL);
+static bool commit_state(mc_server *server, server_peer *peer, mc_inventory *next, mc_item_entities *next_items) {
+    return commit_state_all(server, peer, next, next_items, NULL, NULL);
 }
 static int32_t allocate_entity(mc_server *server) {
     for (unsigned tries = 0; tries < MC_MAX_ITEM_ENTITIES + SERVER_CONNECTIONS + 1u; ++tries) {
@@ -515,30 +564,46 @@ static void sync_items(mc_server *server, server_peer *peer) {
         }
     }
 }
-static bool commit_effects(mc_server *server, server_peer *peer, mc_inventory *next,
-                           const mc_crafting_effects *effects, bool creative, bool record_thrower) {
-    if (!effects->count) return commit_inventory(server, peer, next);
+static bool commit_effects_all(mc_server *server, server_peer *peer, mc_inventory *next,
+    mc_container *container, mc_maps *maps, const mc_crafting_effects *effects, bool creative, bool record_thrower) {
+    if (!effects->count) return commit_state_all(server, peer, next, NULL, container, maps);
     mc_item_entities items; mc_item_entities_init(&items);
     size_t old_count = server->items.count;
     bool ok = mc_item_entities_copy(&items, &server->items) && add_drops(server, peer, &items, effects, creative, record_thrower);
-    if (ok) ok = commit_state(server, peer, next, &items);
+    if (ok) ok = commit_state_all(server, peer, next, &items, container, maps);
     else disconnect_peer(peer, "The dropped items could not be retained; inventory was preserved.");
     if (ok) for (size_t i = old_count; i < server->items.count; ++i) broadcast_item(server, &server->items.entries[i]);
     mc_item_entities_free(&items); return ok;
 }
+static bool commit_effects(mc_server *server, server_peer *peer, mc_inventory *next,
+    const mc_crafting_effects *effects, bool creative, bool record_thrower) {
+    return commit_effects_all(server, peer, next, NULL, NULL, effects, creative, record_thrower);
+}
+static mc_crafting_context crafting_context(mc_server *server, const server_peer *peer, mc_maps *maps) {
+    return (mc_crafting_context){.creative = peer->gamemode == 1, .authoritative = true,
+        .maps = maps, .player_x = peer->x, .player_z = peer->z,
+        .spawn_x = server->spawn_x, .spawn_z = server->spawn_z, .dimension = 0};
+}
 static bool close_inventory(mc_server *server, server_peer *peer) {
     mc_inventory next; mc_inventory_init(&next);
+    mc_container container; mc_container_init(&container, MC_CONTAINER_PLAYER);
     mc_crafting_effects effects; mc_crafting_effects_init(&effects);
-    bool ok = mc_inventory_copy(&next, &peer->inventory) && mc_crafting_close(&next, &effects);
-    if (ok) ok = commit_effects(server, peer, &next, &effects, false, false);
+    bool ok = mc_inventory_copy(&next, &peer->inventory) && mc_container_copy(&container, &peer->container) &&
+        mc_container_close(&next, &container, &effects);
+    if (ok) {
+        mc_container_free(&container); mc_container_init(&container, MC_CONTAINER_PLAYER);
+        ok = commit_effects_all(server, peer, &next, &container, NULL, &effects, false, false);
+    }
     else disconnect_peer(peer, "Inventory close allocation failed; inventory was preserved.");
-    mc_inventory_free(&next); mc_crafting_effects_free(&effects); return ok;
+    if (ok) { peer->window_id = 0; peer->transaction_pending = false; }
+    mc_inventory_free(&next); mc_container_free(&container); mc_crafting_effects_free(&effects); return ok;
 }
 static void remove_peer(mc_server *server, server_peer *peer) {
     bool was_player = peer->state == STATE_PLAY;
     int32_t entity = peer->entity;
     if (was_player) {
-        if (!server->fatal) (void)close_inventory(server, peer);
+        bool external = peer->container.kind == MC_CONTAINER_WORKBENCH;
+        if (!server->fatal && close_inventory(server, peer) && external && !server->fatal) (void)close_inventory(server, peer);
         mc_buf packet;
         player_info(&packet, peer, false);
         broadcast(server, &packet, peer);
@@ -551,7 +616,7 @@ static void remove_peer(mc_server *server, server_peer *peer) {
     }
     mc_conn_close(&peer->conn);
     mc_buf_free(&peer->conn.rx); mc_buf_free(&peer->conn.tx);
-    mc_inventory_free(&peer->inventory); mc_nbt_free(&peer->player_data);
+    mc_inventory_free(&peer->inventory); mc_container_free(&peer->container); mc_nbt_free(&peer->player_data);
     memset(peer, 0, sizeof *peer);
 }
 static bool valid_name(const char *name) {
@@ -608,6 +673,7 @@ static void join_game(mc_server *server, server_peer *peer) {
         fprintf(stderr, "Player %s data load failed: %s\n", peer->name, error);
         disconnect_peer(peer, "Player data could not be loaded; the existing file was preserved."); return;
     }
+    if (peer->container.kind == MC_CONTAINER_WORKBENCH && !close_inventory(server, peer)) return;
     if (!mc_crafting_update(&peer->inventory)) { disconnect_peer(peer, "Crafting output could not be calculated; inventory was preserved."); return; }
     if (!inventory_capacity(peer, &peer->inventory)) {
         disconnect_peer(peer, "Player inventory metadata exceeds the supported size; the existing file was preserved."); return;
@@ -683,6 +749,43 @@ static bool reachable(const server_peer *peer, int x, int y, int z) {
     double dx = x + 0.5 - peer->x, dy = y + 0.5 - (peer->y + 1.62), dz = z + 0.5 - peer->z;
     return dx * dx + dy * dy + dz * dz <= 36.0;
 }
+static bool table_usable(const mc_server *server, const server_peer *peer) {
+    if (peer->container.kind != MC_CONTAINER_WORKBENCH) return true;
+    double dx = peer->table_x + 0.5 - peer->x, dy = peer->table_y + 0.5 - peer->y, dz = peer->table_z + 0.5 - peer->z;
+    return (mc_world_get(&server->world, peer->table_x, peer->table_y, peer->table_z) >> 4) == 58 &&
+        dx * dx + dy * dy + dz * dz <= 64.0;
+}
+static bool table_reachable(const server_peer *peer, int x, int y, int z) {
+    double dx = x + 0.5 - peer->x, dy = y + 0.5 - peer->y, dz = z + 0.5 - peer->z;
+    return dx * dx + dy * dy + dz * dz < 64.0;
+}
+static bool open_workbench(mc_server *server, server_peer *peer, int x, int y, int z) {
+    if (peer->container.kind == MC_CONTAINER_WORKBENCH && !close_inventory(server, peer)) return false;
+    mc_inventory inventory; mc_inventory_init(&inventory);
+    mc_container container; mc_container_init(&container, MC_CONTAINER_WORKBENCH);
+    mc_maps maps; mc_maps_init(&maps);
+    mc_crafting_context context = crafting_context(server, peer, &maps);
+    bool ok = mc_inventory_copy(&inventory, &peer->inventory) && mc_maps_copy(&maps, &server->maps) &&
+        mc_container_update(&inventory, &container, &context) &&
+        commit_state_all(server, peer, &inventory, NULL, &container, &maps);
+    mc_inventory_free(&inventory); mc_container_free(&container); mc_maps_free(&maps);
+    if (!ok) return false;
+    peer->table_x = x; peer->table_y = y; peer->table_z = z;
+    peer->next_window_id = (uint8_t)(peer->next_window_id % 100 + 1);
+    peer->window_id = peer->next_window_id; peer->transaction_pending = false;
+    mc_buf packet; packet_start(&packet, 0x2d); mc_put_u8(&packet, peer->window_id);
+    mc_put_string(&packet, "minecraft:crafting_table");
+    mc_put_string(&packet, "{\"translate\":\"tile.workbench.name\"}"); mc_put_u8(&packet, 0);
+    queue_packet(peer, &packet); inventory_resync(peer); return true;
+}
+static void invalidate_workbench(mc_server *server, server_peer *peer) {
+    if (table_usable(server, peer)) return;
+    uint8_t window = peer->window_id;
+    if (close_inventory(server, peer)) {
+        mc_buf packet; packet_start(&packet, 0x2e); mc_put_u8(&packet, window); queue_packet(peer, &packet);
+        inventory_resync(peer); send_equipment(server, peer);
+    }
+}
 static void block_packet(mc_buf *packet, const mc_world *world, int x, int y, int z) {
     packet_start(packet, 0x23);
     mc_put_position(packet, x, y, z);
@@ -716,7 +819,7 @@ static void change_block(mc_server *server, server_peer *peer, int x, int y, int
 }
 static void confirm_transaction(server_peer *peer, int16_t action, bool accepted) {
     mc_buf packet; packet_start(&packet, 0x32);
-    mc_put_u8(&packet, 0); mc_put_i16(&packet, action); mc_put_u8(&packet, accepted);
+    mc_put_u8(&packet, peer->window_id); mc_put_i16(&packet, action); mc_put_u8(&packet, accepted);
     queue_packet(peer, &packet);
 }
 static void handle_inventory_click(mc_server *server, server_peer *peer, mc_buf *packet) {
@@ -727,16 +830,23 @@ static void handle_inventory_click(mc_server *server, server_peer *peer, mc_buf 
     mc_crafting_effects effects; mc_crafting_effects_init(&effects);
     bool parsed = mc_slot_read(packet, &claimed) && complete(packet);
     if (!parsed) { disconnect_peer(peer, "Malformed inventory click packet."); goto done; }
+    if (window != peer->window_id || peer->transaction_pending) goto done;
+    if (!table_usable(server, peer)) { invalidate_workbench(server, peer); goto done; }
     mc_inventory next; mc_inventory_init(&next);
-    bool valid = window == 0 && !peer->transaction_pending &&
+    mc_container container; mc_container_init(&container, MC_CONTAINER_PLAYER);
+    mc_maps maps; mc_maps_init(&maps);
+    mc_crafting_context context = crafting_context(server, peer, &maps);
+    bool valid =
         !(peer->gamemode != 1 && (mode == 3 || (mode == 5 && button >= 8))) &&
-        mc_inventory_copy(&next, &peer->inventory) &&
-        mc_crafting_click(&next, index, button, mode, &returned, &effects) && inventory_capacity(peer, &next);
+        mc_inventory_copy(&next, &peer->inventory) && mc_container_copy(&container, &peer->container) &&
+        mc_maps_copy(&maps, &server->maps) &&
+        mc_container_click(&next, &container, &context, index, button, mode, &returned, &effects) &&
+        inventory_capacity_all(peer, &next, &container);
     /* Vanilla applies a legitimate action before checking its client return
        stack. A mismatch locks the window and resyncs the resulting state. */
-    bool committed = valid && commit_effects(server, peer, &next, &effects, false, false);
+    bool committed = valid && commit_effects_all(server, peer, &next, &container, &maps, &effects, false, false);
     bool accepted = committed && mc_slot_equal(&returned, &claimed);
-    mc_inventory_free(&next);
+    mc_inventory_free(&next); mc_container_free(&container); mc_maps_free(&maps);
     confirm_transaction(peer, action, accepted);
     if (!accepted && !peer->transaction_pending) { peer->transaction_pending = true; peer->rejected_action = action; }
     inventory_resync(peer);
@@ -764,6 +874,62 @@ static void handle_movement(mc_server *server, server_peer *peer, mc_buf *packet
     mc_put_i32(&update, (int32_t)floor(z * 32));
     mc_put_u8(&update, angle_byte(yaw)); mc_put_u8(&update, angle_byte(pitch)); mc_put_u8(&update, grounded);
     broadcast(server, &update, peer); mc_buf_free(&update);
+}
+static void use_empty_map(mc_server *server, server_peer *peer) {
+    int index = MC_HOTBAR_START + peer->selected;
+    if (peer->inventory.slots[index].item_id != 395) return;
+    mc_inventory next; mc_inventory_init(&next);
+    mc_maps maps; mc_maps_init(&maps);
+    mc_slot created; mc_slot_init(&created);
+    mc_crafting_effects effects; mc_crafting_effects_init(&effects);
+    bool ok = mc_inventory_copy(&next, &peer->inventory) && mc_maps_copy(&maps, &server->maps) &&
+        mc_maps_create(&maps, &created, peer->x, peer->z, 0, 0);
+    if (ok) {
+        --next.slots[index].count;
+        if (!next.slots[index].count) ok = mc_slot_copy(&next.slots[index], &created);
+        else {
+            /* Newly allocated IDs have no existing stacks to merge. Vanilla's
+               first empty main slot searches hotbar before the three rows. */
+            int destination = -1;
+            for (int i = 0; i < 36; ++i) {
+                int slot = i < 9 ? MC_HOTBAR_START + i : i;
+                if (next.slots[slot].item_id < 0) { destination = slot; break; }
+            }
+            ok = destination >= 0 ? mc_slot_copy(&next.slots[destination], &created) : mc_crafting_effects_append(&effects, &created);
+        }
+    }
+    if (ok) ok = commit_effects_all(server, peer, &next, NULL, &maps, &effects, false, false);
+    else disconnect_peer(peer, "Map creation could not be retained; inventory was preserved.");
+    if (ok) { inventory_resync(peer); send_equipment(server, peer); }
+    mc_inventory_free(&next); mc_maps_free(&maps); mc_slot_free(&created); mc_crafting_effects_free(&effects);
+}
+typedef struct { mc_server *server; server_peer *peer; } C08ServerHandler;
+static void server_processPlayerBlockPlacement(void *opaque, const C08PacketPlayerBlockPlacement *packet) {
+    C08ServerHandler *handler = opaque;
+    mc_server *server = handler->server; server_peer *peer = handler->peer;
+    const C08BlockPos *source_position = C08PacketPlayerBlockPlacement_getPosition(packet);
+    if (!source_position) { disconnect_peer(peer, "Invalid block placement position."); return; }
+    C08BlockPos position = *source_position;
+    int x = position.x, y = position.y, z = position.z;
+    int face = C08PacketPlayerBlockPlacement_getPlacedBlockDirection(packet);
+    if (face > 5 && face != 255) { disconnect_peer(peer, "Invalid block placement direction."); return; }
+    if (face == 255) { use_empty_map(server, peer); return; }
+    const mc_slot *held = &peer->inventory.slots[MC_HOTBAR_START + peer->selected];
+    if (world_coordinate(x, y, z) && table_reachable(peer, x, y, z) &&
+        (mc_world_get(&server->world, x, y, z) >> 4) == 58 && (!peer->sneaking || held->item_id < 0)) {
+        (void)open_workbench(server, peer, x, y, z); return;
+    }
+    static const int dx[6] = {0, 0, 0, 0, -1, 1};
+    static const int dy[6] = {-1, 1, 0, 0, 0, 0};
+    static const int dz[6] = {0, 0, -1, 1, 0, 0};
+    int tx = x + dx[face], ty = y + dy[face], tz = z + dz[face];
+    uint16_t placed = 0;
+    bool placeable = mc_item_block_state(held->item_id, held->damage, &placed);
+    if (!world_coordinate(x, y, z) || !reachable(peer, x, y, z) || !mc_world_get(&server->world, x, y, z) ||
+        mc_world_get(&server->world, tx, ty, tz) || held->item_id < 0 || !placeable) {
+        correct_block(peer, &server->world, tx, ty, tz); return;
+    }
+    change_block(server, peer, tx, ty, tz, placed);
 }
 static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, int id) {
     if (id >= 3 && id <= 6) { handle_movement(server, peer, packet, id); return; }
@@ -804,10 +970,10 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
             int index = MC_HOTBAR_START + peer->selected;
             bool ok = mc_inventory_copy(&next, &peer->inventory);
             if (ok && next.slots[index].item_id >= 0) {
-                ok = mc_slot_copy(&effects.dropped[0], &next.slots[index]);
+                ok = mc_crafting_effects_append(&effects, &next.slots[index]);
                 if (ok) {
                     unsigned count = status == 3 ? next.slots[index].count : 1;
-                    effects.dropped[0].count = (uint8_t)count; effects.count = 1;
+                    effects.dropped[0].count = (uint8_t)count;
                     next.slots[index].count -= (uint8_t)count;
                     if (!next.slots[index].count) mc_slot_free(&next.slots[index]);
                     ok = commit_effects(server, peer, &next, &effects, false, true);
@@ -820,28 +986,14 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
         return;
     }
     if (id == 8) {
-        int x, y, z; mc_slot claimed_item; mc_slot_init(&claimed_item);
-        mc_get_position(packet, &x, &y, &z); uint8_t face = mc_get_u8(packet);
-        mc_slot_read(packet, &claimed_item);
-        uint8_t cursor_x = mc_get_u8(packet), cursor_y = mc_get_u8(packet), cursor_z = mc_get_u8(packet);
-        if (!complete(packet) || cursor_x > 16 || cursor_y > 16 || cursor_z > 16 ||
-            (face > 5 && face != 255)) { mc_slot_free(&claimed_item); disconnect_peer(peer, "Invalid block placement packet."); return; }
-        if (face == 255) { mc_slot_free(&claimed_item); return; } /* right click in air */
-        static const int dx[6] = {0, 0, 0, 0, -1, 1};
-        static const int dy[6] = {-1, 1, 0, 0, 0, 0};
-        static const int dz[6] = {0, 0, -1, 1, 0, 0};
-        int tx = x + dx[face], ty = y + dy[face], tz = z + dz[face];
-        const mc_slot *held = &peer->inventory.slots[MC_HOTBAR_START + peer->selected];
-        uint16_t placed = 0;
-        /* The server's full held stack is authoritative; C08's supplied Slot
-           is parsed and validated but may have a stale client-side count. */
-        bool placeable = mc_item_block_state(held->item_id, held->damage, &placed);
-        mc_slot_free(&claimed_item);
-        if (!world_coordinate(x, y, z) || !reachable(peer, x, y, z) || !mc_world_get(&server->world, x, y, z) ||
-            mc_world_get(&server->world, tx, ty, tz) || held->item_id < 0 || !placeable) {
-            correct_block(peer, &server->world, tx, ty, tz); return;
+        C08PacketPlayerBlockPlacement placement; C08PacketPlayerBlockPlacement_init(&placement);
+        if (!C08PacketPlayerBlockPlacement_readPacketData(&placement, packet) || !complete(packet))
+            disconnect_peer(peer, "Invalid block placement packet.");
+        else {
+            C08ServerHandler handler = {server, peer};
+            C08PacketPlayerBlockPlacement_processPacket(&placement, &handler, server_processPlayerBlockPlacement);
         }
-        change_block(server, peer, tx, ty, tz, placed); return;
+        C08PacketPlayerBlockPlacement_free(&placement); return;
     }
     if (id == 9) {
         int selected = mc_get_i16(packet);
@@ -861,8 +1013,8 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
             if (item.item_id >= 0 && peer->creative_drop_threshold < 200) {
                 mc_inventory next; mc_inventory_init(&next);
                 mc_crafting_effects effects; mc_crafting_effects_init(&effects);
-                bool ready = mc_inventory_copy(&next, &peer->inventory) && mc_slot_copy(&effects.dropped[0], &item);
-                if (ready) { effects.count = 1; ready = commit_effects(server, peer, &next, &effects, true, false); }
+                bool ready = mc_inventory_copy(&next, &peer->inventory) && mc_crafting_effects_append(&effects, &item);
+                if (ready) ready = commit_effects(server, peer, &next, &effects, true, false);
                 else disconnect_peer(peer, "Drop allocation failed; inventory was preserved.");
                 if (ready) peer->creative_drop_threshold += 20;
                 mc_inventory_free(&next); mc_crafting_effects_free(&effects);
@@ -870,23 +1022,32 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
             mc_slot_free(&item); return;
         }
         mc_inventory next; mc_inventory_init(&next);
-        bool ready = mc_inventory_copy(&next, &peer->inventory) && mc_slot_copy(&next.slots[index], &item) && mc_crafting_update(&next);
+        mc_container container; mc_container_init(&container, MC_CONTAINER_PLAYER);
+        mc_maps maps; mc_maps_init(&maps);
+        mc_crafting_context context = crafting_context(server, peer, &maps);
+        bool ready = mc_inventory_copy(&next, &peer->inventory) && mc_container_copy(&container, &peer->container) &&
+            mc_maps_copy(&maps, &server->maps) && mc_slot_copy(&next.slots[index], &item) &&
+            mc_crafting_update(&next);
         mc_slot_free(&item);
-        if (!ready) { mc_inventory_free(&next); disconnect_peer(peer, "Inventory allocation failed."); return; }
-        if (!inventory_capacity(peer, &next)) { mc_inventory_free(&next); inventory_resync(peer); return; }
-        if (commit_inventory(server, peer, &next)) {
+        if (!ready) disconnect_peer(peer, "Inventory allocation failed.");
+        else if (!inventory_capacity_all(peer, &next, &container)) inventory_resync(peer);
+        else if (!mc_container_update(&next, &container, &context)) disconnect_peer(peer, "Inventory allocation failed.");
+        else if (!inventory_capacity_all(peer, &next, &container)) inventory_resync(peer);
+        else if (commit_state_all(server, peer, &next, NULL, &container, &maps)) {
             inventory_slot(peer, index); if (index <= 4) inventory_slot(peer, 0); send_equipment(server, peer);
+            if (peer->window_id) inventory_resync(peer);
         }
-        mc_inventory_free(&next);
+        mc_inventory_free(&next); mc_container_free(&container); mc_maps_free(&maps);
         return;
     }
     if (id == 0x0e) { handle_inventory_click(server, peer, packet); return; }
     if (id == 0x0f) {
-        int window = mc_get_u8(packet); int16_t action = mc_get_i16(packet); bool accepted = get_boolean(packet);
-        if (!complete(packet) || window != 0 || !accepted || !peer->transaction_pending || action != peer->rejected_action) {
+        int window = mc_get_u8(packet); int16_t action = mc_get_i16(packet); (void)get_boolean(packet);
+        if (!complete(packet)) {
             disconnect_peer(peer, "Invalid inventory transaction acknowledgement."); return;
         }
-        peer->transaction_pending = false; return;
+        if (window == peer->window_id && peer->transaction_pending && action == peer->rejected_action) peer->transaction_pending = false;
+        return;
     }
     if (id == 0x0a) {
         if (!complete(packet)) { disconnect_peer(peer, "Invalid animation packet."); return; }
@@ -897,6 +1058,7 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
         int entity = mc_get_varint(packet), action = mc_get_varint(packet), parameter = mc_get_varint(packet);
         if (!complete(packet) || entity != peer->entity || action < 0 || action > 6 || parameter < 0)
             disconnect_peer(peer, "Invalid entity action packet.");
+        else if (action == 0 || action == 1) peer->sneaking = action == 0;
         return;
     }
     if (id == 0x13) {
@@ -923,8 +1085,8 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
         return;
     }
     if (id == 0x0d) {
-        uint8_t window = mc_get_u8(packet);
-        if (!complete(packet) || window != 0) disconnect_peer(peer, "Invalid inventory window.");
+        (void)mc_get_u8(packet);
+        if (!complete(packet)) disconnect_peer(peer, "Invalid inventory window.");
         else if (close_inventory(server, peer)) { inventory_resync(peer); send_equipment(server, peer); }
         return;
     }
@@ -991,6 +1153,8 @@ static void tick_peer(mc_server *server, server_peer *peer, uint64_t now) {
         if (now - peer->connected_at > LOGIN_TIMEOUT_MS) disconnect_peer(peer, "Handshake timed out.");
         return;
     }
+    invalidate_workbench(server, peer);
+    if (peer->closing || server->fatal) return;
     if (peer->conn.tx.len < 256 * 1024) {
         int cx = mc_floor_div16((int)floor(peer->x)), cz = mc_floor_div16((int)floor(peer->z));
         bool sent = false;
@@ -1065,13 +1229,105 @@ static bool load_items(mc_server *server, char *error, size_t size) {
     }
     return ok;
 }
+static bool load_maps(mc_server *server, char *error, size_t size) {
+    char path[4096]; struct stat info;
+    if (strlen(server->save_path) > 3900) return false;
+    snprintf(path, sizeof path, "%s.maps.dat", server->save_path);
+    mc_nbt data; mc_nbt_init(&data);
+    bool ok;
+    if (stat(path, &info)) {
+        ok = errno == ENOENT && mc_maps_encode(&server->maps, &data) && mc_nbt_save_gzip(&data, path, error, size);
+    } else ok = mc_nbt_load_gzip(&data, path, error, size) && mc_maps_decode(&data, &server->maps);
+    mc_nbt_free(&data); return ok;
+}
 static void free_world_state(mc_server *server) {
-    mc_item_entities_free(&server->items); mc_world_free(&server->world); free(server);
+    mc_item_entities_free(&server->items); mc_maps_free(&server->maps); mc_world_free(&server->world); free(server);
+}
+/* InventoryPlayer uses hotbar 0..8, main 9..35, then armor 0..3.
+   The existing protocol inventory stores hotbar at 36 and armor reversed. */
+static int map_inventory_slot(int original_index) {
+    if (original_index < 9) return MC_HOTBAR_START + original_index;
+    return original_index < 36 ? original_index : 44 - original_index;
+}
+static void tick_maps(mc_server *server) {
+    if (server->map_tick == INT64_MAX) server->map_tick = INT64_MIN;
+    else ++server->map_tick;
+    mc_map_player players[SERVER_CONNECTIONS]; size_t player_count = 0;
+    for (int i = 0; i < SERVER_CONNECTIONS; ++i) {
+        server_peer *peer = &server->peers[i];
+        if (playing(peer)) players[player_count++] = (mc_map_player){peer->entity, peer->name,
+            &peer->inventory, peer->x, peer->z, peer->yaw, 0, true};
+    }
+    for (int i = 0; i < SERVER_CONNECTIONS && !server->fatal; ++i) {
+        server_peer *peer = &server->peers[i];
+        if (!playing(peer)) continue;
+        bool has_map = false;
+        for (int n = 0; n < 40; ++n)
+            if (peer->inventory.slots[map_inventory_slot(n)].item_id == 358) { has_map = true; break; }
+        if (!has_map) continue;
+        mc_maps maps; mc_maps_init(&maps); mc_inventory inventory; mc_inventory_init(&inventory);
+        bool ok = mc_maps_copy(&maps, &server->maps) && mc_inventory_copy(&inventory, &peer->inventory);
+        bool persistent = false, inventory_changed = false;
+        mc_map_player viewer = {peer->entity, peer->name, &inventory,
+            peer->x, peer->z, peer->yaw, 0, true};
+        for (size_t p = 0; p < player_count; ++p)
+            if (players[p].entity_id == peer->entity) players[p].inventory = &inventory;
+        /* InventoryPlayer.decrementAnimations -> ItemStack.updateAnimation ->
+           ItemMap.onUpdate runs for every main-inventory stack, in this order. */
+        for (int n = 0; n < 36 && ok; ++n) {
+            int slot = map_inventory_slot(n);
+            if (inventory.slots[slot].item_id != 358) continue;
+            bool changed = false;
+            ok = mc_ItemMap_onUpdate(&maps, &server->world, &inventory.slots[slot], &viewer,
+                players, player_count, n == peer->selected, server->spawn_x, server->spawn_z,
+                false, server->map_tick, &changed);
+            persistent |= changed;
+        }
+        /* EntityPlayerMP also asks armor maps for a packet. They do not survey,
+           but its getMapData dependency still resolves missing saved data. */
+        for (int n = 36; n < 40 && ok; ++n) {
+            mc_slot *stack = &inventory.slots[map_inventory_slot(n)];
+            if (stack->item_id != 358) continue;
+            size_t count = maps.count; int16_t damage = stack->damage;
+            ok = mc_ItemMap_getMapData(&maps, stack, false, server->spawn_x, server->spawn_z, 0) != NULL;
+            persistent |= maps.count != count || stack->damage != damage;
+        }
+        for (int n = 0; n < 40 && ok; ++n) {
+            int slot = map_inventory_slot(n);
+            inventory_changed |= !mc_slot_equal(&inventory.slots[slot], &peer->inventory.slots[slot]);
+        }
+        if (ok && (persistent || inventory_changed)) {
+            ok = commit_state_all(server, inventory_changed ? peer : NULL,
+                inventory_changed ? &inventory : NULL, NULL, NULL, &maps);
+            if (ok && inventory_changed) { inventory_resync(peer); send_equipment(server, peer); }
+        } else if (ok) {
+            /* MapInfo counters/dirty ranges/decorations are runtime state.
+               Keeping this copy is necessary even when no NBT changed. */
+            mc_maps_free(&server->maps); server->maps = maps; mc_maps_init(&maps);
+        }
+        for (size_t p = 0; p < player_count; ++p)
+            if (players[p].entity_id == peer->entity) players[p].inventory = &peer->inventory;
+        /* Original EntityPlayerMP requests each map every tick; MapInfo itself
+           decides full, dirty rectangle, icons-only, or no packet. */
+        for (int n = 0; n < 40 && ok; ++n) {
+            mc_slot *stack = &peer->inventory.slots[map_inventory_slot(n)];
+            if (stack->item_id != 358) continue;
+            mc_buf packet; mc_buf_init(&packet);
+            int result = mc_ItemMap_createMapDataPacket_at(&server->maps, stack, peer->entity,
+                server->spawn_x, server->spawn_z, 0, &packet);
+            if (result == 1) queue_packet(peer, &packet);
+            else { mc_buf_free(&packet); if (result < 0) ok = false; }
+        }
+        if (!ok && !server->fatal && !peer->closing)
+            disconnect_peer(peer, "Map update could not be retained; saved data was preserved.");
+        mc_inventory_free(&inventory); mc_maps_free(&maps);
+    }
 }
 static void tick_items(mc_server *server, uint64_t now) {
     unsigned steps = 0;
     while (!server->fatal && now - server->last_item_tick >= 50 && steps++ < 20) {
         server->last_item_tick += 50;
+        tick_maps(server);
         for (int i = 0; i < SERVER_CONNECTIONS; ++i) {
             server_peer *peer = &server->peers[i];
             if (peer->creative_drop_threshold > 0) --peer->creative_drop_threshold;
@@ -1181,6 +1437,7 @@ int mc_server_main(int argc, char **argv) {
     server->random_state = (uint32_t)seed ^ (uint32_t)mc_time_ms();
     if (!server->random_state) server->random_state = 919;
     mc_item_entities_init(&server->items);
+    mc_maps_init(&server->maps);
     server->listener = MC_INVALID_SOCKET;
     mc_world_init(&server->world, (uint32_t)seed);
     char error[256]; struct stat info;
@@ -1202,6 +1459,11 @@ int mc_server_main(int argc, char **argv) {
     if (!load_items(server, error, sizeof error)) {
         fprintf(stderr, "Could not load/recover item state; existing data was preserved: %s\n", error); free_world_state(server); return 1;
     }
+    if (!load_maps(server, error, sizeof error)) {
+        fprintf(stderr, "Could not load MapData; existing data was preserved: %s\n", error); free_world_state(server); return 1;
+    }
+    server_peer spawn = {0};
+    if (select_spawn(server, &spawn)) { server->spawn_x = (int)floor(spawn.x); server->spawn_z = (int)floor(spawn.z); }
     if (!mc_net_init()) { fputs("Network initialization failed.\n", stderr); free_world_state(server); return 1; }
     server->listener = mc_net_listen(bind, (uint16_t)port, error, sizeof error);
     if (server->listener == MC_INVALID_SOCKET) {
@@ -1225,7 +1487,7 @@ int mc_server_main(int argc, char **argv) {
             if (!peer) { mc_socket_close(socket); continue; }
             memset(peer, 0, sizeof *peer);
             mc_conn_init(&peer->conn, socket);
-            mc_inventory_init(&peer->inventory); mc_nbt_init(&peer->player_data);
+            mc_inventory_init(&peer->inventory); mc_container_init(&peer->container, MC_CONTAINER_PLAYER); mc_nbt_init(&peer->player_data);
             peer->used = true; peer->connected_at = now;
         }
         for (int i = 0; i < SERVER_CONNECTIONS; ++i) if (server->peers[i].used) tick_peer(server, &server->peers[i], now);

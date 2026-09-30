@@ -196,11 +196,42 @@ static void test_non_subtype_damage_merge_context(void) {
     CHECK(inventory.slots[9].count==4 && inventory.slots[9].damage==8 && inventory.cursor.count==5 && inventory.cursor.damage==7);
     mc_slot_free(&returned); mc_slot_free(&dropped); mc_inventory_free(&inventory);
 }
+static void test_legacy_inventory_insertion(void) {
+    mc_inventory inventory; mc_inventory_init(&inventory); mc_slot item; mc_slot_init(&item);
+    for (unsigned i=9;i<45;i++) CHECK(mc_slot_set(&inventory.slots[i],1,64,0));
+    mc_slot_free(&inventory.slots[37]); CHECK(mc_slot_set(&item,1,127,7));
+    CHECK(mc_inventory_insert(&inventory,&item)); CHECK(item.count==63 && inventory.slots[37].count==64 && inventory.slots[37].damage==7);
+    mc_slot_free(&inventory.slots[37]); CHECK(mc_slot_set(&item,276,2,1));
+    CHECK(mc_inventory_insert(&inventory,&item)); CHECK(item.item_id==-1 && inventory.slots[37].item_id==276 && inventory.slots[37].count==2 && inventory.slots[37].damage==1);
+    mc_slot_free(&inventory.slots[37]); CHECK(mc_slot_set(&item,276,2,1));
+    const uint8_t unbreakable[]={10,0,0,1,0,11,'U','n','b','r','e','a','k','a','b','l','e',1,0};
+    mc_buf input={(uint8_t *)unbreakable,sizeof(unbreakable),sizeof(unbreakable),0,false}; CHECK(mc_nbt_read(&input,&item.nbt));
+    CHECK(mc_inventory_insert(&inventory,&item)); CHECK(item.count==1 && inventory.slots[37].count==1 && inventory.slots[37].nbt.size==sizeof(unbreakable));
+    CHECK(!mc_inventory_insert(&inventory,&inventory.slots[9])); CHECK(!mc_inventory_insert(&inventory,&inventory.cursor));
+    mc_inventory_free(&inventory); CHECK(mc_slot_set(&inventory.slots[36],266,3,8)); CHECK(mc_slot_set(&item,266,5,7));
+    CHECK(mc_inventory_insert(&inventory,&item)); CHECK(item.item_id==-1 && inventory.slots[36].count==8 && inventory.slots[36].damage==8);
+    mc_slot_free(&item); mc_inventory_free(&inventory);
+}
+static void test_original_clone_ignores_button(void) {
+    const int buttons[]={0,2,-1,127};
+    for (unsigned i=0;i<sizeof(buttons)/sizeof(buttons[0]);i++) {
+        mc_inventory inventory; mc_inventory_init(&inventory); mc_slot returned,dropped; mc_slot_init(&returned); mc_slot_init(&dropped);
+        CHECK(mc_slot_set(&inventory.slots[9],1,2,7));
+        /* Original Container.slotClick's creative mode3 branch never reads
+           the button argument; GuiContainer's keyboard binding passes zero. */
+        CHECK(mc_inventory_click_result(&inventory,9,buttons[i],3,&returned,&dropped));
+        CHECK(inventory.cursor.count==64 && inventory.cursor.damage==7 && inventory.slots[9].count==2);
+        CHECK(returned.item_id==-1 && dropped.item_id==-1);
+        mc_slot_free(&returned); mc_slot_free(&dropped); mc_inventory_free(&inventory);
+    }
+}
 int main(void) {
     test_slot_codec(); test_normal_click_and_returns(); test_stack_limits_shift_and_armor();
     test_hotbar_drop_clone_and_rollback(); test_drag_distribution_and_double_collect();
     test_oversized_wire_and_existing_inventory();
     test_legacy_shift_overstacks();
     test_non_subtype_damage_merge_context();
+    test_legacy_inventory_insertion();
+    test_original_clone_ignores_button();
     printf("inventory: %u checks passed\n",checks); return 0;
 }

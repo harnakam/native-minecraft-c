@@ -95,6 +95,45 @@ int main(void) {
     CHECK(mc_transfer_recover(base,error,sizeof error)); same_file(items_path,&new_items); same_file(player_path,&old_player);
     committed=false;
     CHECK(!mc_transfer_commit("missing-transfer-dir/world",uuid,&new_player,&new_items,&committed,error,sizeof error)); CHECK(!committed);
+    /* Three owners share one commit point. A corrupt final staging snapshot
+       must be detected before even the first destination is replaced. */
+    const char *maps_path="test-transfer-world.c919.maps.dat",*maps_stage="test-transfer-world.c919.pending-maps.dat";
+    mc_nbt old_maps,new_maps; mc_nbt_init(&old_maps); mc_nbt_init(&new_maps);
+    value(&old_maps,5); value(&new_maps,6);
+    CHECK(mc_nbt_save_gzip(&old_maps,maps_path,error,sizeof error));
+    committed=false;
+    CHECK(mc_transfer_prepare_all(base,uuid,&new_player,&old_items,&new_maps,&committed,error,sizeof error)); CHECK(committed);
+    same_file(player_path,&old_player); same_file(items_path,&new_items); same_file(maps_path,&old_maps);
+    CHECK(mc_nbt_load_gzip(&record,journal,error,sizeof error));
+    CHECK(mc_nbt_save_gzip(&old_maps,maps_stage,error,sizeof error));
+    CHECK(!mc_transfer_recover(base,error,sizeof error));
+    same_file(player_path,&old_player); same_file(items_path,&new_items); same_file(maps_path,&old_maps); same_file(journal,&record);
+    CHECK(mc_nbt_save_gzip(&new_maps,maps_stage,error,sizeof error));
+    CHECK(mc_transfer_recover(base,error,sizeof error));
+    same_file(player_path,&new_player); same_file(items_path,&old_items); same_file(maps_path,&new_maps);
+    CHECK(mc_transfer_recover(base,error,sizeof error));
+    CHECK(remove(maps_path)==0); CHECK(make_dir(maps_path)==0);
+    committed=false;
+    CHECK(!mc_transfer_commit_all(base,uuid,&old_player,&new_items,&old_maps,&committed,error,sizeof error)); CHECK(committed);
+    same_file(player_path,&old_player); same_file(items_path,&new_items); CHECK(!stat(journal,&info));
+    CHECK(remove_dir(maps_path)==0); CHECK(mc_transfer_recover(base,error,sizeof error));
+    same_file(player_path,&old_player); same_file(items_path,&new_items); same_file(maps_path,&old_maps);
+    /* Old journals leave MapData alone; invalid map preparation commits none. */
+    CHECK(prepare(base,uuid,&new_player,&old_items,error,sizeof error));
+    CHECK(mc_transfer_recover(base,error,sizeof error)); same_file(maps_path,&old_maps);
+    mc_nbt invalid_maps; mc_nbt_init(&invalid_maps); committed=true;
+    CHECK(!mc_transfer_prepare_all(base,uuid,&old_player,&new_items,&invalid_maps,&committed,error,sizeof error)); CHECK(!committed);
+    same_file(player_path,&new_player); same_file(items_path,&old_items); same_file(maps_path,&old_maps);
+    CHECK(remove(maps_stage)==0); CHECK(make_dir(maps_stage)==0);
+    committed=true;
+    CHECK(!mc_transfer_prepare_all(base,uuid,&old_player,&new_items,&new_maps,&committed,error,sizeof error)); CHECK(!committed);
+    CHECK(stat(journal,&info)==-1 && errno==ENOENT);
+    same_file(player_path,&new_player); same_file(items_path,&old_items); same_file(maps_path,&old_maps);
+    CHECK(remove_dir(maps_stage)==0);
+    CHECK(mc_transfer_commit_all(base,NULL,NULL,&new_items,&new_maps,&committed,error,sizeof error)); CHECK(committed);
+    same_file(player_path,&new_player); same_file(items_path,&new_items); same_file(maps_path,&new_maps);
+    CHECK(remove(maps_path)==0); CHECK(remove(maps_stage)==0);
+    mc_nbt_free(&record); mc_nbt_free(&old_maps); mc_nbt_free(&new_maps);
     CHECK(remove(player_path)==0); CHECK(remove(items_path)==0);
     CHECK(remove("test-transfer-world.c919.pending-player.dat")==0); CHECK(remove("test-transfer-world.c919.pending-items.dat")==0);
     CHECK(remove_dir("test-transfer-world.c919.players")==0);

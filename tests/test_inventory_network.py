@@ -246,6 +246,18 @@ class InventoryNetworkTests(unittest.TestCase):
             peer.send(1, string("still connected"))
             self.assertIn(b"still connected", peer.wait(2))
 
+    def test_nbt_budget_includes_all_slot_headers_before_creative_mutation(self):
+        # The tag fits the old raw-NBT budget but exceeds the shared container
+        # budget once the 45 Slot headers and cursor are accounted for.
+        blob_size = 2 * 1024 * 1024 - 8192 - 200
+        large = named(10, "", compound(named(7, "C919Blob", struct.pack(">i", blob_size) + b"a" * blob_size)))
+        with running_server(self.world) as port:
+            peer = self.peer(port, "SlotHeaderBudget")
+            peer.send(0x10, struct.pack(">h", 9) + wire_slot(1, 1, 0, large))
+            slots = inventory_payload(peer.wait(0x30))
+            self.assertEqual(slots[9][0], -1)
+            self.assertEqual(peer.creative(10, 260, 5)[:3], (260, 5, 0))
+
     def test_cursor_drops_and_unknown_player_fields_survive_reconnect(self):
         with running_server(self.world) as port:
             owner = self.peer(port, "ForeignFields")

@@ -154,7 +154,7 @@ class Peer:
 
 
 @contextlib.contextmanager
-def running_server(world):
+def running_server(world, crash=False):
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port = reserve.getsockname()[1]
@@ -177,7 +177,7 @@ def running_server(world):
         yield port
     finally:
         if process.poll() is None:
-            process.terminate()
+            process.kill() if crash else process.terminate()
         try:
             process.wait(timeout=4)
         except subprocess.TimeoutExpired:

@@ -15,4 +15,10 @@ bool mc_transfer_recover(const char *base, char *error, size_t error_size);
    and retain the journal for recovery; it must never be rolled back in memory. */
 bool mc_transfer_commit(const char *base, const char *uuid, const mc_nbt *player,
                         const mc_nbt *items, bool *committed, char *error, size_t error_size);
+/* Include optional MapData in the same commit. Version-1 journals and the
+   two-file APIs remain supported; NULL maps leave the existing map file alone. */
+bool mc_transfer_prepare_all(const char *base, const char *uuid, const mc_nbt *player,
+    const mc_nbt *items, const mc_nbt *maps, bool *committed, char *error, size_t error_size);
+bool mc_transfer_commit_all(const char *base, const char *uuid, const mc_nbt *player,
+    const mc_nbt *items, const mc_nbt *maps, bool *committed, char *error, size_t error_size);
 #endif

@@ -32,6 +32,11 @@ bool mc_item_valid(int16_t item_id);
 void mc_inventory_init(mc_inventory *inventory);
 void mc_inventory_free(mc_inventory *inventory);
 bool mc_inventory_copy(mc_inventory *destination, const mc_inventory *source);
+/* InventoryPlayer.add ordering: hotbar first, then main, merging equal NBT and
+   subtype metadata. Damaged tools move whole into an empty slot. Success can
+   leave a partial input; callers decide how to handle that remainder. Both
+   owners remain unchanged on allocation/validation failure. */
+bool mc_inventory_insert(mc_inventory *inventory, mc_slot *item);
 bool mc_inventory_accepts_slot(int slot, const mc_slot *item);
 unsigned mc_inventory_slot_limit(int slot, const mc_slot *item);
 /* Vanilla window 0 click semantics. No packet transport or world effects here.

@@ -25,7 +25,7 @@ async function freePort() {
   return port;
 }
 function connect(port, username, errors) {
-  const state = { chunks: [], chats: [], moves: [], changes: [], slots: [], windows: [], transactions: [], equipment: [], objects: [], metadata: [], collects: [], destroys: [], spawn: null, ended: false };
+  const state = { chunks: [], chats: [], moves: [], changes: [], slots: [], windows: [], opens: [], transactions: [], equipment: [], objects: [], metadata: [], collects: [], destroys: [], spawn: null, ended: false };
   const client = mc.createClient({ host: '127.0.0.1', port, username, auth: 'offline', version: '1.8.9' });
   client.on('error', error => { if (!state.ended) errors.push(error); });
   client.on('disconnect', packet => errors.push(new Error(JSON.stringify(packet))));
@@ -39,6 +39,7 @@ function connect(port, username, errors) {
   client.on('block_change', packet => state.changes.push(packet));
   client.on('set_slot', packet => state.slots.push(packet));
   client.on('window_items', packet => state.windows.push(packet));
+  client.on('open_window', packet => state.opens.push(packet));
   client.on('transaction', packet => state.transactions.push(packet));
   client.on('entity_equipment', packet => state.equipment.push(packet));
   client.on('spawn_entity', packet => state.objects.push(packet));
@@ -126,8 +127,36 @@ async function main() {
     await until(() => b.collects.some(packet => packet.collectedEntityId === swordDrop.entityId), 'other player did not collect the NBT sword');
     await until(() => b.destroys.some(packet => packet.entityIds.includes(swordDrop.entityId)), 'collected item was not destroyed');
     assert.ok(b.windows.some(packet => packet.items.some(item => item.blockId === 276 && item.itemDamage === 7 && item.itemCount === 1 && item.nbtData?.value.display?.value.Name?.value === '日本語の剣')));
+    a.client.write('position_look', { x: a.spawn.x, y: a.spawn.y, z: a.spawn.z, yaw: 0, pitch: 0, onGround: false });
+    const table = { x: 8, y: Math.floor(a.spawn.y) - 1, z: 10 };
+    a.client.write('set_creative_slot', { slot: 36, item: { blockId: 58, itemCount: 1, itemDamage: 0 } });
+    await until(() => a.slots.some(packet => packet.slot === 36 && packet.item.blockId === 58), 'table item not supplied');
+    a.client.write('block_place', { location: { ...table, y: table.y - 1 }, direction: 1, heldItem: { blockId: 58, itemCount: 1, itemDamage: 0 }, cursorX: 8, cursorY: 16, cursorZ: 8 });
+    await until(() => a.changes.some(packet => packet.location.x === table.x && packet.location.y === table.y && packet.location.z === table.z && packet.type === (58 << 4)), 'real table placement missing');
+    a.client.write('set_creative_slot', { slot: 36, item: { blockId: -1 } });
+    a.client.write('set_creative_slot', { slot: 9, item: { blockId: 5, itemCount: 8, itemDamage: 0 } });
+    a.client.write('block_place', { location: table, direction: 1, heldItem: { blockId: -1 }, cursorX: 8, cursorY: 8, cursorZ: 8 });
+    await until(() => a.opens.length, 'empty-hand workbench activation missing');
+    const window = a.opens.at(-1).windowId;
+    assert.equal(a.opens.at(-1).inventoryType, 'minecraft:crafting_table');
+    assert.equal(a.opens.at(-1).slotCount, 0);
+    await until(() => a.windows.some(packet => packet.windowId === window && packet.items.length === 46), '46 mapped slots missing');
+    let action = 10;
+    async function tableClick(slot, button, item) {
+      const current = action++;
+      a.client.write('window_click', { windowId: window, slot, mouseButton: button, action: current, mode: 0, item });
+      await until(() => a.transactions.some(packet => packet.windowId === window && packet.action === current), 'workbench confirmation missing');
+      assert.equal(a.transactions.find(packet => packet.windowId === window && packet.action === current).accepted, true);
+    }
+    await tableClick(10, 0, { blockId: 5, itemCount: 8, itemDamage: 0 });
+    for (const index of [1, 2, 3, 4, 6, 7, 8, 9]) await tableClick(index, 1, { blockId: -1 });
+    await until(() => a.windows.some(packet => packet.windowId === window && packet.items[0].blockId === 54), '3x3 chest preview missing');
+    await tableClick(0, 0, { blockId: 54, itemCount: 1, itemDamage: 0 });
+    await until(() => a.slots.some(packet => packet.windowId === -1 && packet.item.blockId === 54), 'crafted chest cursor missing');
+    a.client.write('close_window', { windowId: 255 });
+    await until(() => a.metadata.some(packet => droppedSlot(packet)?.blockId === 54), 'workbench cursor close did not create a chest item');
     assert.equal(errors.length, 0, errors.map(String).join('\n'));
-    console.log('Prismarine minecraft-protocol 1.68.0: two 1.8.9 clients, full NBT slots/equipment/split/drop/pickup, 2x2 crafting, close-window drops, 25 chunks each, Japanese chat, movement and digging passed.');
+    console.log('Prismarine minecraft-protocol 1.68.0: two 1.8.9 clients, full NBT, drops/pickup, 2x2 and real 3x3 table crafting, 46 mapped slots, close drops, chunks/chat/movement/digging passed.');
   } finally {
     for (const peer of clients) { peer.ended = true; peer.client.end('test finished'); }
     await delay(100);

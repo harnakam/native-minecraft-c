@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 static unsigned checks;
 #define CHECK(v) do { ++checks; if (!(v)) { fprintf(stderr,"%s:%d: %s\n",__FILE__,__LINE__,#v); exit(1); } } while (0)
 static void clear(mc_inventory *inventory) { mc_inventory_free(inventory); }
@@ -176,7 +177,27 @@ static void test_match_validation_and_bounds(void) {
     CHECK(grid[0].count==1 && grid[1].count==1);
     for (unsigned i=0;i<4;i++) { mc_slot_free(&grid[i]); mc_slot_free(&left[i]); } mc_slot_free(&result);
 }
+static void test_original_numeric_generation(void) {
+    /* NBTTagFloat/Double.getInt delegates to MathHelper.floor, including Java
+       saturating casts followed by signed wrapping at negative overflow. */
+    const double values[]={-0.5,-1.5,0.5,1.5,-INFINITY,INFINITY,NAN,-2147483648.5};
+    const int expected[]={0,-1,1,2,INT32_MAX,INT32_MAX,1,INT32_MAX};
+    mc_inventory inventory; mc_inventory_init(&inventory);
+    for (unsigned type=5;type<=6;type++) for (unsigned i=0;i<sizeof(values)/sizeof(values[0]);i++) {
+        if (type==5 && i==7) continue; /* Float rounds this value to INT_MIN. */
+        clear(&inventory); CHECK(mc_slot_set(&inventory.slots[1],387,1,0)); CHECK(mc_slot_set(&inventory.slots[2],386,1,0));
+        mc_buf tag; mc_buf_init(&tag); mc_put_u8(&tag,10); mc_put_i16(&tag,0);
+        mc_put_u8(&tag,(uint8_t)type); mc_put_i16(&tag,10); mc_put_bytes(&tag,"generation",10);
+        if (type==5) mc_put_f32(&tag,(float)values[i]); else mc_put_f64(&tag,values[i]);
+        mc_put_u8(&tag,0); CHECK(mc_nbt_read(&tag,&inventory.slots[1].nbt)); mc_buf_free(&tag);
+        CHECK(mc_crafting_update(&inventory));
+        if (expected[i]==INT32_MAX) CHECK(inventory.slots[0].item_id==-1);
+        else CHECK(inventory.slots[0].item_id==387 && field_integer(&inventory.slots[0].nbt,NULL,"generation")==expected[i]);
+    }
+    mc_inventory_free(&inventory);
+}
 int main(void) {
     test_preview_shapes_and_colors(); test_output_transactions(); test_repair_and_leather(); test_fireworks(); test_book_map_banner_and_close(); test_match_validation_and_bounds();
+    test_original_numeric_generation();
     printf("Crafting: %u checks passed\n",checks); return 0;
 }
