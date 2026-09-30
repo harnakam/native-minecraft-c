@@ -105,6 +105,24 @@ def player_file(world, name):
 
 
 class InventoryPeer(Peer):
+    def packet(self):
+        result = super().packet()
+        if not hasattr(self, "observed"):
+            self.observed = []
+        self.observed.append(result)
+        return result
+
+    def dropped_slots(self):
+        result = []
+        for kind, payload in getattr(self, "observed", []):
+            if kind == 0x1c:
+                _, offset = read_vint(payload)
+                if payload[offset] == 0xaa:
+                    item, end = parse_slot(payload, offset + 1)
+                    assert payload[end:] == b"\x7f"
+                    result.append(item)
+        return result
+
     def creative(self, index, item=-1, count=0, damage=0, tag=b"\0"):
         self.send(0x10, struct.pack(">h", index) + wire_slot(item, count, damage, tag))
         payload = self.wait(0x2F, lambda p: p[0] == 0 and struct.unpack_from(">h", p, 1)[0] == index)
@@ -179,11 +197,9 @@ class InventoryNetworkTests(unittest.TestCase):
             slots, cursor = peer.click(12, 0, 4, 0)
             self.assertEqual(slots[12][:3], (3, 4, 0))
             self.assertEqual(cursor[0], -1)
-            # Item entities are not implemented yet: dropping must reject,
-            # preserve inventory, and wait for a transaction acknowledgement.
-            slots, cursor = peer.click(10, 0, 5, 4, accepted=False)
-            self.assertEqual(slots[10][:3], (3, 4, 0))
-            peer.send(0x0F, struct.pack(">BhB", 0, 5, 1))
+            slots, cursor = peer.click(10, 0, 5, 4)
+            self.assertEqual(slots[10][:3], (3, 3, 0))
+            self.assertIn((3, 1, 0, b"\0"), peer.dropped_slots())
             peer.creative(38)
             peer.creative(9, 276, 1, 3, metadata())
             slots, _ = peer.click(9, 0, 6, 1, wire_slot(276, 1, 3, metadata()))
@@ -194,7 +210,7 @@ class InventoryNetworkTests(unittest.TestCase):
             slots, _ = peer.click(38, 0, 7, 0, wire_slot(1, 64), accepted=False)
             self.assertEqual(slots[38][0], -1)
 
-    def test_armor_invalid_nbt_and_drop_do_not_destroy_items(self):
+    def test_armor_and_malformed_nbt_preserve_items_with_creative_drops(self):
         with running_server(self.world) as port:
             peer = self.peer(port, "Armor")
             # Vanilla creative overwrite bypasses normal armor and stack
@@ -210,7 +226,9 @@ class InventoryNetworkTests(unittest.TestCase):
             self.assertEqual(slots[6][:3], (311, 1, 0))
             self.assertEqual(cursor[:3], (310, 1, 0))
             peer.send(0x10, struct.pack(">h", -1) + wire_slot(264, 7))
-            slots = inventory_payload(peer.wait(0x30))
+            payload = peer.wait(0x1c, lambda p: p[read_vint(p)[1]] == 0xaa)
+            self.assertEqual(parse_slot(payload, read_vint(payload)[1] + 1)[0][:3], (264, 7, 0))
+            slots, _ = peer.click(35, 0, 4, 0)
             self.assertEqual(slots[5][:3], (310, 2, 20))
             malformed = self.peer(port, "MalformedNBT")
             malformed.send(0x10, struct.pack(">h", 9) + wire_slot(1, 1, 0, b"\x0a\x00\x00\x09\x00\x01x\x01\xff\xff\xff\xff\x00"))
@@ -228,7 +246,7 @@ class InventoryNetworkTests(unittest.TestCase):
             peer.send(1, string("still connected"))
             self.assertIn(b"still connected", peer.wait(2))
 
-    def test_cursor_and_unknown_player_fields_survive_reconnect(self):
+    def test_cursor_drops_and_unknown_player_fields_survive_reconnect(self):
         with running_server(self.world) as port:
             owner = self.peer(port, "ForeignFields")
             observer = self.peer(port, "Witness")
@@ -237,6 +255,7 @@ class InventoryNetworkTests(unittest.TestCase):
             self.assertEqual(cursor[:3], (3, 5, 0))
             owner.close()
             observer.wait(0x13)
+            self.assertIn(cursor, observer.dropped_slots())
             path = player_file(self.world, "ForeignFields")
             data = gzip.decompress(path.read_bytes())
             foreign = named(10, "ForeignCompound", compound(named(8, "Note", nbt_string("残すべき情報")),
@@ -244,7 +263,7 @@ class InventoryNetworkTests(unittest.TestCase):
             path.write_bytes(gzip.compress(data[:-1] + foreign + b"\0"))
             restored = self.peer(port, "ForeignFields")
             cursor_payload = next(payload for kind, payload in restored.initial if kind == 0x2F and payload[0] == 255)
-            self.assertEqual(parse_slot(cursor_payload, 3)[0], cursor)
+            self.assertEqual(parse_slot(cursor_payload, 3)[0], (-1, 0, 0, b"\0"))
             restored.creative(10, 260, 5)
             self.assertIn(foreign, gzip.decompress(path.read_bytes()))
 

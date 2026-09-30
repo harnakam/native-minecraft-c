@@ -120,14 +120,18 @@ static void swap_slots(mc_slot *a,mc_slot *b) { mc_slot swap=*a; *a=*b; *b=swap;
 static unsigned available_space(unsigned limit,unsigned current) {
     return current<limit ? limit-current : 0;
 }
-static bool move_count(mc_slot *source,mc_slot *destination,unsigned count) {
+static bool shift_can_stack(const mc_slot *a,const mc_slot *b) {
+    return a->item_id>=0 && a->item_id==b->item_id &&
+           (!mc_item_has_subtypes(a->item_id) || a->damage==b->damage) && mc_nbt_equal(&a->nbt,&b->nbt);
+}
+static bool move_count_context(mc_slot *source,mc_slot *destination,unsigned count,bool legacy_merge) {
     if (!count) return true;
     if (source==destination || count>source->count) return false;
     if (destination->item_id==-1) {
         if (!mc_slot_copy(destination,source)) return false;
         destination->count=(uint8_t)count;
     } else {
-        if (!mc_slot_can_stack(source,destination) ||
+        if (!(legacy_merge ? shift_can_stack(source,destination) : mc_slot_can_stack(source,destination)) ||
             count>available_space(mc_item_stack_limit(source->item_id),destination->count)) return false;
         destination->count=(uint8_t)(destination->count+count);
     }
@@ -135,13 +139,16 @@ static bool move_count(mc_slot *source,mc_slot *destination,unsigned count) {
     if (!source->count) mc_slot_free(source);
     return true;
 }
+static bool move_count(mc_slot *source,mc_slot *destination,unsigned count) {
+    return move_count_context(source,destination,count,false);
+}
 static bool merge_range(mc_inventory *inventory,mc_slot *source,int start,int end,bool reverse,bool legacy_shift) {
     for (int pass=0;pass<2 && source->item_id!=-1;pass++) {
         for (int i=reverse ? end-1 : start;i>=start && i<end && source->item_id!=-1;i+=reverse ? -1 : 1) {
             mc_slot *destination=&inventory->slots[i];
             if (destination==source || !mc_inventory_accepts_slot(i,source)) continue;
             bool empty=destination->item_id==-1;
-            if ((!pass && empty) || (pass && !empty) || (!empty && !mc_slot_can_stack(source,destination))) continue;
+            if ((!pass && empty) || (pass && !empty) || (!empty && !shift_can_stack(source,destination))) continue;
             unsigned limit=mc_inventory_slot_limit(i,source);
             unsigned current=empty ? 0 : destination->count;
             /* 1.8.9 shift transfer copies the entire remaining source into its
@@ -149,7 +156,7 @@ static bool merge_range(mc_inventory *inventory,mc_slot *source,int start,int en
                Normal clicks, drag and hotbar displacement retain limits. */
             unsigned amount=empty && legacy_shift ? source->count : available_space(limit,current);
             if (amount>source->count) amount=source->count;
-            if (!move_count(source,destination,amount)) return false;
+            if (!move_count_context(source,destination,amount,true)) return false;
         }
     }
     return true;

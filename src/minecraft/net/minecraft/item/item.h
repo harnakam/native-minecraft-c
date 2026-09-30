@@ -4,6 +4,7 @@
 #include <stdint.h>
 bool mc_item_valid(int16_t item_id);
 unsigned mc_item_stack_limit(int16_t item_id);
+bool mc_item_has_subtypes(int16_t item_id);
 const char *mc_item_name(int16_t item_id);
 const char *mc_item_resource_name(int16_t item_id);
 bool mc_item_from_resource_name(const char *name, int16_t *item_id);

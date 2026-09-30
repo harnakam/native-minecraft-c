@@ -57,10 +57,16 @@ Online-mode servers require the encrypted login exchange, AES-128/CFB8 stream en
 | C→S `10` | creative inventory | inventory slot i16, Slot |
 | C→S `0e` | click window | window u8, slot i16, button i8, action i16, mode i8, returned Slot |
 | C→S `0f` | transaction acknowledgement | window i8, action i16, accepted bool |
+| C→S `0d` | close window | window u8; window 0 drops the cursor and crafting inputs |
+| S→C `2e` | close window | window u8; client window 0 cancels queued clicks and replies with close |
 | S→C `2f` | set slot | window i8, slot i16, Slot |
 | S→C `30` | window items | window u8, count i16, Slots |
 | S→C `32` | confirm transaction | window i8, action i16, accepted bool |
 | S→C `13` | remove entities | count VarInt, entity VarInts |
+| S→C `0e` | spawn object | entity VarInt, type i8, X/Y/Z i32, pitch/yaw u8, data i32; velocity X/Y/Z i16 when data > 0 |
+| S→C `0d` | collect item | collected entity VarInt, collector entity VarInt; no count in protocol 47 |
+| S→C `12` | entity velocity | entity VarInt, velocity X/Y/Z i16 in units of 1/8000 block per tick |
+| S→C `1c` | entity metadata | entity VarInt, typed metadata entries, terminator `7f` |
 | S→C `15` | relative entity movement | entity VarInt, signed X/Y/Z i8 deltas, ground bool |
 | S→C `16` | entity orientation | entity VarInt, yaw/pitch u8, ground bool |
 | S→C `17` | entity movement and orientation | entity VarInt, signed X/Y/Z i8, yaw/pitch u8, ground bool |
@@ -79,7 +85,9 @@ Player-list ADD entries contain UUID, name, property count and properties, game-
 
 A Slot begins with an i16 item ID. `-1` is empty. Otherwise it contains item count i8, item damage i16, and an NBT root; byte `00` represents absent NBT. Creative hotbar inventory slots are 36–44. Digging actions are start=`0`, abort=`1`, finish=`2`; faces are down=`0`, up=`1`, north=`2`, south=`3`, west=`4`, east=`5`.
 
-Slot storage preserves positive signed-byte counts through 127, including overstacked items from an external server. A creative mutation accepts counts through 64, while normal placement applies item/slot limits. Window 0 has crafting result 0, inputs 1–4, armor 5–8, main inventory 9–35 and hotbar 36–44. Crafting-result transactions and actual dropped item entities remain unsupported.
+Slot storage preserves positive signed-byte counts through 127, including overstacked items from an external server. A creative mutation accepts counts through 64, while normal placement applies item/slot limits. Window 0 has crafting result 0, inputs 1–4 (row-major 2×2), armor 5–8, main inventory 9–35 and hotbar 36–44. Crafting result 0 is derived from the inputs and cannot be overwritten through Creative Inventory Action. Negative creative slot IDs create world drops; the target's rate limit applies.
+
+Item objects use type 2 and data 1. The tracker sends Spawn Object, full metadata, then velocity. Metadata entry index 10 has type Slot, so its header is `aa`, followed by the complete Slot/NBT. Collect Item removes the whole tracked entity in 1.8; a partial survival pickup updates the remaining metadata without sending Collect Item. Q drops one item with digging status 4; Ctrl-Q drops the held stack with status 3. Player throws use a 40-tick pickup delay, and creative inventory drops start at age 4800. Items expire at age 6000. Window-0 close drops the cursor and four inputs; the derived output is cleared without creating another stack.
 
 The NBT codec handles target-version tags 0–11, bounded to depth 64 and 2 MiB. It preserves the exact named-root encoding and unknown fields. Strings use Java modified UTF-8, with UTF-16 surrogate-pair conversion for text getters. Compound comparisons use names and values rather than encoded field order. Invalid reads leave prior owned data unchanged. Gzip loading validates the complete stream, CRC and size; saves flush an exclusive temporary file before replacing the destination.
 

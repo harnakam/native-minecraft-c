@@ -24,6 +24,9 @@ struct mc_renderer {
     int width, height, hide_calls, selected, glyph_count;
     bool hidden, focused, captured, paused, chat_open, suppress_char;
     bool inventory_open, creative_open, creative_allowed;
+    bool inventory_blocked, cursor_present, drag_capture;
+    int drag_button, drag_start;
+    uint64_t drag_slots;
     int inventory_focus, creative_focus, mouse_x, mouse_y;
     unsigned creative_page;
     WCHAR surrogate;
@@ -37,15 +40,17 @@ struct mc_renderer {
 typedef struct { int x,y,width,height,cell,grid_y,hotbar_y; } inventory_layout;
 static inventory_layout inventory_geometry(const mc_renderer *r) {
     inventory_layout g;
-    g.width=r->width<600 ? r->width-24 : 576; g.height=r->creative_open ? 514 : 480;
+    g.width=r->width<600 ? r->width-24 : 576; g.height=r->creative_open ? 514 : 566;
     g.x=(r->width-g.width)/2; g.y=(r->height-g.height)/2;
     if (g.y<12) g.y=12;
     g.cell=(g.width-36)/9; if (g.cell>58) g.cell=58;
-    g.grid_y=g.y+(r->creative_open ? 126 : 150); g.hotbar_y=g.grid_y+(r->creative_open ? 4 : 3)*g.cell+15;
+    g.grid_y=g.y+(r->creative_open ? 126 : 68+2*g.cell+34); g.hotbar_y=g.grid_y+(r->creative_open ? 4 : 3)*g.cell+15;
     return g;
 }
 static void inventory_slot_position(const inventory_layout *g,int slot,int *x,int *y) {
-    if (slot<9) { *x=g->x+18+(slot==0 ? 8 : slot>=5 ? slot-5 : slot+3)*g->cell; *y=g->y+68; }
+    if (slot==0) { *x=g->x+18+8*g->cell; *y=g->y+68+g->cell/2; }
+    else if (slot<5) { *x=g->x+18+(4+(slot-1)%2)*g->cell; *y=g->y+68+((slot-1)/2)*g->cell; }
+    else if (slot<9) { *x=g->x+18+(slot-5)*g->cell; *y=g->y+68; }
     else if (slot<36) { *x=g->x+18+((slot-9)%9)*g->cell; *y=g->grid_y+((slot-9)/9)*g->cell; }
     else { *x=g->x+18+(slot-36)*g->cell; *y=g->hotbar_y; }
 }
@@ -68,7 +73,7 @@ static int inventory_hit(const mc_renderer *r,int x,int y) {
         int sx,sy; inventory_slot_position(&g,slot,&sx,&sy);
         if (inside(x,y,sx,sy,g.cell-4,g.cell-4)) return slot;
     }
-    return -1;
+    return inside(x,y,g.x,g.y,g.width,g.height) ? -1 : -999;
 }
 static void inventory_activate(mc_renderer *r,int hit,int button,bool double_click) {
     if (!r->focused || r->paused || r->chat_open) return;
@@ -77,7 +82,9 @@ static void inventory_activate(mc_renderer *r,int hit,int button,bool double_cli
     else if (hit==-11 && r->creative_page) --r->creative_page;
     else if (hit==-12 && (r->creative_page+1u)*36u<mc_item_creative_count()) ++r->creative_page;
     else if (hit>=1000 && button==0) r->pending.creative_pick=hit-1000;
-    else if (hit>=0 && hit<45) {
+    else if (hit==-999 && !r->inventory_blocked && (button==0 || button==1)) {
+        r->pending.inventory_click=true; r->pending.inventory_slot=-999; r->pending.inventory_button=button; r->pending.inventory_mode=0;
+    } else if (hit>=0 && hit<45 && !r->inventory_blocked) {
         if (r->creative_open) r->pending.select_slot=hit-36;
         else {
             r->inventory_focus=hit; r->pending.inventory_click=true; r->pending.inventory_slot=hit;
@@ -85,6 +92,23 @@ static void inventory_activate(mc_renderer *r,int hit,int button,bool double_cli
             r->pending.inventory_mode=double_click ? 6 : button==2 ? 3 : (GetAsyncKeyState(VK_SHIFT)&0x8000) ? 1 : 0;
         }
     }
+}
+static void inventory_mouse_down(mc_renderer *r,int hit,int button,bool double_click) {
+    if (!r->focused || r->paused || r->chat_open || r->inventory_blocked) return;
+    if (!r->creative_open && r->cursor_present && hit>=1 && hit<45 && !double_click &&
+        !(GetAsyncKeyState(VK_SHIFT)&0x8000) && (button!=2 || r->creative_allowed)) {
+        r->drag_capture=true; r->drag_button=button; r->drag_start=hit; r->drag_slots=UINT64_C(1)<<hit;
+        SetCapture(r->window); return;
+    }
+    inventory_activate(r,hit,button,double_click);
+}
+static void inventory_mouse_up(mc_renderer *r,int button) {
+    if (!r->drag_capture || r->drag_button!=button) return;
+    uint64_t slots=r->drag_slots; int start=r->drag_start; r->drag_capture=false; ReleaseCapture();
+    if (!r->focused || r->paused || r->chat_open || !r->inventory_open || r->inventory_blocked) return;
+    if (slots && (slots&(slots-1))) {
+        r->pending.inventory_drag=true; r->pending.inventory_drag_mode=(unsigned)button; r->pending.inventory_drag_slots=slots;
+    } else inventory_activate(r,start,button,false);
 }
 
 static void release_cursor(mc_renderer *r) {
@@ -125,6 +149,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
         case WM_ACTIVATE:
             r->focused = LOWORD(wparam) != WA_INACTIVE;
             if (!r->focused) {
+                r->drag_capture=false; ReleaseCapture();
                 release_cursor(r); r->paused = true;
                 bool quit=r->pending.quit; memset(&r->pending,0,sizeof(r->pending));
                 r->pending.quit=quit; r->pending.select_slot=-1; r->pending.creative_pick=-1;
@@ -164,16 +189,20 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
                 else if (wparam==VK_NEXT && (r->creative_page+1u)*36u<mc_item_creative_count()) ++r->creative_page;
                 else if (delta) {
                     if (r->creative_open) r->creative_focus=(r->creative_focus+delta+45)%45;
-                    else { r->inventory_focus=(r->inventory_focus+delta+45)%45; if (!r->inventory_focus) r->inventory_focus=delta<0 ? 44 : 1; }
+                    else r->inventory_focus=(r->inventory_focus+delta+45)%45;
                 } else if (wparam>= '1' && wparam<='9') {
                     if (r->creative_open) r->pending.select_slot=(int)(wparam-'1');
                     else {
-                        int hit=inventory_hit(r,r->mouse_x,r->mouse_y); if (hit<1 || hit>=45) hit=r->inventory_focus;
+                        int hit=inventory_hit(r,r->mouse_x,r->mouse_y); if (hit<0 || hit>=45) hit=r->inventory_focus;
                         r->pending.inventory_click=true; r->pending.inventory_slot=hit; r->pending.inventory_button=(int)(wparam-'1'); r->pending.inventory_mode=2;
                     }
                 } else if (wparam==VK_RETURN || wparam==VK_SPACE) {
                     int hit=r->creative_open ? r->creative_focus<36 ? 1000+(int)(r->creative_page*36u)+(int)r->creative_focus : r->creative_focus : r->inventory_focus;
                     inventory_activate(r,hit,wparam==VK_SPACE ? 1 : 0,false);
+                } else if (wparam=='Q' && !r->inventory_blocked && !r->creative_open) {
+                    int hit=inventory_hit(r,r->mouse_x,r->mouse_y); if (hit<0 || hit>=45) hit=r->inventory_focus;
+                    r->pending.inventory_click=true; r->pending.inventory_slot=hit;
+                    r->pending.inventory_button=(GetAsyncKeyState(VK_CONTROL)&0x8000) ? 1 : 0; r->pending.inventory_mode=4;
                 }
                 return 0;
             }
@@ -182,6 +211,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
                 release_cursor(r);
             } else if (!r->paused && wparam >= '1' && wparam <= '9') r->pending.select_slot = (int)(wparam - '1');
             else if (!r->paused && wparam == 'F') r->pending.toggle_flight = true;
+            else if (!r->paused && wparam == 'Q') { r->pending.drop_item=true; r->pending.drop_all=(GetAsyncKeyState(VK_CONTROL)&0x8000)!=0; }
             return 0;
         case WM_CHAR:
             if (r->suppress_char) { r->suppress_char = false; return 0; }
@@ -204,21 +234,31 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
             if (wparam == 0xffff) return TRUE;
             if (r->chat_open) chat_character(r, (unsigned)wparam);
             return 0;
-        case WM_MOUSEMOVE: r->mouse_x=(int)(short)LOWORD(lparam); r->mouse_y=(int)(short)HIWORD(lparam); return 0;
+        case WM_MOUSEMOVE:
+            r->mouse_x=(int)(short)LOWORD(lparam); r->mouse_y=(int)(short)HIWORD(lparam);
+            if (r->drag_capture) {
+                int hit=inventory_hit(r,r->mouse_x,r->mouse_y);
+                if (hit>=1 && hit<45) r->drag_slots|=UINT64_C(1)<<hit;
+            }
+            return 0;
         case WM_LBUTTONDBLCLK:
-            if (r->inventory_open) inventory_activate(r,inventory_hit(r,(int)(short)LOWORD(lparam),(int)(short)HIWORD(lparam)),0,true);
+            if (r->inventory_open) inventory_mouse_down(r,inventory_hit(r,(int)(short)LOWORD(lparam),(int)(short)HIWORD(lparam)),0,true);
             return 0;
         case WM_MBUTTONDOWN:
-            if (r->inventory_open) inventory_activate(r,inventory_hit(r,(int)(short)LOWORD(lparam),(int)(short)HIWORD(lparam)),2,false);
+            if (r->inventory_open) inventory_mouse_down(r,inventory_hit(r,(int)(short)LOWORD(lparam),(int)(short)HIWORD(lparam)),2,false);
             return 0;
         case WM_LBUTTONDOWN:
-            if (r->inventory_open) { inventory_activate(r,inventory_hit(r,(int)(short)LOWORD(lparam),(int)(short)HIWORD(lparam)),0,false); return 0; }
+            if (r->inventory_open) { inventory_mouse_down(r,inventory_hit(r,(int)(short)LOWORD(lparam),(int)(short)HIWORD(lparam)),0,false); return 0; }
             if (!r->paused && !r->chat_open && r->focused) r->pending.break_block = true;
             return 0;
         case WM_RBUTTONDOWN:
-            if (r->inventory_open) { inventory_activate(r,inventory_hit(r,(int)(short)LOWORD(lparam),(int)(short)HIWORD(lparam)),1,false); return 0; }
+            if (r->inventory_open) { inventory_mouse_down(r,inventory_hit(r,(int)(short)LOWORD(lparam),(int)(short)HIWORD(lparam)),1,false); return 0; }
             if (!r->paused && !r->chat_open && r->focused) r->pending.place_block = true;
             return 0;
+        case WM_LBUTTONUP: inventory_mouse_up(r,0); return 0;
+        case WM_RBUTTONUP: inventory_mouse_up(r,1); return 0;
+        case WM_MBUTTONUP: inventory_mouse_up(r,2); return 0;
+        case WM_CAPTURECHANGED: r->drag_capture=false; return 0;
         case WM_MOUSEWHEEL:
             if (r->inventory_open && r->creative_open && r->focused && !r->paused && !r->chat_open) {
                 if (GET_WHEEL_DELTA_WPARAM(wparam)>0) { if (r->creative_page) --r->creative_page; }
@@ -487,7 +527,11 @@ static void slot_icon(mc_renderer *r,const mc_slot *slot,int x,int y,int width,b
         text_line(r,x+5,y+width/2-11,width-10,caption,0.87f,0.91f,0.95f);
     }
     if (slot->nbt.size) panel((float)(x+width-8),(float)(y+5),3,3,0.93f,0.74f,0.34f,1);
-    if (slot->count>1) { char number[8]; snprintf(number,sizeof(number),"%u",(unsigned)slot->count); text(r,x+width-26,y+width-22,30,number,1,1,0.94f); }
+    if (slot->count>1) {
+        char number[8]; snprintf(number,sizeof(number),"%u",(unsigned)slot->count); int pixels=0;
+        for (const char *p=number;*p;p++) { glyph_cache *glyph=get_glyph(r,(WCHAR)*p); if (glyph) pixels+=glyph->width; }
+        text_line(r,x+width-3-pixels,y+width-22,pixels,number,1,1,0.94f);
+    }
 }
 
 static void draw_inventory(mc_renderer *r,const mc_client *c) {
@@ -521,12 +565,12 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
         }
     } else {
         text_line(r,g.x+18,g.y+46,4*g.cell,"Armor",0.69f,0.81f,0.81f);
-        text_line(r,g.x+18+4*g.cell,g.y+46,5*g.cell-4,"Craft inputs / output locked",0.69f,0.81f,0.81f);
-        text_line(r,g.x+18,g.y+130,g.width-36,"Storage   |   Shift transfer / 1-9 swap",0.69f,0.81f,0.81f);
+        text_line(r,g.x+18+4*g.cell,g.y+46,5*g.cell-4,"Crafting 2 x 2",0.69f,0.81f,0.81f);
+        text_line(r,g.x+18+7*g.cell,g.y+68+g.cell/2,g.cell-4,"->",0.75f,0.85f,0.80f);
+        text_line(r,g.x+18,g.grid_y-24,g.width-36,"Storage   |   Shift transfer / 1-9 swap / Q drop",0.69f,0.81f,0.81f);
         for (int slot=0;slot<36;slot++) {
             int x,y; inventory_slot_position(&g,slot,&x,&y);
-            slot_icon(r,&c->inventory.slots[slot],x,y,g.cell-4,slot==r->inventory_focus || slot==hover,blocked || !slot);
-            if (!slot) { text_line(r,x+3,y+g.cell-25,g.cell-8,"Locked",0.73f,0.68f,0.55f); }
+            slot_icon(r,&c->inventory.slots[slot],x,y,g.cell-4,slot==r->inventory_focus || slot==hover,blocked);
             if (slot==hover || (hover<0 && slot==r->inventory_focus)) tooltip=&c->inventory.slots[slot];
         }
     }
@@ -544,7 +588,7 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
         text_line(r,g.x+18,g.y+g.height-60,g.width-36,line,0.75f,0.83f,0.83f);
     } else {
         text_line(r,g.x+18,g.y+g.height-81,g.width-36,"Enter: left click   Space: right click",0.80f,0.86f,0.83f);
-        text_line(r,g.x+18,g.y+g.height-60,g.width-36,"Tab / arrows: focus   Middle: creative clone   Double click: collect",0.75f,0.83f,0.83f);
+        text_line(r,g.x+18,g.y+g.height-60,g.width-36,"Drag: distribute   Q: drop   Tab / arrows: focus",0.75f,0.83f,0.83f);
     }
     const char *status=r->paused ? "Controls paused: Esc resumes inventory interaction" : c->inventory_status[0] ? c->inventory_status : "Waiting for server inventory";
     text_line(r,g.x+18,g.y+g.height-34,g.width-36,status,blocked ? 0.96f : 0.64f,blocked ? 0.77f : 0.83f,blocked ? 0.53f : 0.76f);
@@ -585,6 +629,30 @@ static void draw_target(const mc_client *c) {
     }
     glEnd(); glLineWidth(1); glEnable(GL_CULL_FACE);
 }
+static void draw_items(mc_renderer *r,const mc_client *c) {
+    double time=mc_time_ms()/1000.0;
+    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) {
+        const mc_client_item *entry=&c->items[i]; const mc_item_entity *e=&entry->entity;
+        if (!entry->active || !entry->metadata_ready) continue;
+        double dx=e->x-c->x,dz=e->z-c->z; if (dx*dx+dz*dz>96*96) continue;
+        glPushMatrix(); glTranslated(e->x,e->y+0.16+sin(time*2+e->eid)*0.025,e->z); glRotated(time*55+(double)e->eid*13,0,1,0);
+        uint16_t state; unsigned count=e->item.count>48 ? 5 : e->item.count>32 ? 4 : e->item.count>16 ? 3 : e->item.count>1 ? 2 : 1;
+        if (mc_item_block_state(e->item.item_id,e->item.damage,&state)) {
+            float red,green,blue; material_color(state>>4,1,0,&red,&green,&blue);
+            for (unsigned n=0;n<count;n++) { double offset=n*0.035; box(-0.12+offset,-0.12,-0.12+offset,0.12+offset,0.12,0.12+offset,red,green,blue); }
+        } else {
+            unsigned color=(unsigned)e->item.item_id*2654435761u;
+            float red=0.4f+(color&255)/640.0f,green=0.4f+((color>>8)&255)/640.0f,blue=0.4f+((color>>16)&255)/640.0f;
+            for (unsigned n=0;n<count;n++) { double offset=n*0.025; box(-0.13+offset,-0.13,-0.025+offset,0.13+offset,0.13,0.025+offset,red,green,blue); }
+        }
+        if (e->item.nbt.size) box(-0.025,0.10,-0.025,0.025,0.16,0.025,0.95f,0.73f,0.30f);
+        glPopMatrix();
+        if (dx*dx+dz*dz<12*12) {
+            const char *name=mc_item_name(e->item.item_id); glColor3f(0.97f,0.98f,0.91f); glRasterPos3d(e->x-0.15,e->y+0.5,e->z);
+            for (unsigned n=0;n<12 && name[n];n++) { glyph_cache *glyph=get_glyph(r,(WCHAR)(unsigned char)name[n]); if (glyph) glCallList(glyph->list); }
+        }
+    }
+}
 
 static void draw_hud(mc_renderer *r, const mc_client *c) {
     glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glDisable(GL_FOG); glEnable(GL_BLEND);
@@ -622,7 +690,7 @@ static void draw_hud(mc_renderer *r, const mc_client *c) {
     char selected_name[256]; mc_client_slot_name(&c->inventory.slots[36+c->selected],selected_name,sizeof(selected_name));
     snprintf(line,sizeof(line),"%s  |  %s",selected_name,c->gamemode==1?(c->flying?"Creative / flying":"Creative / walking"):"Server game mode");
     text(r,bar_x,bar_y-31,9*slot_width,line,0.98f,0.97f,0.89f);
-    text(r,16,r->height-27,r->width-32,"WASD move   F flight   1-9 hotbar   E inventory   Mouse edit   T chat   Esc cursor",0.90f,0.93f,0.92f);
+    text_line(r,16,r->height-27,r->width-32,"WASD move   Q / Ctrl-Q drop   E inventory   Mouse edit   T chat   Esc cursor",0.90f,0.93f,0.92f);
     int chat_width = r->width < 900 ? r->width-32 : 720;
     int chat_y=bar_y-69-c->chat_count*22;
     for (int i=MC_CLIENT_CHAT_LINES-c->chat_count;i<MC_CLIENT_CHAT_LINES;++i) {
@@ -658,6 +726,8 @@ void mc_renderer_draw(mc_renderer *r, const mc_client *c) {
     if (r->width<1||r->height<1) return;
     r->selected=c->selected;
     r->inventory_open=c->inventory_open; r->creative_open=c->creative_open; r->creative_allowed=c->gamemode==1;
+    r->inventory_blocked=!c->inventory_ready || c->inventory_pending || c->inventory_sync || c->inventory_queue_index<c->inventory_queue_count;
+    r->cursor_present=c->inventory.cursor.item_id>=0;
     char title[512]; snprintf(title,sizeof(title),"C919 | %s | %.180s:%u",c->status,c->host,(unsigned)c->port);
     if (strcmp(title,r->title)) { WCHAR wide[512]; MultiByteToWideChar(CP_UTF8,0,title,-1,wide,512); SetWindowTextW(r->window,wide); snprintf(r->title,sizeof(r->title),"%s",title); }
     glViewport(0,0,r->width,r->height); glClearColor(0.65f,0.80f,0.84f,1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
@@ -666,7 +736,7 @@ void mc_renderer_draw(mc_renderer *r, const mc_client *c) {
     glFrustum(-half_width,half_width,-half_height,half_height,near_plane,192);
     glMatrixMode(GL_MODELVIEW); glLoadIdentity(); glRotatef(c->pitch,1,0,0); glRotatef(c->yaw+180,0,1,0); glTranslated(-c->x,-c->y-1.62,-c->z);
     GLfloat fog_color[]={0.65f,0.80f,0.84f,1}; glFogfv(GL_FOG_COLOR,fog_color); glFogi(GL_FOG_MODE,GL_LINEAR); glFogf(GL_FOG_START,56); glFogf(GL_FOG_END,128); glEnable(GL_FOG);
-    if (c->positioned) { draw_world(r,c); draw_players(r,c); draw_target(c); }
+    if (c->positioned) { draw_world(r,c); draw_players(r,c); draw_items(r,c); draw_target(c); }
     draw_hud(r,c);
     glFlush();
     if (!r->hidden) SwapBuffers(r->dc);

@@ -25,7 +25,7 @@ async function freePort() {
   return port;
 }
 function connect(port, username, errors) {
-  const state = { chunks: [], chats: [], moves: [], changes: [], slots: [], windows: [], transactions: [], equipment: [], spawn: null, ended: false };
+  const state = { chunks: [], chats: [], moves: [], changes: [], slots: [], windows: [], transactions: [], equipment: [], objects: [], metadata: [], collects: [], destroys: [], spawn: null, ended: false };
   const client = mc.createClient({ host: '127.0.0.1', port, username, auth: 'offline', version: '1.8.9' });
   client.on('error', error => { if (!state.ended) errors.push(error); });
   client.on('disconnect', packet => errors.push(new Error(JSON.stringify(packet))));
@@ -41,6 +41,10 @@ function connect(port, username, errors) {
   client.on('window_items', packet => state.windows.push(packet));
   client.on('transaction', packet => state.transactions.push(packet));
   client.on('entity_equipment', packet => state.equipment.push(packet));
+  client.on('spawn_entity', packet => state.objects.push(packet));
+  client.on('entity_metadata', packet => state.metadata.push(packet));
+  client.on('collect', packet => state.collects.push(packet));
+  client.on('entity_destroy', packet => state.destroys.push(packet));
   state.client = client;
   return state;
 }
@@ -94,8 +98,36 @@ async function main() {
     a.client.write('block_dig', { status: 0, location: { x: 8, y: ground, z: 8 }, face: 1 });
     await until(() => b.changes.length, 'block dig was not synchronized');
     assert.equal(b.changes.at(-1).type, 0);
+    b.client.write('position_look', { x: a.spawn.x + 8, y: a.spawn.y, z: a.spawn.z, yaw: 0, pitch: 0, onGround: false });
+    a.client.write('position_look', { x: a.spawn.x, y: a.spawn.y, z: a.spawn.z, yaw: 0, pitch: 90, onGround: false });
+    a.client.write('close_window', { windowId: 0 });
+    const droppedSlot = packet => packet.metadata.find(entry => entry.key === 10 && entry.type === 5)?.value;
+    await until(() => a.metadata.some(packet => droppedSlot(packet)?.blockId === 5 && droppedSlot(packet).itemCount === 16), 'closing cursor did not create an item');
+    const cursorDrop = a.metadata.find(packet => droppedSlot(packet)?.blockId === 5 && droppedSlot(packet).itemCount === 16);
+    assert.deepEqual(droppedSlot(cursorDrop), { ...planks, itemCount: 16 });
+    a.client.write('set_creative_slot', { slot: 1, item: { blockId: 17, itemCount: 1, itemDamage: 0 } });
+    await until(() => a.slots.some(packet => packet.windowId === 0 && packet.slot === 0 && packet.item.blockId === 5 && packet.item.itemCount === 4), '2x2 crafting result missing');
+    a.client.write('window_click', { windowId: 0, slot: 0, mouseButton: 0, action: 2, mode: 4, item: { blockId: -1 } });
+    await until(() => a.transactions.some(packet => packet.action === 2), 'craft output drop confirmation missing');
+    assert.equal(a.transactions.find(packet => packet.action === 2).accepted, true);
+    await until(() => a.metadata.some(packet => droppedSlot(packet)?.blockId === 5 && droppedSlot(packet).itemCount === 4), 'crafted output did not become a world item');
+    const crafted = a.metadata.find(packet => droppedSlot(packet)?.blockId === 5 && droppedSlot(packet).itemCount === 4);
+    assert.deepEqual(droppedSlot(crafted), { blockId: 5, itemCount: 4, itemDamage: 0, nbtData: undefined });
+    a.client.write('block_dig', { status: 4, location: { x: 0, y: 0, z: 0 }, face: 0 });
+    await until(() => b.metadata.some(packet => droppedSlot(packet)?.blockId === 276), 'NBT Q drop did not reach another client');
+    const swordDrop = b.metadata.find(packet => droppedSlot(packet)?.blockId === 276);
+    assert.deepEqual(droppedSlot(swordDrop), sword);
+    const object = b.objects.find(packet => packet.entityId === swordDrop.entityId);
+    assert.equal(object.type, 2);
+    assert.equal(object.objectData, 1);
+    a.client.write('position_look', { x: a.spawn.x + 8, y: a.spawn.y, z: a.spawn.z, yaw: 0, pitch: 0, onGround: false });
+    // The earlier digging assertion removed the block beneath this column.
+    b.client.write('position_look', { x: a.spawn.x, y: a.spawn.y - 2, z: a.spawn.z, yaw: 0, pitch: 0, onGround: false });
+    await until(() => b.collects.some(packet => packet.collectedEntityId === swordDrop.entityId), 'other player did not collect the NBT sword');
+    await until(() => b.destroys.some(packet => packet.entityIds.includes(swordDrop.entityId)), 'collected item was not destroyed');
+    assert.ok(b.windows.some(packet => packet.items.some(item => item.blockId === 276 && item.itemDamage === 7 && item.itemCount === 1 && item.nbtData?.value.display?.value.Name?.value === '日本語の剣')));
     assert.equal(errors.length, 0, errors.map(String).join('\n'));
-    console.log('Prismarine minecraft-protocol 1.68.0: two 1.8.9 clients, full NBT slots/equipment/right-click split, 25 chunks each, Japanese chat, movement and digging passed.');
+    console.log('Prismarine minecraft-protocol 1.68.0: two 1.8.9 clients, full NBT slots/equipment/split/drop/pickup, 2x2 crafting, close-window drops, 25 chunks each, Japanese chat, movement and digging passed.');
   } finally {
     for (const peer of clients) { peer.ended = true; peer.client.end('test finished'); }
     await delay(100);

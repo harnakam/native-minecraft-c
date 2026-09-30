@@ -393,6 +393,18 @@ unsigned mc_item_creative_count(void) {
     for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); ++i) count += items[i].variants;
     return count;
 }
+/* Boolean registry facts verified independently against protocol47's item set. */
+bool mc_item_has_subtypes(int16_t id) {
+    switch (id) {
+        case 1: case 3: case 5: case 6: case 12: case 17: case 18: case 19:
+        case 24: case 31: case 35: case 37: case 38: case 44: case 78: case 95:
+        case 97: case 98: case 126: case 139: case 145: case 155: case 159:
+        case 160: case 161: case 162: case 168: case 171: case 175: case 179:
+        case 182: case 263: case 322: case 349: case 350: case 351: case 358:
+        case 373: case 383: case 397: case 425: return true;
+        default: return false;
+    }
+}
 bool mc_item_creative_at(unsigned index, int16_t *id, int16_t *damage) {
     if (!id || !damage) return false;
     for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); ++i) {

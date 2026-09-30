@@ -1,6 +1,7 @@
 #include "client.h"
 #include "renderer.h"
 #include "block/block.h"
+#include "crafting/crafting.h"
 #include <ctype.h>
 #include <errno.h>
 #include <float.h>
@@ -169,6 +170,74 @@ static mc_remote_player *remote_player(mc_client *c, int id, bool create) {
     if (create && empty) { memset(empty, 0, sizeof(*empty)); empty->active = true; empty->id = id; return empty; }
     return NULL;
 }
+static mc_client_item *client_item(mc_client *c,int32_t eid) {
+    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) if (c->items[i].active && c->items[i].entity.eid==eid) return &c->items[i];
+    return NULL;
+}
+static void remove_item(mc_client *c,mc_client_item *item) {
+    if (!item || !item->active) return;
+    c->item_nbt_bytes-=item->entity.item.nbt.size; mc_item_entity_free(&item->entity);
+    memset(item,0,sizeof(*item));
+}
+static void clear_items(mc_client *c) {
+    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) remove_item(c,&c->items[i]);
+}
+static void unload_items(mc_client *c,int x,int z) {
+    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) {
+        mc_client_item *item=&c->items[i];
+        if (item->active && mc_floor_div16((int)floor(item->entity.x))==x && mc_floor_div16((int)floor(item->entity.z))==z) remove_item(c,item);
+    }
+}
+static void receive_object(mc_client *c,mc_buf *b) {
+    int32_t eid=mc_get_varint(b); unsigned type=mc_get_u8(b);
+    int32_t x=mc_get_i32(b),y=mc_get_i32(b),z=mc_get_i32(b);
+    (void)mc_get_u8(b); (void)mc_get_u8(b); int32_t data=mc_get_i32(b);
+    double vx=0,vy=0,vz=0;
+    if (data>0) { vx=mc_get_i16(b)/8000.0; vy=mc_get_i16(b)/8000.0; vz=mc_get_i16(b)/8000.0; }
+    if (b->failed || b->pos!=b->len) { b->failed=true; return; }
+    if (type!=2) return;
+    if (fabs(x/32.0)>30000000 || fabs(y/32.0)>30000000 || fabs(z/32.0)>30000000) { b->failed=true; return; }
+    mc_client_item *item=client_item(c,eid);
+    if (!item) for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) if (!c->items[i].active) { item=&c->items[i]; break; }
+    if (!item) { b->failed=true; return; }
+    remove_item(c,item); memset(item,0,sizeof(*item)); mc_item_entity_init(&item->entity);
+    item->active=true; item->entity.eid=eid; item->server_x=x; item->server_y=y; item->server_z=z;
+    item->entity.x=x/32.0; item->entity.y=y/32.0; item->entity.z=z/32.0;
+    item->entity.vx=vx; item->entity.vy=vy; item->entity.vz=vz; ++c->item_spawns;
+}
+static void receive_metadata(mc_client *c,mc_buf *b) {
+    int32_t eid=mc_get_varint(b); mc_slot next; mc_slot_init(&next); bool has_slot=false,ended=false;
+    while (!b->failed && b->pos<b->len) {
+        unsigned header=mc_get_u8(b); if (header==0x7f) { ended=true; break; }
+        unsigned type=header>>5,index=header&31;
+        if (index==10 && type!=5 && client_item(c,eid)) { b->failed=true; break; }
+        switch (type) {
+            case 0: (void)mc_get_u8(b); break;
+            case 1: (void)mc_get_i16(b); break;
+            case 2: (void)mc_get_i32(b); break;
+            case 3: (void)mc_get_f32(b); break;
+            case 4: skip_string(b); break;
+            case 5: {
+                mc_slot value; mc_slot_init(&value); mc_slot_read(b,&value);
+                if (!b->failed && index==10) { mc_slot_free(&next); next=value; mc_slot_init(&value); has_slot=true; }
+                mc_slot_free(&value); break;
+            }
+            case 6: for (unsigned i=0;i<3;i++) (void)mc_get_i32(b); break;
+            case 7: for (unsigned i=0;i<3;i++) (void)mc_get_f32(b); break;
+        }
+    }
+    if (!ended || b->pos!=b->len) b->failed=true;
+    mc_client_item *item=client_item(c,eid);
+    if (!b->failed && item && has_slot) {
+        size_t total=c->item_nbt_bytes-item->entity.item.nbt.size;
+        if (next.nbt.size>MC_NBT_MAX_BYTES-total) b->failed=true;
+        else {
+            c->item_nbt_bytes=total+next.nbt.size; mc_slot_free(&item->entity.item); item->entity.item=next; mc_slot_init(&next);
+            item->metadata_ready=item->entity.item.item_id>=0; ++c->item_metadata;
+        }
+    }
+    mc_slot_free(&next);
+}
 
 static mc_chunk *client_chunk(mc_client *c, int x, int z) {
     mc_chunk *chunk = mc_world_chunk(&c->world, x, z, false);
@@ -182,6 +251,7 @@ static mc_chunk *client_chunk(mc_client *c, int x, int z) {
             double distance = dx * dx + dz * dz;
             if (distance > max_distance) { farthest = i; max_distance = distance; }
         }
+        unload_items(c,c->world.chunks[farthest].x,c->world.chunks[farthest].z);
         mc_world_unload(&c->world, c->world.chunks[farthest].x, c->world.chunks[farthest].z);
     }
     return mc_world_chunk(&c->world, x, z, true);
@@ -202,7 +272,7 @@ static bool receive_chunk(mc_client *c, int x, int z, uint16_t mask, bool full,
     if (x < -1875000 || x >= 1875000 || z < -1875000 || z >= 1875000) return false;
     if (full && mask == 0) {
         if (length != 0 && length != 256) return false;
-        mc_world_unload(&c->world, x, z); return true;
+        unload_items(c,x,z); mc_world_unload(&c->world, x, z); return true;
     }
     if (length != chunk_size(mask, skylight, full)) return false;
     mc_chunk *chunk = client_chunk(c, x, z);
@@ -273,13 +343,14 @@ static void inventory_click(mc_client *c,int slot,int button,int mode) {
     if (!c->inventory_ready || c->inventory_pending || c->inventory_sync) {
         snprintf(c->inventory_status,sizeof(c->inventory_status),"Waiting for server inventory synchronization"); return;
     }
-    if (slot<1 || slot>=MC_PLAYER_INVENTORY_SIZE || mode==4 || mode==5 || (mode==3 && c->gamemode!=1)) {
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Craft output, dropping and drag distribution are unavailable"); return;
+    if ((slot!= -999 && (slot<0 || slot>=MC_PLAYER_INVENTORY_SIZE)) ||
+        (mode==3 && c->gamemode!=1) || (mode==5 && button>=8 && c->gamemode!=1)) {
+        snprintf(c->inventory_status,sizeof(c->inventory_status),"This inventory action is unavailable in the current game mode"); return;
     }
     mc_inventory predicted; mc_inventory_init(&predicted);
-    mc_slot returned,dropped; mc_slot_init(&returned); mc_slot_init(&dropped);
+    mc_slot returned; mc_slot_init(&returned); mc_crafting_effects effects; mc_crafting_effects_init(&effects);
     if (!mc_inventory_copy(&predicted,&c->inventory) ||
-        !mc_inventory_click_result(&predicted,slot,button,mode,&returned,&dropped) || dropped.item_id>=0) {
+        !mc_crafting_click(&predicted,slot,button,mode,&returned,&effects)) {
         snprintf(c->inventory_status,sizeof(c->inventory_status),"This inventory action is unavailable"); goto done;
     }
     c->inventory_action=c->next_inventory_action;
@@ -293,7 +364,7 @@ static void inventory_click(mc_client *c,int slot,int button,int mode) {
         snprintf(c->inventory_status,sizeof(c->inventory_status),"Waiting for transaction %d",c->inventory_action);
     }
 done:
-    mc_inventory_free(&predicted); mc_slot_free(&returned); mc_slot_free(&dropped);
+    mc_inventory_free(&predicted); mc_slot_free(&returned); mc_crafting_effects_free(&effects);
 }
 
 static void creative_pick(mc_client *c,unsigned index) {
@@ -314,11 +385,37 @@ static void creative_pick(mc_client *c,unsigned index) {
 }
 
 static void close_inventory(mc_client *c) {
-    if (c->inventory.cursor.item_id>=0 || c->inventory_pending || c->inventory_sync) {
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Place the cursor item in a slot and wait for server confirmation before closing"); return;
+    if (c->inventory_pending || c->inventory_sync || c->inventory_queue_index<c->inventory_queue_count) {
+        c->inventory_close_requested=true;
+        snprintf(c->inventory_status,sizeof(c->inventory_status),"Closing after the server confirms inventory synchronization"); return;
+    }
+    mc_inventory next,authoritative; mc_inventory_init(&next); mc_inventory_init(&authoritative);
+    mc_crafting_effects effects; mc_crafting_effects_init(&effects);
+    if (!mc_inventory_copy(&next,&c->inventory) || !mc_crafting_close(&next,&effects) || !mc_inventory_copy(&authoritative,&next)) {
+        client_error(c,"Cannot retain closed inventory state"); goto done;
     }
     mc_buf packet; start_packet(&packet,0x0d); mc_put_u8(&packet,0);
-    if (send_packet(c,&packet)) { c->inventory_open=false; c->creative_open=false; }
+    if (send_packet(c,&packet)) {
+        mc_inventory_free(&c->inventory); c->inventory=next; mc_inventory_init(&next);
+        mc_inventory_free(&c->inventory_authoritative); c->inventory_authoritative=authoritative; mc_inventory_init(&authoritative);
+        c->inventory_open=false; c->creative_open=false; c->inventory_close_requested=false;
+    }
+done:
+    mc_inventory_free(&next); mc_inventory_free(&authoritative); mc_crafting_effects_free(&effects);
+}
+static void drop_held_item(mc_client *c,bool all) {
+    if (!c->inventory_ready || c->inventory_pending || c->inventory_sync) return;
+    mc_slot *held=&c->inventory.slots[36+c->selected]; if (held->item_id<0) return;
+    mc_slot next,authoritative; mc_slot_init(&next); mc_slot_init(&authoritative);
+    if (!mc_slot_copy(&next,held)) { client_error(c,"Cannot retain dropped inventory state"); return; }
+    if (all || next.count==1) mc_slot_free(&next); else --next.count;
+    if (!mc_slot_copy(&authoritative,&next)) { client_error(c,"Cannot retain dropped inventory state"); mc_slot_free(&next); return; }
+    mc_buf packet; start_packet(&packet,0x07); mc_put_varint(&packet,all ? 3 : 4); mc_put_position(&packet,0,0,0); mc_put_u8(&packet,0);
+    if (send_packet(c,&packet)) {
+        mc_slot_free(held); *held=next; mc_slot_init(&next);
+        mc_slot *saved=&c->inventory_authoritative.slots[36+c->selected]; mc_slot_free(saved); *saved=authoritative; mc_slot_init(&authoritative);
+    }
+    mc_slot_free(&next); mc_slot_free(&authoritative);
 }
 
 static void receive_inventory(mc_client *c,mc_buf *b) {
@@ -331,7 +428,11 @@ static void receive_inventory(mc_client *c,mc_buf *b) {
     }
     if (!b->failed && b->pos!=b->len) b->failed=true;
     if (!b->failed && window==0) {
-        if (!mc_slot_copy(&next.cursor,&c->inventory_authoritative.cursor) || !mc_inventory_copy(&c->inventory_authoritative,&next)) b->failed=true;
+        if (!c->inventory_sync) {
+            next.drag_active=c->inventory.drag_active; next.drag_mode=c->inventory.drag_mode; next.drag_slots=c->inventory.drag_slots;
+        }
+        const mc_slot *cursor=c->inventory_pending ? &c->inventory.cursor : &c->inventory_authoritative.cursor;
+        if (!mc_slot_copy(&next.cursor,cursor) || !mc_inventory_copy(&c->inventory_authoritative,&next)) b->failed=true;
         else {
             mc_inventory_free(&c->inventory); c->inventory=next; mc_inventory_init(&next);
             c->inventory_ready=true; ++c->inventory_packets;
@@ -382,6 +483,7 @@ static void receive_transaction(mc_client *c,mc_buf *b) {
         snprintf(c->inventory_status,sizeof(c->inventory_status),"Inventory transaction accepted");
     } else {
         ++c->inventory_rejections; c->inventory_sync=true; c->inventory_sync_slots=false; c->inventory_sync_cursor=false;
+        c->inventory_queue_count=0; c->inventory_queue_index=0;
         if (!mc_inventory_copy(&c->inventory,&c->inventory_authoritative)) b->failed=true;
         snprintf(c->inventory_status,sizeof(c->inventory_status),"Server rejected action; waiting for inventory resynchronization");
     }
@@ -466,7 +568,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
         }
         case 0x07:
             c->dimension = mc_get_i32(b); (void)mc_get_u8(b); c->gamemode = mc_get_u8(b); skip_string(b);
-            if (!b->failed) { mc_world_free(&c->world); mc_world_init(&c->world, 0); memset(c->players, 0, sizeof(c->players)); c->positioned = false; c->velocity_y = 0; }
+            if (!b->failed) { clear_items(c); mc_world_free(&c->world); mc_world_init(&c->world, 0); memset(c->players, 0, sizeof(c->players)); c->positioned = false; c->velocity_y = 0; }
             break;
         case 0x08: {
             double x = mc_get_f64(b), y = mc_get_f64(b), z = mc_get_f64(b);
@@ -484,6 +586,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             double x = mc_get_i32(b) / 32.0, y = mc_get_i32(b) / 32.0, z = mc_get_i32(b) / 32.0;
             float yaw = mc_get_u8(b) * (360.0f / 256.0f), pitch = mc_get_u8(b) * (360.0f / 256.0f); (void)mc_get_i16(b);
             if (!b->failed) {
+                remove_item(c,client_item(c,entity));
                 mc_remote_player *p = remote_player(c, entity, true);
                 if (p) {
                     memcpy(p->uuid, uuid, sizeof(uuid)); p->x = x; p->y = y; p->z = z; p->yaw = yaw; p->pitch = pitch;
@@ -493,26 +596,63 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             }
             break;
         }
+        case 0x0d: {
+            int32_t entity=mc_get_varint(b); (void)mc_get_varint(b);
+            if (b->failed || b->pos!=b->len) { b->failed=true; break; }
+            mc_client_item *item=client_item(c,entity);
+            if (item) { remove_item(c,item); ++c->item_collects; }
+            break;
+        }
+        case 0x0e: receive_object(c,b); break;
+        case 0x12: {
+            int32_t entity=mc_get_varint(b); double vx=mc_get_i16(b)/8000.0,vy=mc_get_i16(b)/8000.0,vz=mc_get_i16(b)/8000.0;
+            if (b->failed || b->pos!=b->len) { b->failed=true; break; }
+            mc_client_item *item=client_item(c,entity);
+            if (item) { item->entity.vx=vx; item->entity.vy=vy; item->entity.vz=vz; }
+            break;
+        }
         case 0x13: {
             int count = mc_get_varint(b);
             if (count < 0 || count > 4096) { b->failed = true; break; }
-            for (int i = 0; i < count && !b->failed; ++i) { mc_remote_player *p = remote_player(c, mc_get_varint(b), false); if (p) p->active = false; }
+            int32_t ids[4096]; for (int i=0;i<count;i++) ids[i]=mc_get_varint(b);
+            if (b->failed || b->pos!=b->len) { b->failed=true; break; }
+            for (int i=0;i<count;i++) { mc_remote_player *p=remote_player(c,ids[i],false); if (p) p->active=false; remove_item(c,client_item(c,ids[i])); }
+            break;
+        }
+        case 0x14: {
+            int32_t eid=mc_get_varint(b); unsigned ground=mc_get_u8(b);
+            if (b->failed || b->pos!=b->len || ground>1) { b->failed=true; break; }
+            mc_client_item *item=client_item(c,eid); if (item) item->entity.on_ground=ground!=0;
             break;
         }
         case 0x15: case 0x16: case 0x17: case 0x18: {
             int entity = mc_get_varint(b); mc_remote_player *p = remote_player(c, entity, false);
+            mc_client_item *item=client_item(c,entity);
             double x = 0, y = 0, z = 0; float yaw = 0, pitch = 0;
             if (id == 0x18) { x = mc_get_i32(b) / 32.0; y = mc_get_i32(b) / 32.0; z = mc_get_i32(b) / 32.0; }
             else if (id != 0x16) { x = (int8_t)mc_get_u8(b) / 32.0; y = (int8_t)mc_get_u8(b) / 32.0; z = (int8_t)mc_get_u8(b) / 32.0; }
             if (id != 0x15) { yaw = mc_get_u8(b) * (360.0f / 256.0f); pitch = mc_get_u8(b) * (360.0f / 256.0f); }
-            (void)mc_get_u8(b);
+            unsigned ground=mc_get_u8(b);
+            if (b->failed || b->pos!=b->len || ground>1) { b->failed=true; break; }
             if (!b->failed && p) {
                 if (id == 0x18) { p->x = x; p->y = y; p->z = z; }
                 else if (id != 0x16) { p->x += x; p->y += y; p->z += z; }
                 if (id != 0x15) { p->yaw = yaw; p->pitch = pitch; }
             }
+            if (item) {
+                double next_x=id==0x18 ? x : item->server_x/32.0+x;
+                double next_y=id==0x18 ? y : item->server_y/32.0+y;
+                double next_z=id==0x18 ? z : item->server_z/32.0+z;
+                if (fabs(next_x)>30000000 || fabs(next_y)>30000000 || fabs(next_z)>30000000) { b->failed=true; break; }
+                if (id!=0x16) {
+                    item->server_x=(int32_t)llround(next_x*32); item->server_y=(int32_t)llround(next_y*32); item->server_z=(int32_t)llround(next_z*32);
+                    item->entity.x=next_x; item->entity.y=next_y; item->entity.z=next_z;
+                }
+                item->entity.on_ground=ground!=0;
+            }
             break;
         }
+        case 0x1c: receive_metadata(c,b); break;
         case 0x21: {
             int x = mc_get_i32(b), z = mc_get_i32(b); bool full = mc_get_u8(b) != 0;
             uint16_t mask = (uint16_t)mc_get_i16(b); int length = mc_get_varint(b);
@@ -580,8 +720,12 @@ static void handle_packet(mc_client *c, mc_buf *b) {
         }
         case 0x2e: {
             unsigned window=mc_get_u8(b);
+            if (b->failed || b->pos!=b->len) { b->failed=true; break; }
             if (window==0) {
-                c->inventory_open=false; c->creative_open=false; c->inventory_pending=false;
+                c->inventory_queue_count=0; c->inventory_queue_index=0; c->inventory_close_requested=false;
+                c->inventory_pending=false; c->inventory_sync=false;
+                c->inventory_sync_slots=false; c->inventory_sync_cursor=false;
+                close_inventory(c);
                 snprintf(c->inventory_status,sizeof(c->inventory_status),"Server closed inventory");
             }
             break;
@@ -708,17 +852,45 @@ static void update_player(mc_client *c, const mc_input *input, double dt) {
         if (c->inventory_open) close_inventory(c);
         else {
             c->inventory_open=true; c->creative_open=false;
-            snprintf(c->inventory_status,sizeof(c->inventory_status),"Left/right click, Shift transfer, 1-9 swap; crafting output and item drops unavailable");
+            snprintf(c->inventory_status,sizeof(c->inventory_status),"Left/right click, Shift transfer, 1-9 swap; Q drop, drag to distribute");
             mc_buf packet; start_packet(&packet,0x16); mc_put_varint(&packet,2); send_packet(c,&packet);
         }
     }
     if (input->toggle_creative && controls_active && c->inventory_open && c->gamemode==1) c->creative_open=!c->creative_open;
-    if (input->inventory_click && controls_active && c->inventory_open) inventory_click(c,input->inventory_slot,input->inventory_button,input->inventory_mode);
+    if (input->inventory_click && controls_active && c->inventory_open && c->inventory_queue_index==c->inventory_queue_count)
+        inventory_click(c,input->inventory_slot,input->inventory_button,input->inventory_mode);
+    if (input->inventory_drag && controls_active && c->inventory_open && !c->inventory_pending && !c->inventory_sync &&
+        c->inventory_queue_index==c->inventory_queue_count && input->inventory_drag_mode<=2 &&
+        !(input->inventory_drag_slots>>45) && !(input->inventory_drag_slots&1) &&
+        (input->inventory_drag_mode<2 || c->gamemode==1)) {
+        unsigned base=input->inventory_drag_mode*4; c->inventory_queue_count=0; c->inventory_queue_index=0;
+        int *action=c->inventory_queue[c->inventory_queue_count++]; action[0]=-999; action[1]=(int)base; action[2]=5;
+        for (unsigned i=1;i<45;i++) if (input->inventory_drag_slots&(UINT64_C(1)<<i)) {
+            action=c->inventory_queue[c->inventory_queue_count++]; action[0]=(int)i; action[1]=(int)base+1; action[2]=5;
+        }
+        action=c->inventory_queue[c->inventory_queue_count++]; action[0]=-999; action[1]=(int)base+2; action[2]=5;
+    }
+    if (controls_active && c->inventory_open && c->inventory_queue_index<c->inventory_queue_count && !c->inventory_pending && !c->inventory_sync) {
+        int *action=c->inventory_queue[c->inventory_queue_index++]; inventory_click(c,action[0],action[1],action[2]);
+        if (!c->inventory_pending) { c->inventory_queue_count=0; c->inventory_queue_index=0; }
+    }
+    if (c->inventory_close_requested && controls_active && !c->inventory_pending && !c->inventory_sync &&
+        c->inventory_queue_index==c->inventory_queue_count) close_inventory(c);
+    if (input->drop_item && controls_active && !c->inventory_open) drop_held_item(c,input->drop_all);
     if (input->creative_pick>=0 && controls_active && c->inventory_open) creative_pick(c,(unsigned)input->creative_pick);
     if (input->chat_submit && input->chat[0]) {
         mc_buf packet; start_packet(&packet, 0x01); mc_put_string(&packet, input->chat); send_packet(c, &packet);
     }
     if (controls_active && input->select_slot >= 0 && input->select_slot < 9) send_slot(c, input->select_slot);
+    uint64_t now=mc_time_ms();
+    if (!c->last_item_tick_ms) c->last_item_tick_ms=now;
+    unsigned ticks=(unsigned)((now-c->last_item_tick_ms)/50); if (ticks>4) ticks=4;
+    c->last_item_tick_ms+=ticks*50u;
+    for (unsigned step=0;step<ticks;step++) for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) {
+        mc_client_item *item=&c->items[i];
+        if (item->active && item->metadata_ready && body_loaded(c,item->entity.x,item->entity.z))
+            (void)mc_item_entity_tick(&item->entity,&c->world);
+    }
     if (!body_loaded(c, c->x, c->z)) {
         c->velocity_y = 0;
         snprintf(c->status, sizeof(c->status), "Waiting for terrain at player position");
@@ -849,6 +1021,7 @@ static void usage(const char *program) {
     printf("Usage: %s [--host HOST] [--port 25565] [--name Player] [--headless]\n"
            "       [--run-seconds SECONDS] [--screenshot FRAME.ppm] [--self-test]\n"
            "       [--inventory-actions SLOT:BUTTON:MODE,...] (headless transaction exercise)\n"
+           "       [--drop-actions one,all,...] [--close-inventory] (shared native input paths)\n"
            "Offline protocol 47 (Minecraft 1.8.x). Windows GUI; original procedural materials.\n"
            "WASD move; mouse look; Space jump/ascend; Shift descend; Ctrl sprint; F flight.\n"
            "Left/right mouse remove/place; 1-9 hotbar; E inventory; T chat, Enter send; Esc pause/cursor.\n", program);
@@ -860,17 +1033,32 @@ static bool parse_inventory_actions(const char *input,int actions[64][3],unsigne
     do {
         if (parsed==64) return false;
         for (unsigned column=0;column<3;column++) {
-            if (*cursor<'0' || *cursor>'9') return false;
+            if ((*cursor<'0' || *cursor>'9') && !(column==0 && *cursor=='-')) return false;
             char *end; errno=0; long value=strtol(cursor,&end,10);
-            if (errno || end==cursor || value<0 || value>(column==0 ? 44 : column==1 ? 8 : 6)) return false;
+            if (errno || end==cursor || (value<0 && !(column==0 && value==-999)) || value>(column==0 ? 44 : column==1 ? 10 : 6)) return false;
             actions[parsed][column]=(int)value; cursor=end;
             if (column<2) { if (*cursor!=':') return false; ++cursor; }
         }
+        if (actions[parsed][1]>8 && actions[parsed][2]!=5) return false;
         ++parsed;
         if (!*cursor) break;
         if (*cursor!=',') return false;
         ++cursor; if (!*cursor) return false;
     } while (*cursor);
+    *count=parsed; return true;
+}
+static bool parse_drop_actions(const char *input,bool actions[64],unsigned *count) {
+    unsigned parsed=0; const char *cursor=input;
+    if (!*cursor) return false;
+    while (*cursor) {
+        if (parsed==64) return false;
+        const char *end=strchr(cursor,','); size_t size=end ? (size_t)(end-cursor) : strlen(cursor);
+        if (size==3 && !memcmp(cursor,"one",3)) actions[parsed++]=false;
+        else if (size==3 && !memcmp(cursor,"all",3)) actions[parsed++]=true;
+        else return false;
+        if (!end) break;
+        cursor=end+1; if (!*cursor) return false;
+    }
     *count=parsed; return true;
 }
 
@@ -881,11 +1069,13 @@ int main(int argc, char **argv) {
     c->port = 25565; c->connection.socket = MC_INVALID_SOCKET;
     bool headless = false; double run_seconds = 0; const char *screenshot = NULL;
     int actions[64][3]; unsigned action_count=0,action_index=0;
+    bool drops[64],close_script=false,close_done=false; unsigned drop_count=0,drop_index=0;
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) { usage(argv[0]); free(c); return 0; }
         if (strcmp(arg, "--self-test") == 0) { free(c); return self_test(); }
         if (strcmp(arg, "--headless") == 0) { headless = true; continue; }
+        if (strcmp(arg,"--close-inventory")==0) { close_script=true; continue; }
         if (i + 1 >= argc) { fprintf(stderr, "Missing value for %s\n", arg); free(c); return 2; }
         const char *value = argv[++i];
         if (strcmp(arg, "--host") == 0 && *value && strlen(value) < sizeof(c->host)) snprintf(c->host, sizeof(c->host), "%s", value);
@@ -901,6 +1091,9 @@ int main(int argc, char **argv) {
         } else if (strcmp(arg, "--screenshot") == 0 && *value) screenshot = value;
         else if (strcmp(arg,"--inventory-actions")==0) {
             if (!parse_inventory_actions(value,actions,&action_count)) { fprintf(stderr,"Invalid inventory actions\n"); free(c); return 2; }
+        }
+        else if (strcmp(arg,"--drop-actions")==0) {
+            if (!parse_drop_actions(value,drops,&drop_count)) { fprintf(stderr,"Invalid drop actions\n"); free(c); return 2; }
         }
         else { fprintf(stderr, "Invalid argument: %s\n", arg); usage(argv[0]); free(c); return 2; }
     }
@@ -928,6 +1121,10 @@ int main(int argc, char **argv) {
             if (action_index<action_count && c->inventory_ready && !c->inventory_pending && !c->inventory_sync) {
                 c->inventory_open=true; input.inventory_click=true;
                 input.inventory_slot=actions[action_index][0]; input.inventory_button=actions[action_index][1]; input.inventory_mode=actions[action_index][2]; ++action_index;
+            } else if (action_index==action_count && close_script && !close_done && c->inventory_ready && !c->inventory_pending && !c->inventory_sync) {
+                c->inventory_open=true; input.toggle_inventory=true; close_done=true;
+            } else if (drop_index<drop_count && c->inventory_ready && !c->inventory_pending && !c->inventory_sync && !c->inventory_open) {
+                input.drop_item=true; input.drop_all=drops[drop_index++];
             }
             update_player(c, &input, dt);
         }
@@ -941,11 +1138,18 @@ int main(int argc, char **argv) {
         if (run_seconds > 0 && now - started >= (uint64_t)(run_seconds * 1000)) break;
         mc_sleep_ms(renderer ? 8 : 5);
     }
-    unsigned non_air = 0, players = 0;
+    unsigned non_air = 0, players = 0,items=0;
     for (int i = 0; i < c->world.count; ++i) for (unsigned b = 0; b < MC_CHUNK_BLOCKS; ++b) if (c->world.chunks[i].blocks[b] >> 4) ++non_air;
     for (int i = 0; i < MC_CLIENT_PLAYERS; ++i) if (c->players[i].active) ++players;
-    printf("CLIENT_RESULT joined=%d positioned=%d chunks=%d chunk_packets=%u non_air=%u block_updates=%u players=%u packets=%u position=%.3f,%.3f,%.3f inventory_packets=%u inventory_rejections=%u inventory_pending=%d gamemode=%d\n",
-           c->joined, c->positioned, c->world.count, c->chunks_received, non_air, c->block_updates, players, c->packets_received, c->x, c->y, c->z,c->inventory_packets,c->inventory_rejections,c->inventory_pending,c->gamemode);
+    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) if (c->items[i].active) ++items;
+    printf("CLIENT_RESULT joined=%d positioned=%d chunks=%d chunk_packets=%u non_air=%u block_updates=%u players=%u packets=%u position=%.3f,%.3f,%.3f inventory_packets=%u inventory_rejections=%u inventory_pending=%d gamemode=%d item_entities=%u item_spawns=%u item_metadata=%u item_collects=%u\n",
+           c->joined, c->positioned, c->world.count, c->chunks_received, non_air, c->block_updates, players, c->packets_received, c->x, c->y, c->z,c->inventory_packets,c->inventory_rejections,c->inventory_pending,c->gamemode,items,c->item_spawns,c->item_metadata,c->item_collects);
+    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) if (c->items[i].active) {
+        const mc_client_item *item=&c->items[i]; const mc_slot *s=&item->entity.item;
+        printf("CLIENT_ITEM eid=%d ready=%d id=%d count=%u damage=%d nbt_size=%zu nbt_crc=%08lx server_position=%.3f,%.3f,%.3f position=%.3f,%.3f,%.3f\n",
+            item->entity.eid,item->metadata_ready,s->item_id,(unsigned)s->count,s->damage,s->nbt.size,(unsigned long)crc32(0,s->nbt.data,(uInt)s->nbt.size),
+            item->server_x/32.0,item->server_y/32.0,item->server_z/32.0,item->entity.x,item->entity.y,item->entity.z);
+    }
     for (int i=0;i<MC_PLAYER_INVENTORY_SIZE;i++) {
         const mc_slot *slot=&c->inventory.slots[i];
         if (slot->item_id>=0) printf("CLIENT_SLOT index=%d id=%d count=%u damage=%d nbt_size=%zu nbt_crc=%08lx\n",i,slot->item_id,(unsigned)slot->count,slot->damage,slot->nbt.size,(unsigned long)crc32(0,slot->nbt.data,(uInt)slot->nbt.size));
@@ -953,6 +1157,6 @@ int main(int argc, char **argv) {
     printf("CLIENT_CURSOR id=%d count=%u damage=%d nbt_size=%zu nbt_crc=%08lx\n",c->inventory.cursor.item_id,(unsigned)c->inventory.cursor.count,c->inventory.cursor.damage,c->inventory.cursor.nbt.size,(unsigned long)crc32(0,c->inventory.cursor.nbt.data,(uInt)c->inventory.cursor.nbt.size));
     int result = c->failed || c->disconnected || ((headless || screenshot) && (!c->joined || !c->positioned || !c->world.count)) || (screenshot && !screenshot_done) ? 1 : 0;
     if (renderer) mc_renderer_close(renderer);
-    mc_conn_close(&c->connection); mc_inventory_free(&c->inventory); mc_inventory_free(&c->inventory_authoritative); mc_world_free(&c->world); mc_net_shutdown(); free(c);
+    clear_items(c); mc_conn_close(&c->connection); mc_inventory_free(&c->inventory); mc_inventory_free(&c->inventory_authoritative); mc_world_free(&c->world); mc_net_shutdown(); free(c);
     return result;
 }

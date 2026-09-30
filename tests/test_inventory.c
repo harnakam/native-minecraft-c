@@ -184,10 +184,23 @@ static void test_legacy_shift_overstacks(void) {
     }
 }
 
+static void test_non_subtype_damage_merge_context(void) {
+    mc_inventory inventory; mc_inventory_init(&inventory); mc_slot returned,dropped; mc_slot_init(&returned); mc_slot_init(&dropped);
+    CHECK(mc_slot_set(&inventory.slots[9],266,5,7)); CHECK(mc_slot_set(&inventory.slots[36],266,4,8));
+    CHECK(mc_inventory_click_result(&inventory,9,0,1,&returned,&dropped));
+    /* Actual 1.8.9: shift ignores damage for items without subtypes. Normal
+       clicks, drag and collect continue to compare damage exactly. */
+    CHECK(inventory.slots[36].count==9 && inventory.slots[36].damage==8 && inventory.slots[9].item_id==-1);
+    CHECK(mc_slot_set(&inventory.slots[9],266,5,7)); CHECK(mc_slot_set(&inventory.cursor,266,4,8));
+    CHECK(mc_inventory_click(&inventory,9,0,0,&dropped));
+    CHECK(inventory.slots[9].count==4 && inventory.slots[9].damage==8 && inventory.cursor.count==5 && inventory.cursor.damage==7);
+    mc_slot_free(&returned); mc_slot_free(&dropped); mc_inventory_free(&inventory);
+}
 int main(void) {
     test_slot_codec(); test_normal_click_and_returns(); test_stack_limits_shift_and_armor();
     test_hotbar_drop_clone_and_rollback(); test_drag_distribution_and_double_collect();
     test_oversized_wire_and_existing_inventory();
     test_legacy_shift_overstacks();
+    test_non_subtype_damage_merge_context();
     printf("inventory: %u checks passed\n",checks); return 0;
 }
