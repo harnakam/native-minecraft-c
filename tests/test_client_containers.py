@@ -157,7 +157,7 @@ class ClientContainerTests(unittest.TestCase):
     def client(self, port, *options):
         result = subprocess.run([str(CLIENT), "--host", "127.0.0.1", "--port", str(port),
                                  "--headless", "--run-seconds", "0.7", *options],
-                                capture_output=True, text=True, timeout=8)
+                                capture_output=True, text=True, encoding="utf-8", timeout=8)
         return result, result.stdout+result.stderr
 
     def test_workbench_snapshot_maps_shared_player_and_hotbar(self):
@@ -167,6 +167,7 @@ class ClientContainerTests(unittest.TestCase):
             result, output = self.client(port)
         self.assertEqual(result.returncode, 0, output)
         self.assertIn("CLIENT_WINDOW id=7 ready=1 slots=46", output)
+        self.assertIn("日本の作業台", output)
         self.assertIn("CLIENT_CONTAINER_SLOT index=1 id=5 count=2", output)
         self.assertIn("CLIENT_SLOT index=9 id=276 count=1", output)
         self.assertIn("CLIENT_SLOT index=36 id=1 count=11", output)
@@ -438,7 +439,8 @@ class ClientContainerTests(unittest.TestCase):
 
     def test_use_block_cli_rejects_invalid_targets_before_network(self):
         for value in ["1,2", "1,2,3,4", "1,256,3", "1,-1,3", "30000000,1,3", "1,2,nan", "1,2,3x"]:
-            result = subprocess.run([str(CLIENT), "--headless", "--use-block", value], capture_output=True, text=True, timeout=3)
+            result = subprocess.run([str(CLIENT), "--headless", "--use-block", value],
+                                    capture_output=True, text=True, encoding="utf-8", timeout=3)
             self.assertEqual(result.returncode, 2, result.stdout+result.stderr)
             self.assertIn("Invalid block-use target", result.stderr)
 
