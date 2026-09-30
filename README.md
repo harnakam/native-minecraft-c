@@ -24,7 +24,7 @@ Minecraftのコード、テクスチャ、音声、モデル、JAR、MCP本体�
 [MSYS2](https://www.msys2.org/) のUCRT64環境で必要な既存ツールを使います。依存ライブラリはzlibだけです。
 
 ```sh
-pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-python
+pacman -S --needed git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-python
 ```
 
 PowerShellから：
