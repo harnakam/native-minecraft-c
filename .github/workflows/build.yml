@@ -1,0 +1,38 @@
+name: Build and multiplayer tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel
+      - run: ctest --test-dir build --output-on-failure
+      - run: python scripts/audit_public.py
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-python
+      - shell: msys2 {0}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - shell: msys2 {0}
+        run: cmake --build build
+      - shell: msys2 {0}
+        run: ctest --test-dir build --output-on-failure
+      - shell: msys2 {0}
+        run: python scripts/audit_public.py
