@@ -23,7 +23,7 @@ def spawn(eid, x=8, y=7, z=8):
 
 
 @contextlib.contextmanager
-def entity_peer(kind="lifecycle", inventory=None, cursor=EMPTY, ack_snapshot=None):
+def entity_peer(kind="lifecycle", inventory=None, cursor=EMPTY, ack_snapshot=None, forced_window=0):
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -85,7 +85,7 @@ def entity_peer(kind="lifecycle", inventory=None, cursor=EMPTY, ack_snapshot=Non
                     send_frame(sock, 0x1c, vint(20)+b"\xaa"+slot+b"\x7f", True)
                     send_frame(sock, 0x1c, vint(21)+b"\xaa"+slot+b"\x7f", True)
                 elif kind == "forced_close":
-                    send_frame(sock, 0x2e, b"\0", True)
+                    send_frame(sock, 0x2e, bytes([forced_window]), True)
                 elif kind == "unload":
                     send_frame(sock, 0x21, struct.pack(">iiBH", 0, 0, 1, 0)+vint(0), True)
                 elif kind == "respawn":
@@ -100,6 +100,10 @@ def entity_peer(kind="lifecycle", inventory=None, cursor=EMPTY, ack_snapshot=Non
                     observed.append(packet)
                     if packet[0] == 0x0e:
                         action = struct.unpack_from(">h", packet[1], 4)[0]
+                        if kind == "forced_pending":
+                            send_frame(sock, 0x2e, bytes([forced_window]), True)
+                            send_frame(sock, 0x32, struct.pack(">BhB", 0, action, 1), True)
+                            continue
                         if ack_snapshot is not None:
                             send_frame(sock, 0x30, b"\0"+struct.pack(">h", 45)+b"".join(ack_snapshot), True)
                         send_frame(sock, 0x32, struct.pack(">BhB", 0, action, 1), True)
@@ -239,12 +243,29 @@ class ClientEntityTests(unittest.TestCase):
         self.assertIn("CLIENT_CURSOR id=-1 count=0", output)
         self.assertNotIn("CLIENT_SLOT index=1 ", output)
         self.assertNotIn("CLIENT_SLOT index=0 ", output)
-        with entity_peer("forced_close", inventory=slots, cursor=TOOL) as (port, observed):
-            result, output = self.client(port)
-        self.assertEqual(result.returncode, 0, output)
-        self.assertEqual([packet for kind, packet in observed if kind == 0x0d], [b"\0"])
-        self.assertIn("CLIENT_CURSOR id=-1 count=0", output)
-        self.assertNotIn("CLIENT_SLOT index=1 ", output)
+        for window in [0, 7, 255]:
+            with entity_peer("forced_close", inventory=slots, cursor=TOOL, forced_window=window) as (port, observed):
+                result, output = self.client(port)
+            self.assertEqual(result.returncode, 0, output)
+            self.assertEqual([packet for kind, packet in observed if kind == 0x0d], [])
+            self.assertIn("CLIENT_CURSOR id=-1 count=0", output)
+            # No inventory GUI is open: only the global cursor is cleared.
+            self.assertIn("CLIENT_SLOT index=1 id=41 count=1", output)
+            self.assertIn("CLIENT_SLOT index=0 id=266 count=9", output)
+
+    def test_server_forced_close_cancels_pending_and_cleans_open_player_grid(self):
+        slots = [EMPTY]*45
+        slots[1], slots[0] = wire_slot(41, 1), wire_slot(266, 9)
+        for window in [0, 7, 255]:
+            with entity_peer("forced_pending", inventory=slots, cursor=TOOL, forced_window=window) as (port, observed):
+                result, output = self.client(port, "--inventory-actions", "9:0:0")
+            self.assertEqual(result.returncode, 0, output)
+            self.assertEqual([packet for kind, packet in observed if kind == 0x0d], [])
+            self.assertIn("inventory_pending=0", output)
+            self.assertIn("CLIENT_CURSOR id=-1 count=0", output)
+            self.assertIn("CLIENT_SLOT index=9 id=276 count=1", output)
+            self.assertNotIn("CLIENT_SLOT index=1 ", output)
+            self.assertNotIn("CLIENT_SLOT index=0 ", output)
 
     def test_outside_cursor_drop_and_normal_inventory_drop(self):
         with entity_peer(cursor=TOOL) as (port, observed):

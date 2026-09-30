@@ -384,7 +384,19 @@ static void creative_pick(mc_client *c,unsigned index) {
     mc_slot_free(&item);
 }
 
-static void close_inventory(mc_client *c) {
+static void close_inventory(mc_client *c,bool notify_server) {
+    if (!notify_server) {
+        /* A server close clears the shared cursor before closing the GUI.
+           Only the ordinary player GUI invokes its 2x2 container cleanup. */
+        if (c->inventory_open && !c->creative_open) for (int i=0;i<=4;i++) {
+            mc_slot_free(&c->inventory.slots[i]); mc_slot_free(&c->inventory_authoritative.slots[i]);
+        }
+        mc_slot_free(&c->inventory.cursor); mc_slot_free(&c->inventory_authoritative.cursor);
+        c->inventory.drag_active=false; c->inventory.drag_mode=0; c->inventory.drag_slots=0;
+        c->inventory_authoritative.drag_active=false; c->inventory_authoritative.drag_mode=0; c->inventory_authoritative.drag_slots=0;
+        c->inventory_open=false; c->creative_open=false; c->inventory_close_requested=false;
+        return;
+    }
     if (c->inventory_pending || c->inventory_sync || c->inventory_queue_index<c->inventory_queue_count) {
         c->inventory_close_requested=true;
         snprintf(c->inventory_status,sizeof(c->inventory_status),"Closing after the server confirms inventory synchronization"); return;
@@ -719,15 +731,13 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             break;
         }
         case 0x2e: {
-            unsigned window=mc_get_u8(b);
+            (void)mc_get_u8(b);
             if (b->failed || b->pos!=b->len) { b->failed=true; break; }
-            if (window==0) {
-                c->inventory_queue_count=0; c->inventory_queue_index=0; c->inventory_close_requested=false;
-                c->inventory_pending=false; c->inventory_sync=false;
-                c->inventory_sync_slots=false; c->inventory_sync_cursor=false;
-                close_inventory(c);
-                snprintf(c->inventory_status,sizeof(c->inventory_status),"Server closed inventory");
-            }
+            c->inventory_queue_count=0; c->inventory_queue_index=0; c->inventory_close_requested=false;
+            c->inventory_pending=false; c->inventory_sync=false;
+            c->inventory_sync_slots=false; c->inventory_sync_cursor=false;
+            close_inventory(c,false);
+            snprintf(c->inventory_status,sizeof(c->inventory_status),"Server closed inventory");
             break;
         }
         case 0x2f: receive_slot(c,b); break;
@@ -849,7 +859,7 @@ static void update_player(mc_client *c, const mc_input *input, double dt) {
     if (!c->joined || !c->positioned || c->failed || c->disconnected) return;
     bool controls_active=!input->paused && !input->chat_open;
     if (input->toggle_inventory && controls_active) {
-        if (c->inventory_open) close_inventory(c);
+        if (c->inventory_open) close_inventory(c,true);
         else {
             c->inventory_open=true; c->creative_open=false;
             snprintf(c->inventory_status,sizeof(c->inventory_status),"Left/right click, Shift transfer, 1-9 swap; Q drop, drag to distribute");
@@ -875,7 +885,7 @@ static void update_player(mc_client *c, const mc_input *input, double dt) {
         if (!c->inventory_pending) { c->inventory_queue_count=0; c->inventory_queue_index=0; }
     }
     if (c->inventory_close_requested && controls_active && !c->inventory_pending && !c->inventory_sync &&
-        c->inventory_queue_index==c->inventory_queue_count) close_inventory(c);
+        c->inventory_queue_index==c->inventory_queue_count) close_inventory(c,true);
     if (input->drop_item && controls_active && !c->inventory_open) drop_held_item(c,input->drop_all);
     if (input->creative_pick>=0 && controls_active && c->inventory_open) creative_pick(c,(unsigned)input->creative_pick);
     if (input->chat_submit && input->chat[0]) {
@@ -999,6 +1009,28 @@ static int self_test(void) {
     inactive.paused=true; inactive.inventory_click=true; inactive.inventory_slot=36;
     update_player(c,&inactive,0);
     CHECK(c->inventory.cursor.item_id<0 && c->inventory.slots[36].item_id==276 && !c->inventory_pending,"paused inventory input cannot move a carried item");
+    for (unsigned gui=0;gui<3;gui++) for (unsigned window=0;window<3;window++) {
+        CHECK(mc_slot_set(&c->inventory.slots[1],41,1,0) && mc_slot_set(&c->inventory.slots[0],266,9,0) &&
+            mc_slot_copy(&c->inventory.cursor,&c->inventory.slots[36]) &&
+            mc_inventory_copy(&c->inventory_authoritative,&c->inventory),"forced close owns cursor and crafting fixture");
+        c->inventory_open=gui!=0; c->creative_open=gui==2;
+        c->inventory_pending=true; c->inventory_sync=true; c->inventory_sync_slots=true; c->inventory_sync_cursor=true;
+        c->inventory_close_requested=true; c->inventory_queue_count=3; c->inventory_queue_index=1;
+        c->inventory.drag_active=true; c->inventory.drag_slots=UINT64_C(1)<<9;
+        c->inventory_authoritative.drag_active=true; c->inventory_authoritative.drag_slots=UINT64_C(1)<<9;
+        mc_buf forced; start_packet(&forced,0x2e); mc_put_u8(&forced,(uint8_t)(window==0 ? 0 : window==1 ? 7 : 255));
+        handle_packet(c,&forced);
+        CHECK(!forced.failed && !c->inventory_open && !c->creative_open && !c->inventory_pending && !c->inventory_sync &&
+            !c->inventory_sync_slots && !c->inventory_sync_cursor && !c->inventory_close_requested &&
+            !c->inventory_queue_count && !c->inventory_queue_index,"server close cancels pending resynchronization and queued input for every window ID");
+        CHECK(c->inventory.cursor.item_id<0 && c->inventory_authoritative.cursor.item_id<0 &&
+            !c->inventory.drag_active && !c->inventory.drag_slots && !c->inventory_authoritative.drag_active &&
+            !c->inventory_authoritative.drag_slots && c->connection.tx.len==0,"server close clears shared cursor and drag without sending a reply");
+        CHECK(c->inventory.slots[1].item_id==(gui==1 ? -1 : 41) && c->inventory.slots[0].item_id==(gui==1 ? -1 : 266) &&
+            mc_slot_equal(&c->inventory.slots[1],&c->inventory_authoritative.slots[1]) &&
+            mc_slot_equal(&c->inventory.slots[0],&c->inventory_authoritative.slots[0]),"only an open player inventory GUI closes its local crafting grid and output");
+        mc_buf_free(&forced);
+    }
     mc_buf packet; start_packet(&packet, 0x38); mc_put_varint(&packet, 0); mc_put_varint(&packet, 1);
     uint8_t uuid[16] = {1, 2, 3}; mc_put_bytes(&packet, uuid, 16); mc_put_string(&packet, "VisiblePlayer");
     mc_put_varint(&packet, 0); mc_put_varint(&packet, 1); mc_put_varint(&packet, 0); mc_put_u8(&packet, 0);
