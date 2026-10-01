@@ -105,13 +105,6 @@ static EntityItem *drop_packet(MCObject *o, MCGameplayPlayer *p, ItemStack *s, b
 }
 static const NetHandlerPlayServerDependencies deps = {
     thread, active, close_container, confirm, update, held, tile, tile_nbt, drop_packet};
-static bool unused_mark(MCObject *o, EntityItem *e, int32_t n) {
-    (void)o;
-    (void)e;
-    (void)n;
-    CHECK(false);
-    return false;
-}
 static bool unused_log(MCObject *o, int32_t n) {
     (void)o;
     (void)n;
@@ -188,7 +181,7 @@ static bool unused_dead(MCObject *o, EntityItem *e) {
     return false;
 }
 static const EntityItemDependencies unusedEntityDeps = {
-    unused_mark,   unused_log,    unused_remote,      unused_inventory,
+    unused_log,    unused_remote,      unused_inventory,
     unused_name,   unused_player, unused_achievement, unused_silent,
     unused_random, unused_sound,  unused_pickup,      unused_dead};
 static ItemStack *recipe(InventoryCrafting *g, MCObject *w) {
@@ -393,6 +386,7 @@ static void creative_and_tile(void) {
     packet->slotId = -1;
     packet->stack->stackTagCompound = NULL;
     e->entity = EntityItem_nativeNew(f.game.heap, (MCObject *)p->worldObj, NULL, &unusedEntityDeps);
+    CHECK(e->entity && EntityItem_nativeInitializeDataWatcher(e->entity, NULL, NULL));
     CHECK(e->entity);
     reset(e);
     CHECK(NetHandlerPlayServer_processCreativeInventoryAction(f.handler, packet));

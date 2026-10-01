@@ -13,8 +13,10 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/network/NetHandlerPlayServer.c
     ${MC_SOURCE}/network/GameplayPacketRouter.c
     ${MC_SOURCE}/client/network/NetHandlerPlayClient.c
+    ${MC_SOURCE}/client/multiplayer/PlayerControllerMP.c
     ${MC_SOURCE}/network/transport.c
     ${MC_SOURCE}/network/play/client/C08PacketPlayerBlockPlacement.c
+    ${MC_SOURCE}/network/play/client/C08PacketPlayerBlockPlacementValue.c
     ${MC_SOURCE}/network/play/client/C0DPacketCloseWindow.c
     ${MC_SOURCE}/network/play/client/C0EPacketClickWindow.c
     ${MC_SOURCE}/network/play/client/C0FPacketConfirmTransaction.c
@@ -25,6 +27,7 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/network/play/server/S32PacketConfirmTransaction.c
     ${MC_SOURCE}/network/play/server/S1CPacketEntityMetadata.c
     ${MC_SOURCE}/entity/DataWatcher.c
+    ${MC_SOURCE}/entity/Entity.c
     ${MC_SOURCE}/nbt/nbt.c
     ${MC_SOURCE}/nbt/NBTBase.c
     ${MC_SOURCE}/nbt/NBTPrimitive.c
@@ -63,6 +66,7 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/tileentity/TileEntityBanner.c
     ${MC_SOURCE}/item/ItemArmor.c
     ${MC_SOURCE}/item/ItemMap.c
+    ${MC_SOURCE}/item/ItemEmptyMap.c
     ${MC_SOURCE}/block/block.c
     ${MC_SOURCE}/inventory/inventory.c
     ${MC_SOURCE}/inventory/InventoryCrafting.c
@@ -94,6 +98,8 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/util/MCGameplayWorld.c
     ${MC_SOURCE}/util/MCGameplayPlayer.c
     ${MC_SOURCE}/util/MCGameplayPackets.c
+    ${MC_SOURCE}/util/MCPacketQueue.c
+    ${MC_SOURCE}/util/MCGameplayClientPackets.c
     ${MC_SOURCE}/util/MCGameplayCrafting.c
     ${MC_SOURCE}/util/MCGameplayStorage.c
     ${MC_SOURCE}/util/MathHelper.c
@@ -127,7 +133,7 @@ if(WIN32)
     target_link_libraries(c919-client PRIVATE opengl32 gdi32 user32)
 endif()
 if(BUILD_TESTING)
-    foreach(name protocol packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
+    foreach(name protocol gameplay_client_frame source_packet_placement source_empty_map packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
         add_executable(test-${name} tests/test_${name}.c)
         target_link_libraries(test-${name} PRIVATE c919-core)
         c919_warnings(test-${name})

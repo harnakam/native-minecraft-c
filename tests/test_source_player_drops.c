@@ -12,6 +12,7 @@
 
 static unsigned checks;
 #define CHECK(x) do { ++checks;if(!(x)){fprintf(stderr,"drop check %u line %d: %s\n",checks,__LINE__,#x);exit(1);} }while(0)
+static ItemStack *watched(EntityItem *e) {return DataWatcher_getWatchableObjectItemStack(EntityItem_getDataWatcher(e),10);}
 typedef struct {
     MCObject object;
     MCGameplayPlayer *player;
@@ -19,7 +20,7 @@ typedef struct {
     StatBase *dropStat;
     uint64_t playerSeed,mathSeed;
     unsigned calls,failAt,randomCalls,mathCalls,marks,joins;
-    bool spawnAccepted;
+    bool spawnAccepted,omitWatcher;
 } Fixture;
 static void fixture_trace(MCObject *o,MCObjectVisitor v,void *c) {Fixture *f=(Fixture *)o;f->player=(MCGameplayPlayer *)v((MCObject *)f->player,c);f->last=(EntityItem *)v((MCObject *)f->last,c);f->dropStat=(StatBase *)v((MCObject *)f->dropStat,c);}
 static const MCObjectClass fixtureClass={"test.sourceDrop.dependencies",MCObjectHeap_plainClone,fixture_trace,NULL};
@@ -30,10 +31,11 @@ static uint64_t seed(uint64_t n) {return (n^UINT64_C(25214903917))&((UINT64_C(1)
 static uint32_t next_bits(uint64_t *state,unsigned n) {*state=(*state*UINT64_C(25214903917)+11)&((UINT64_C(1)<<48)-1);return (uint32_t)(*state>>(48-n));}
 static float random_float(MCObject *o,MCGameplayPlayer *p) {Fixture *f=(Fixture *)o;CHECK(p==f->player);if(!enter(f))return 0;++f->randomCalls;return (float)next_bits(&f->playerSeed,24)/16777216.0f;}
 static double math_random(MCObject *o) {Fixture *f=(Fixture *)o;if(!enter(f))return 0;++f->mathCalls;uint64_t a=next_bits(&f->mathSeed,26),b=next_bits(&f->mathSeed,27);return (double)((a<<27)+b)/9007199254740992.0;}
-static bool base(MCObject *o,EntityItem *e,MCObject *w) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e->health==0&&e->hoverStart==0&&e->watchedItem==NULL&&e->worldObj==w);e->entityId=1;e->width=0.6f;e->height=1.8f;f->last=e;return true;}
+static bool mark(MCObject *o,MCObject *owner,int32_t n) {EntityItem *e=(EntityItem *)owner;Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&n==10);++f->marks;return true;}
+static const DataWatcherDependencies watcherMethods={.onDataWatcherUpdate=mark};
+static bool base(MCObject *o,EntityItem *e,MCObject *w) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e->health==0&&e->hoverStart==0&&EntityItem_getDataWatcher(e)==NULL&&e->worldObj==w);e->entityId=1;e->width=0.6f;e->height=1.8f;f->last=e;if(f->omitWatcher)return true;bool ok=EntityItem_nativeInitializeDataWatcher(e,&watcherMethods,o);CHECK(e->health==0&&e->hoverStart==0&&watched(e)==NULL);return ok;}
 static bool size(MCObject *o,EntityItem *e,float width,float height) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&e->health==5);e->width=width;e->height=height;MCObjectHeap_touch(e->object.heap);return true;}
 static bool position(MCObject *o,EntityItem *e,double x,double y,double z) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&e->width==0.25f&&e->height==0.25f);e->posX=x;e->posY=y;e->posZ=z;MCObjectHeap_touch(e->object.heap);return true;}
-static bool mark(MCObject *o,EntityItem *e,int32_t n) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&n==10);++f->marks;return true;}
 /* Uncalled pickup dependencies fail explicitly if the tested source path
    unexpectedly reaches them. There are no production fallback callbacks. */
 static bool unexpected(MCObject *o) {MCObjectHeap_fail(o->heap);return false;}
@@ -48,7 +50,7 @@ static float entity_random(MCObject *o,EntityItem *e) {(void)e;unexpected(o);ret
 static bool sound(MCObject *o,MCObject *w,MCObject *p,const char *s,float volume,float pitch) {(void)w;(void)p;(void)s;(void)volume;(void)pitch;return unexpected(o);}
 static bool pickup(MCObject *o,MCObject *p,EntityItem *e,int32_t n) {(void)p;(void)e;(void)n;return unexpected(o);}
 static bool dead(MCObject *o,EntityItem *e) {(void)e;return unexpected(o);}
-static const EntityItemDependencies entityDependencies={mark,log_missing,remote,inventory,entity_name,find,entity_achievement,silent,entity_random,sound,pickup,dead};
+static const EntityItemDependencies entityDependencies={log_missing,remote,inventory,entity_name,find,entity_achievement,silent,entity_random,sound,pickup,dead};
 static const EntityItemConstructorDependencies constructorDependencies={base,math_random,size,position};
 static float eye(MCObject *o,MCGameplayPlayer *p) {Fixture *f=(Fixture *)o;CHECK(p==f->player);return enter(f)?1.62f:0;}
 static NBTString *name(MCObject *o,MCGameplayPlayer *p) {Fixture *f=(Fixture *)o;CHECK(p==f->player);return enter(f)?p->name:NULL;}
@@ -88,16 +90,24 @@ static void constructors(void) {
         EntityItem *e=type==0?EntityItem_new_world(game.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies):type==1?EntityItem_new_position(game.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies,1,2,3):EntityItem_new_stack(game.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies,1,2,3,s);
         CHECK(e&&e->health==5&&e->width==0.25f&&e->height==0.25f&&e->delayBeforeCanPickup==0&&e->dependencyContext==(MCObject *)f);
         CHECK(f->mathCalls==(type?4u:1u)&&f->marks==(type==1?0u:1u));
-        if(type==0){CHECK(e->watchedItem&&e->watchedItem->item==NULL&&e->watchedItem->stackSize==0&&e->motionY==0&&e->rotationYaw==0);}
-        else {CHECK(e->posX==1&&e->posY==2&&e->posZ==3&&e->motionY==0.20000000298023224);CHECK(type==1?e->watchedItem==NULL:e->watchedItem==s);}
+        if(type==0){CHECK(watched(e)&&watched(e)->item==NULL&&watched(e)->stackSize==0&&e->motionY==0&&e->rotationYaw==0);}
+        else {CHECK(e->posX==1&&e->posY==2&&e->posZ==3&&e->motionY==0.20000000298023224);CHECK(type==1?watched(e)==NULL:watched(e)==s);}
         CHECK(!MCObjectHeap_failed(game.heap)&&!MCObjectHeap_hasBorrowers(game.heap));CHECK(MCGameplay_free(&game));
     }
 }
 static void source_edges(void) {
+    for(unsigned type=0;type<3;type++) {
+        MCGameplay missing={0};Fixture *f=setup(&missing,1);f->omitWatcher=true;
+        ItemStack *s=ItemStack_new(missing.heap,ItemStack_registryItem(1),1,0);CHECK(s);
+        EntityItem *e=type==0?EntityItem_new_world(missing.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies):type==1?EntityItem_new_position(missing.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies,1,2,3):EntityItem_new_stack(missing.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies,1,2,3,s);
+        CHECK(!e&&MCObjectHeap_failed(missing.heap)&&f->calls==1&&f->mathCalls==0&&f->marks==0);
+        CHECK(f->last&&f->last->health==0&&f->last->hoverStart==0&&EntityItem_getDataWatcher(f->last)==NULL);
+        CHECK(MCGameplay_free(&missing));
+    }
     MCGameplay game={0};Fixture *f=setup(&game,1);MCGameplayPlayer *p=f->player;
     CHECK(!EntityPlayer_dropItem(p,NULL,true,true,NULL,NULL)&&f->calls==0&&!MCObjectHeap_failed(game.heap));ItemStack *zero=ItemStack_new(game.heap,NULL,0,0);CHECK(zero);CHECK(!EntityPlayer_dropItem(p,zero,true,true,NULL,NULL)&&f->calls==0&&!MCObjectHeap_failed(game.heap));
     ItemStack *s=ItemStack_new(game.heap,ItemStack_registryItem(1),-1,9);CHECK(s);CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,0,s));f->spawnAccepted=false;
-    EntityItem *e=EntityPlayer_dropItem(p,s,true,true,&dropDependencies,(MCObject *)f);CHECK(e&&e->watchedItem==s&&e->delayBeforeCanPickup==40&&e->thrower==p->name&&f->randomCalls==2&&f->mathCalls==4&&f->joins==1);CHECK(StatFileWriter_readStat(p->stats,f->dropStat)==1&&p->worldObj->owners->itemCount==0&&s->stackSize==-1);CHECK(InventoryPlayer_getStackInSlot(p->inventory,0)==s);CHECK(MCGameplay_free(&game));
+    EntityItem *e=EntityPlayer_dropItem(p,s,true,true,&dropDependencies,(MCObject *)f);CHECK(e&&watched(e)==s&&e->delayBeforeCanPickup==40&&e->thrower==p->name&&f->randomCalls==2&&f->mathCalls==4&&f->joins==1);CHECK(StatFileWriter_readStat(p->stats,f->dropStat)==1&&p->worldObj->owners->itemCount==0&&s->stackSize==-1);CHECK(InventoryPlayer_getStackInSlot(p->inventory,0)==s);CHECK(MCGameplay_free(&game));
     f=setup(&game,1);p=f->player;s=ItemStack_new(game.heap,ItemStack_registryItem(1),1,0);CHECK(s);e=EntityPlayer_dropPlayerItemWithRandomChoice(p,s,true,&dropDependencies,(MCObject *)f);CHECK(e&&e->thrower==NULL&&f->randomCalls==4&&f->joins==1&&StatFileWriter_readStat(p->stats,f->dropStat)==0&&p->worldObj->owners->itemCount==1);CHECK(MCGameplay_free(&game));
     for(unsigned fail=1;fail<=18;fail++) {
         f=setup(&game,9);f->failAt=fail;s=ItemStack_new(game.heap,ItemStack_registryItem(1),1,0);CHECK(s);CHECK(!EntityPlayer_dropItem(f->player,s,false,true,&dropDependencies,(MCObject *)f));CHECK(f->calls==fail&&MCObjectHeap_failed(game.heap)&&!MCObjectHeap_hasBorrowers(game.heap));CHECK(MCGameplay_free(&game));
@@ -105,8 +115,8 @@ static void source_edges(void) {
     f=setup(&game,1);MCObjectHeap *foreign=MCObjectHeap_new(1024*1024);CHECK(foreign);s=ItemStack_new(foreign,ItemStack_registryItem(1),1,0);CHECK(s&&!EntityPlayer_dropItem(f->player,s,false,false,&dropDependencies,(MCObject *)f)&&MCObjectHeap_failed(game.heap)&&f->calls==0);MCObjectHeap_free(foreign);CHECK(MCGameplay_free(&game));
 }
 static void aliases(void) {
-    MCGameplay game={0};Fixture *f=setup(&game,1);ItemStack *s=ItemStack_new(game.heap,ItemStack_registryItem(387),2,9);CHECK(s&&InventoryPlayer_setInventorySlotContents(f->player->inventory,0,s));EntityItem *e=EntityPlayer_dropItem(f->player,s,false,true,&dropDependencies,(MCObject *)f);CHECK(e&&e->watchedItem==s);CHECK(MCObjectHeap_collect(game.heap));
-    MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));MCGameplayObjects *owners=MCGameplay_get(&tx.working);MCGameplayPlayer *p=(MCGameplayPlayer *)owners->players[0];Fixture *copy=(Fixture *)p->effects;EntityItem *ce=(EntityItem *)owners->items[0];CHECK(copy!=f&&copy->player==p&&copy->last==ce&&ce!=e&&ce->dependencyContext==(MCObject *)copy&&ce->watchedItem==InventoryPlayer_getStackInSlot(p->inventory,0)&&ce->watchedItem!=s&&ce->thrower==p->name);CHECK(double_bits(ce->motionX)==double_bits(e->motionX)&&float_bits(ce->hoverStart)==float_bits(e->hoverStart));CHECK(copy->playerSeed==f->playerSeed&&copy->mathSeed==f->mathSeed);ce->watchedItem->stackSize=0;CHECK(s->stackSize==2);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&game));
+    MCGameplay game={0};Fixture *f=setup(&game,1);ItemStack *s=ItemStack_new(game.heap,ItemStack_registryItem(387),2,9);CHECK(s&&InventoryPlayer_setInventorySlotContents(f->player->inventory,0,s));EntityItem *e=EntityPlayer_dropItem(f->player,s,false,true,&dropDependencies,(MCObject *)f);CHECK(e&&watched(e)==s);CHECK(MCObjectHeap_collect(game.heap));
+    MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));MCGameplayObjects *owners=MCGameplay_get(&tx.working);MCGameplayPlayer *p=(MCGameplayPlayer *)owners->players[0];Fixture *copy=(Fixture *)p->effects;EntityItem *ce=(EntityItem *)owners->items[0];CHECK(copy!=f&&copy->player==p&&copy->last==ce&&ce!=e&&ce->dependencyContext==(MCObject *)copy&&watched(ce)==InventoryPlayer_getStackInSlot(p->inventory,0)&&watched(ce)!=s&&ce->thrower==p->name);CHECK(double_bits(ce->motionX)==double_bits(e->motionX)&&float_bits(ce->hoverStart)==float_bits(e->hoverStart));CHECK(copy->playerSeed==f->playerSeed&&copy->mathSeed==f->mathSeed);watched(ce)->stackSize=0;CHECK(s->stackSize==2);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&game));
 }
 static void math_edges(void) {
     CHECK(float_bits(MathHelper_sin(0))==0&&MathHelper_cos(0)==1);CHECK(float_bits(MathHelper_sin(-0.0f))==0);CHECK(float_bits(MathHelper_sin(NAN))==0&&float_bits(MathHelper_cos(NAN))==0);CHECK(float_bits(MathHelper_sin(-INFINITY))==0&&float_bits(MathHelper_cos(-INFINITY))==0);CHECK(float_bits(MathHelper_sin(INFINITY))==float_bits(MathHelper_cos(INFINITY)));CHECK(MathHelper_sin(INFINITY)<0);CHECK(float_bits(MathHelper_sin(FLT_MAX))==float_bits(MathHelper_sin(INFINITY)));
@@ -117,7 +127,7 @@ static void differential(bool emit) {
     for(int seedIndex=0;seedIndex<8;seedIndex++)for(int yi=0;yi<11;yi++)for(int pi=0;pi<6;pi++)for(int around=0;around<2;around++)for(int trace=0;trace<2;trace++) {
         MCGameplay game={0};Fixture *f=setup(&game,(uint64_t)seedIndex);f->player->rotationYaw=yaw[yi];f->player->rotationPitch=pitch[pi];ItemStack *s=ItemStack_new(game.heap,ItemStack_registryItem(387),seedIndex%3-1,9);CHECK(s);
         EntityItem *e=EntityPlayer_dropItem(f->player,s,around!=0,trace!=0,&dropDependencies,(MCObject *)f);
-        if(s->stackSize==0)CHECK(!e&&f->calls==0);else{CHECK(e&&e->watchedItem==s&&e->thrower==(trace?f->player->name:NULL)&&e->delayBeforeCanPickup==40&&f->marks==1&&f->randomCalls==(around?2u:4u)&&f->mathCalls==4);CHECK(StatFileWriter_readStat(f->player->stats,f->dropStat)==trace);}
+        if(s->stackSize==0)CHECK(!e&&f->calls==0);else{CHECK(e&&watched(e)==s&&e->thrower==(trace?f->player->name:NULL)&&e->delayBeforeCanPickup==40&&f->marks==1&&f->randomCalls==(around?2u:4u)&&f->mathCalls==4);CHECK(StatFileWriter_readStat(f->player->stats,f->dropStat)==trace);}
         CHECK(!MCObjectHeap_failed(game.heap)&&!MCObjectHeap_hasBorrowers(game.heap));
         if(emit)printf("%d %d %d %d %d %d %08" PRIx32 " %08" PRIx32 " %016" PRIx64 " %016" PRIx64 " %016" PRIx64 " %016" PRIx64 " %u %u\n",seedIndex,yi,pi,around,trace,e?1:0,e?float_bits(e->hoverStart):0,e?float_bits(e->rotationYaw):0,e?double_bits(e->posY):0,e?double_bits(e->motionX):0,e?double_bits(e->motionY):0,e?double_bits(e->motionZ):0,f->randomCalls,f->mathCalls);
         CHECK(MCGameplay_free(&game));

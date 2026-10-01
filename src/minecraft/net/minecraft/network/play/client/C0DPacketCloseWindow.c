@@ -25,3 +25,7 @@ bool C0DPacketCloseWindow_processPacket(C0DPacketCloseWindow *packet,INetHandler
     bool ok=handler.methods->processCloseWindow && handler.methods->processCloseWindow(handler.instance,packet);
     return mc_packet_handler_finish((MCObject *)packet,&scope,ok);
 }
+
+bool C0DPacketCloseWindow_isInstance(const MCObject *object) {
+    return object && object->klass == &packet_class;
+}

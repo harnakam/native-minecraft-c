@@ -37,3 +37,7 @@ bool C10PacketCreativeInventoryAction_processPacket(C10PacketCreativeInventoryAc
 }
 int32_t C10PacketCreativeInventoryAction_getSlotId(const C10PacketCreativeInventoryAction *packet) { return packet->slotId; }
 ItemStack *C10PacketCreativeInventoryAction_getStack(const C10PacketCreativeInventoryAction *packet) { return packet->stack; }
+
+bool C10PacketCreativeInventoryAction_isInstance(const MCObject *object) {
+    return object && object->klass == &packet_class;
+}

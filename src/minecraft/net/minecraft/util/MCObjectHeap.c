@@ -179,6 +179,14 @@ void MCObjectRootScope_end(MCObjectRootScope *scope) {
     /* Original public fields may be modified directly inside a borrow scope. */
     ++scope->heap->revision; *scope=(MCObjectRootScope){0};
 }
+bool MCObjectReadScope_begin(MCObjectReadScope *scope,MCObjectHeap *heap) {
+    if (!scope || scope->active || !heap || heap->failed || heap->adopted || heap->scopes==SIZE_MAX) return false;
+    *scope=(MCObjectReadScope){heap,true}; ++heap->scopes; return true;
+}
+void MCObjectReadScope_end(MCObjectReadScope *scope) {
+    if (!scope || !scope->active) return;
+    --scope->heap->scopes; *scope=(MCObjectReadScope){0};
+}
 typedef struct { MCObjectHeap *heap; MCObject **queue; size_t count,capacity; bool failed; } Marker;
 static MCObject *mark_child(MCObject *child,void *context) {
     Marker *marker=context;

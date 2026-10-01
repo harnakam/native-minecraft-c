@@ -185,7 +185,31 @@ static void deep_graph(void) {
     MCObjectRoot_drop(&root); CHECK(MCObjectHeap_collect(heap)); CHECK(MCObjectHeap_liveObjects(heap)==0);
     MCObjectHeap_free(heap);
 }
+static void read_guard_lifetime_and_revision(void) {
+    MCObjectHeap *heap=MCObjectHeap_new(1024*1024); CHECK(heap);
+    Node *a=node(heap,1); MCObjectRoot root={0}; CHECK(MCObjectRoot_init(&root,heap,(MCObject *)a));
+    MCObjectHeap *working=MCObjectHeap_clone(heap); CHECK(working);
+    MCObjectReadScope first={0},second={0};
+    CHECK(!MCObjectReadScope_begin(NULL,heap)); CHECK(!MCObjectReadScope_begin(&first,NULL));
+    CHECK(MCObjectReadScope_begin(&first,heap)); CHECK(!MCObjectReadScope_begin(&first,heap));
+    CHECK(MCObjectReadScope_begin(&second,heap)); CHECK(MCObjectHeap_hasBorrowers(heap));
+    CHECK(!MCObjectHeap_clone(heap) && !MCObjectHeap_collect(heap) && !MCObjectHeap_canAdopt(heap,working));
+    MCObjectReadScope_end(&first); CHECK(MCObjectHeap_hasBorrowers(heap));
+    MCObjectReadScope_end(&second); MCObjectReadScope_end(&second);
+    CHECK(!MCObjectHeap_hasBorrowers(heap) && MCObjectHeap_canAdopt(heap,working));
+    CHECK(MCObjectHeap_adopt(heap,working)); MCObjectHeap_free(working);
+    working=MCObjectHeap_clone(heap); CHECK(working);
+    CHECK(MCObjectReadScope_begin(&first,heap)); MCObjectHeap_touch(heap); MCObjectReadScope_end(&first);
+    CHECK(!MCObjectHeap_canAdopt(heap,working)); MCObjectHeap_free(working);
+    working=MCObjectHeap_clone(heap); CHECK(working);
+    CHECK(MCObjectReadScope_begin(&first,heap)); MCObjectRootScope mutation={0};
+    CHECK(MCObjectRootScope_begin(&mutation,heap));
+    ((Node *)MCObjectRoot_get(&root))->value=2; MCObjectRootScope_end(&mutation);
+    MCObjectReadScope_end(&first); CHECK(!MCObjectHeap_canAdopt(heap,working)); MCObjectHeap_free(working);
+    MCObjectRoot_drop(&root); CHECK(MCObjectHeap_collect(heap)); MCObjectHeap_free(heap);
+}
 int main(void) {
     aliases_and_cycles(); scope_and_stale_snapshot(); bounds_and_rollback(); branch_and_dropped_handles(); native_buffer_failure_rollback(); deep_graph();
+    read_guard_lifetime_and_revision();
     CHECK(destroyed>200000); printf("object heap: %u checks passed\n",checks); return 0;
 }

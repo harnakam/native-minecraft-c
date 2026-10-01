@@ -10,4 +10,5 @@ bool C10PacketCreativeInventoryAction_writePacketData(C10PacketCreativeInventory
 bool C10PacketCreativeInventoryAction_processPacket(C10PacketCreativeInventoryAction *,INetHandlerPlayServer);
 int32_t C10PacketCreativeInventoryAction_getSlotId(const C10PacketCreativeInventoryAction *);
 ItemStack *C10PacketCreativeInventoryAction_getStack(const C10PacketCreativeInventoryAction *);
+bool C10PacketCreativeInventoryAction_isInstance(const MCObject *);
 #endif

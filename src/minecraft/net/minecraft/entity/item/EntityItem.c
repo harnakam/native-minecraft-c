@@ -1,4 +1,5 @@
 #include "entity/item/EntityItem.h"
+#include "entity/Entity.h"
 #include "nbt/NBTTagCompound.h"
 #include <limits.h>
 #include <string.h>
@@ -19,16 +20,57 @@ static void trace(MCObject *o,MCObjectVisitor visitor,void *context) {
     EntityItem *entity=(EntityItem *)o;
     entity->worldObj=visitor(entity->worldObj,context);
     entity->dependencyContext=visitor(entity->dependencyContext,context);
-    entity->watchedItem=(ItemStack *)visitor((MCObject *)entity->watchedItem,context);
+    entity->dataWatcher=(DataWatcher *)visitor((MCObject *)entity->dataWatcher,context);
     entity->owner=(NBTString *)visitor((MCObject *)entity->owner,context);
     entity->thrower=(NBTString *)visitor((MCObject *)entity->thrower,context);
     entity->savedFields=(NBTTagCompound *)visitor((MCObject *)entity->savedFields,context);
 }
 static const MCObjectClass klass={"net.minecraft.entity.item.EntityItem",MCObjectHeap_plainClone,trace,NULL};
 bool EntityItem_isInstance(const MCObject *object) {return object&&object->klass==&klass;}
+DataWatcher *EntityItem_getDataWatcher(EntityItem *entity) {return entity?entity->dataWatcher:NULL;}
+static DataWatcher *required_watcher(EntityItem *entity) {
+    MCObjectHeap *heap=entity?entity->object.heap:NULL;
+    if (!EntityItem_isInstance((MCObject *)entity)||!DataWatcher_isInstance((MCObject *)entity->dataWatcher)||
+        ((MCObject *)entity->dataWatcher)->heap!=heap) {MCObjectHeap_fail(heap);return NULL;}
+    return entity->dataWatcher;
+}
+static bool inherited_watcher_update(MCObject *context,MCObject *owner,int32_t id) {
+    (void)context;
+    if (!EntityItem_isInstance(owner)) {MCObjectHeap_fail(owner?owner->heap:NULL);return false;}
+    Entity_onDataWatcherUpdate(owner,id);
+    return !MCObjectHeap_failed(owner->heap);
+}
+static const DataWatcherDependencies inherited_watcher_methods={.onDataWatcherUpdate=inherited_watcher_update};
+bool EntityItem_entityInit(EntityItem *entity) {
+    DataWatcher *watcher=required_watcher(entity);
+    return watcher&&DataWatcher_addObjectByDataType(watcher,10,5);
+}
+bool EntityItem_nativeInitializeDataWatcher(EntityItem *entity,const DataWatcherDependencies *methods,MCObject *context) {
+    MCObjectHeap *heap=entity?entity->object.heap:NULL;MCObjectRootScope scope={0};
+    if (!EntityItem_isInstance((MCObject *)entity)||entity->dataWatcher||(context&&context->heap!=heap)) {
+        MCObjectHeap_fail(heap);return false;
+    }
+    if (!MCObjectRootScope_begin(&scope,heap)) return false;
+    bool ok=MCObjectRootScope_pin(&scope,(MCObject *)entity)&&MCObjectRootScope_pin(&scope,context);
+    DataWatcher *watcher=ok?DataWatcher_new(heap,(MCObject *)entity,methods?methods:&inherited_watcher_methods,context):NULL;
+    if (watcher) {entity->dataWatcher=watcher;MCObjectHeap_touch(heap);} else ok=false;
+    /* Original Entity constructor's watcher portion. Allocation calls preserve
+       its add order; subclass health/hover/size work has not run here. */
+    MCObject *value=ok?DataWatcher_boxByte(heap,0):NULL;
+    ok=ok&&value&&DataWatcher_addObject(watcher,0,value);
+    value=ok?DataWatcher_boxShort(heap,300):NULL;
+    ok=ok&&value&&DataWatcher_addObject(watcher,1,value);
+    value=ok?DataWatcher_boxByte(heap,0):NULL;
+    ok=ok&&value&&DataWatcher_addObject(watcher,3,value);
+    NBTString *empty=ok?NBTString_literalASCII(heap,""):NULL;
+    ok=ok&&empty&&DataWatcher_addObject(watcher,2,(MCObject *)empty);
+    value=ok?DataWatcher_boxByte(heap,0):NULL;
+    ok=ok&&value&&DataWatcher_addObject(watcher,4,value)&&EntityItem_entityInit(entity);
+    ok=ok&&!MCObjectHeap_failed(heap);MCObjectRootScope_end(&scope);return ok;
+}
 static EntityItem *allocate(MCObjectHeap *heap,MCObject *world,MCObject *context,const EntityItemDependencies *d) {
     if ((world&&world->heap!=heap)||(context&&context->heap!=heap)||!d||
-        !d->markWatched||!d->logMissingItem||!d->isRemote||!d->inventory||!d->name||!d->findPlayer||
+        !d->logMissingItem||!d->isRemote||!d->inventory||!d->name||!d->findPlayer||
         !d->triggerAchievement||!d->isSilent||!d->nextFloat||!d->playSoundAtEntity||!d->onItemPickup||!d->setDead) {
         MCObjectHeap_fail(heap);return NULL;
     }
@@ -50,6 +92,9 @@ static bool constructor_begin(MCObjectRootScope *scope,MCObjectHeap *heap,MCObje
 static EntityItem *constructor_base(MCObjectHeap *heap,MCObject *world,MCObject *context,const EntityItemDependencies *d,const EntityItemConstructorDependencies *construct) {
     EntityItem *entity=allocate(heap,world,context,d); if (!entity) return NULL;
     if (!effect(entity,construct->baseConstructor(context,entity,world))) return NULL;
+    DataWatcher *watcher=required_watcher(entity);if (!watcher) return NULL;
+    WatchableObject *entry=DataWatcher_nativeGetWatchedObject(watcher,10);
+    if (!entry||WatchableObject_getObjectType(entry)!=5) {MCObjectHeap_fail(heap);return NULL;}
     entity->health=5; MCObjectHeap_touch(heap);
     double random=construct->mathRandom(context); if (MCObjectHeap_failed(heap)) return NULL;
     volatile double hover=random*3.141592653589793; hover=hover*2.0;
@@ -93,21 +138,27 @@ EntityItem *EntityItem_new_world(MCObjectHeap *heap,MCObject *world,MCObject *co
     MCObjectRootScope_end(&scope); return MCObjectHeap_failed(heap)?NULL:entity;
 }
 ItemStack *EntityItem_getEntityItem(EntityItem *entity) {
-    if (MCObjectHeap_failed(entity->object.heap)) return NULL;
-    ItemStack *stack=entity->watchedItem;
-    if (!stack) {
-        if (entity->worldObj&&!effect(entity,entity->dependencies->logMissingItem(entity->dependencyContext,entity->entityId))) return NULL;
-        return ItemStack_new_item(entity->object.heap,ItemStack_registryItem(1));
+    if (!entity) return NULL;
+    MCObjectHeap *heap=entity->object.heap;MCObjectRootScope scope={0};
+    if (!MCObjectRootScope_begin(&scope,heap)) return NULL;
+    bool ok=MCObjectRootScope_pin(&scope,(MCObject *)entity);
+    DataWatcher *watcher=ok?required_watcher(entity):NULL;
+    ItemStack *stack=watcher?DataWatcher_getWatchableObjectItemStack(watcher,10):NULL;
+    if (!MCObjectHeap_failed(heap)&&!stack) {
+        ok=!entity->worldObj||effect(entity,entity->dependencies->logMissingItem(entity->dependencyContext,entity->entityId));
+        if (ok) stack=ItemStack_new_item(heap,ItemStack_registryItem(1));
     }
-    return stack;
+    ok=ok&&!MCObjectHeap_failed(heap);MCObjectRootScope_end(&scope);return ok?stack:NULL;
 }
 bool EntityItem_setEntityItemStack(EntityItem *entity,ItemStack *stack) {
+    if (!entity) return false;
     if (MCObjectHeap_failed(entity->object.heap)) return false;
     if (stack&&stack->object.heap!=entity->object.heap) {MCObjectHeap_fail(entity->object.heap);return false;}
-    /* Native index10 watcher storage. Source updateObject retains this exact
-       reference; setObjectWatched is unconditional, including same/NULL refs. */
-    entity->watchedItem=stack;MCObjectHeap_touch(entity->object.heap);
-    return effect(entity,entity->dependencies->markWatched(entity->dependencyContext,entity,10));
+    DataWatcher *watcher=required_watcher(entity);if (!watcher) return false;
+    /* Original order. updateObject retains the exact reference and invokes
+       the inherited virtual notification only when it differs. The explicit
+       setObjectWatched afterward is unconditional, including same/NULL refs. */
+    return DataWatcher_updateObject(watcher,10,(MCObject *)stack)&&DataWatcher_setObjectWatched(watcher,10);
 }
 static int16_t java_short(int32_t value) {uint16_t bits=(uint16_t)value;int16_t out;memcpy(&out,&bits,sizeof(out));return out;}
 static int8_t java_byte(int32_t value) {uint8_t bits=(uint8_t)value;int8_t out;memcpy(&out,&bits,sizeof(out));return out;}

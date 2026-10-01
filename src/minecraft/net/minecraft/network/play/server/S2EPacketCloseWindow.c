@@ -34,3 +34,7 @@ bool S2EPacketCloseWindow_processPacket(S2EPacketCloseWindow *p, INetHandlerPlay
     bool ok = h.methods->handleCloseWindow && h.methods->handleCloseWindow(h.instance, p);
     return mc_packet_handler_finish((MCObject *)p, &scope, ok);
 }
+
+bool S2EPacketCloseWindow_isInstance(const MCObject *object) {
+    return object && object->klass == &klass;
+}

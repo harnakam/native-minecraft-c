@@ -14,7 +14,8 @@ typedef struct NetHandlerPlayClient NetHandlerPlayClient;
    NetworkManager dependencies. Controller/context are managed references;
    immutable methods must outlive the graph. getPlayer reads the controller's
    current player after the thread check, including after player replacement.
-   Queue callbacks retain actual packet objects until durable commitment. */
+   Queue callbacks retain actual packet objects until validated client-frame
+   adoption; server queues use their separate durable commitment boundary. */
 typedef struct {
     MCPacketThreadResult (*checkThreadAndEnqueue)(MCObject *context, NetHandlerPlayClient *,
                                                   MCObject *packet);

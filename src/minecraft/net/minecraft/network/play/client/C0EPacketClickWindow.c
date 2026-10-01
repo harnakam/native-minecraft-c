@@ -51,3 +51,7 @@ int32_t C0EPacketClickWindow_getUsedButton(const C0EPacketClickWindow *packet) {
 int16_t C0EPacketClickWindow_getActionNumber(const C0EPacketClickWindow *packet) { return packet->actionNumber; }
 ItemStack *C0EPacketClickWindow_getClickedItem(const C0EPacketClickWindow *packet) { return packet->clickedItem; }
 int32_t C0EPacketClickWindow_getMode(const C0EPacketClickWindow *packet) { return packet->mode; }
+
+bool C0EPacketClickWindow_isInstance(const MCObject *object) {
+    return object && object->klass == &packet_class;
+}

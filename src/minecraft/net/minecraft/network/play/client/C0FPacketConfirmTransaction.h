@@ -10,4 +10,5 @@ bool C0FPacketConfirmTransaction_writePacketData(C0FPacketConfirmTransaction *,P
 bool C0FPacketConfirmTransaction_processPacket(C0FPacketConfirmTransaction *,INetHandlerPlayServer);
 int32_t C0FPacketConfirmTransaction_getWindowId(const C0FPacketConfirmTransaction *);
 int16_t C0FPacketConfirmTransaction_getUid(const C0FPacketConfirmTransaction *);
+bool C0FPacketConfirmTransaction_isInstance(const MCObject *);
 #endif

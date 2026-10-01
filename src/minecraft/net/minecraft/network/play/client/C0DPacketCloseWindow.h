@@ -8,4 +8,5 @@ C0DPacketCloseWindow *C0DPacketCloseWindow_new(MCObjectHeap *,int32_t windowId);
 bool C0DPacketCloseWindow_readPacketData(C0DPacketCloseWindow *,PacketBuffer *);
 bool C0DPacketCloseWindow_writePacketData(C0DPacketCloseWindow *,PacketBuffer *);
 bool C0DPacketCloseWindow_processPacket(C0DPacketCloseWindow *,INetHandlerPlayServer);
+bool C0DPacketCloseWindow_isInstance(const MCObject *);
 #endif

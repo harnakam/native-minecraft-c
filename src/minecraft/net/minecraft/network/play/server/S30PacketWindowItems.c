@@ -90,3 +90,7 @@ int32_t S30PacketWindowItems_func_148911_c(const S30PacketWindowItems *p) {
 ItemStackArray *S30PacketWindowItems_getItemStacks(const S30PacketWindowItems *p) {
     return p->itemStacks;
 }
+
+bool S30PacketWindowItems_isInstance(const MCObject *object) {
+    return object && object->klass == &klass;
+}

@@ -21,4 +21,5 @@ int32_t C0EPacketClickWindow_getUsedButton(const C0EPacketClickWindow *);
 int16_t C0EPacketClickWindow_getActionNumber(const C0EPacketClickWindow *);
 ItemStack *C0EPacketClickWindow_getClickedItem(const C0EPacketClickWindow *);
 int32_t C0EPacketClickWindow_getMode(const C0EPacketClickWindow *);
+bool C0EPacketClickWindow_isInstance(const MCObject *);
 #endif

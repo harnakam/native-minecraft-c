@@ -88,7 +88,9 @@ static bool closed(MCObject *h,C0DPacketCloseWindow *p) { return record(h,(MCObj
 static bool clicked(MCObject *h,C0EPacketClickWindow *p) { return record(h,(MCObject *)p,1); }
 static bool confirmed(MCObject *h,C0FPacketConfirmTransaction *p) { return record(h,(MCObject *)p,2); }
 static bool created(MCObject *h,C10PacketCreativeInventoryAction *p) { return record(h,(MCObject *)p,3); }
-static const INetHandlerPlayServerMethods methods={closed,clicked,confirmed,created};
+static const INetHandlerPlayServerMethods methods={
+    .processCloseWindow=closed,.processClickWindow=clicked,
+    .processConfirmTransaction=confirmed,.processCreativeInventoryAction=created};
 static void handler_dispatch(void) {
     MCObjectHeap *heap=MCObjectHeap_new(1024*1024); CHECK(heap);
     Handler *handler=(Handler *)MCObjectHeap_alloc(heap,sizeof(*handler),&handler_class); CHECK(handler);

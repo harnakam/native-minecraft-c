@@ -67,3 +67,7 @@ int32_t S2FPacketSetSlot_func_149173_d(const S2FPacketSetSlot *p) {
 ItemStack *S2FPacketSetSlot_func_149174_e(const S2FPacketSetSlot *p) {
     return p->item;
 }
+
+bool S2FPacketSetSlot_isInstance(const MCObject *object) {
+    return object && object->klass == &klass;
+}

@@ -8,7 +8,7 @@
 #include "util/transfer.h"
 #include "world/map.h"
 #include "item/ItemMap.h"
-#include "network/play/client/C08PacketPlayerBlockPlacement.h"
+#include "network/play/client/C08PacketPlayerBlockPlacementValue.h"
 #include <errno.h>
 #include <math.h>
 #include <signal.h>
@@ -904,14 +904,14 @@ static void use_empty_map(mc_server *server, server_peer *peer) {
     mc_inventory_free(&next); mc_maps_free(&maps); mc_slot_free(&created); mc_crafting_effects_free(&effects);
 }
 typedef struct { mc_server *server; server_peer *peer; } C08ServerHandler;
-static void server_processPlayerBlockPlacement(void *opaque, const C08PacketPlayerBlockPlacement *packet) {
+static void server_processPlayerBlockPlacement(void *opaque, const C08PacketPlayerBlockPlacementValue *packet) {
     C08ServerHandler *handler = opaque;
     mc_server *server = handler->server; server_peer *peer = handler->peer;
-    const C08BlockPos *source_position = C08PacketPlayerBlockPlacement_getPosition(packet);
+    const C08ValueBlockPos *source_position = C08PacketPlayerBlockPlacementValue_getPosition(packet);
     if (!source_position) { disconnect_peer(peer, "Invalid block placement position."); return; }
-    C08BlockPos position = *source_position;
+    C08ValueBlockPos position = *source_position;
     int x = position.x, y = position.y, z = position.z;
-    int face = C08PacketPlayerBlockPlacement_getPlacedBlockDirection(packet);
+    int face = C08PacketPlayerBlockPlacementValue_getPlacedBlockDirection(packet);
     if (face > 5 && face != 255) { disconnect_peer(peer, "Invalid block placement direction."); return; }
     if (face == 255) { use_empty_map(server, peer); return; }
     const mc_slot *held = &peer->inventory.slots[MC_HOTBAR_START + peer->selected];
@@ -986,14 +986,14 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
         return;
     }
     if (id == 8) {
-        C08PacketPlayerBlockPlacement placement; C08PacketPlayerBlockPlacement_init(&placement);
-        if (!C08PacketPlayerBlockPlacement_readPacketData(&placement, packet) || !complete(packet))
+        C08PacketPlayerBlockPlacementValue placement; C08PacketPlayerBlockPlacementValue_init(&placement);
+        if (!C08PacketPlayerBlockPlacementValue_readPacketData(&placement, packet) || !complete(packet))
             disconnect_peer(peer, "Invalid block placement packet.");
         else {
             C08ServerHandler handler = {server, peer};
-            C08PacketPlayerBlockPlacement_processPacket(&placement, &handler, server_processPlayerBlockPlacement);
+            C08PacketPlayerBlockPlacementValue_processPacket(&placement, &handler, server_processPlayerBlockPlacement);
         }
-        C08PacketPlayerBlockPlacement_free(&placement); return;
+        C08PacketPlayerBlockPlacementValue_free(&placement); return;
     }
     if (id == 9) {
         int selected = mc_get_i16(packet);

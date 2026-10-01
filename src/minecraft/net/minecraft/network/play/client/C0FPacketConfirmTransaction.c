@@ -30,3 +30,7 @@ bool C0FPacketConfirmTransaction_processPacket(C0FPacketConfirmTransaction *pack
 }
 int32_t C0FPacketConfirmTransaction_getWindowId(const C0FPacketConfirmTransaction *packet) { return packet->windowId; }
 int16_t C0FPacketConfirmTransaction_getUid(const C0FPacketConfirmTransaction *packet) { return packet->uid; }
+
+bool C0FPacketConfirmTransaction_isInstance(const MCObject *object) {
+    return object && object->klass == &packet_class;
+}

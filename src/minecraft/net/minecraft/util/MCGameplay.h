@@ -9,9 +9,9 @@
    fields. These arrays store references, never another owning slot value. */
 typedef struct MCGameplayObjects {
     MCObject object;
-    /* Native transient commit fence. Only MCGameplay_commit advances it in an
-       adopted graph; it is not an alias ID or a serialized Minecraft field. */
-    uint64_t commitSerial;
+    /* Native graph and durable-commit fences, never serialized Minecraft fields.
+       Client frames advance only commitSerial; durable commits advance both. */
+    uint64_t commitSerial, durableSerial;
     MCObject *world;
     MCObject *players[MC_TRANSFER_MAX_PLAYERS];
     char uuids[MC_TRANSFER_MAX_PLAYERS][37];
@@ -42,6 +42,17 @@ bool MCGameplay_begin(MCGameplay *,MCGameplayTransaction *);
 /* Working handles cannot start another durable transaction. Commit operates
    only against the authoritative owner; nested disk commits are invalid. */
 bool MCGameplay_abort(MCGameplayTransaction *);
+
+/* Native client transaction boundary, not an original Minecraft method. Both
+   graphs must contain the same native remote World owner. validate examines the
+   complete working graph under a RootScope, including every outgoing packet.
+   No disk journal is written. Adoption preserves aliases across all roots and
+   invalidates all previous borrowed pointers. A working borrow refuses the call
+   without consuming it; otherwise every outcome consumes the transaction.
+   The validator must not mutate the parent or retain borrowed pointers. */
+typedef bool (*MCGameplayClientValidator)(MCGameplayObjects *, void *context);
+bool MCGameplay_acceptClientFrame(MCGameplayTransaction *, MCGameplayClientValidator,
+                                  void *context, char *error, size_t errorSize);
 
 /* Encoders serialize the working graph directly. They may allocate within that
    heap, but cannot modify the parent graph or retain borrowed references. Native

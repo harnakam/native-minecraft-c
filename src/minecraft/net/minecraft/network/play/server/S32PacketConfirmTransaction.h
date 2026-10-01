@@ -18,4 +18,5 @@ bool S32PacketConfirmTransaction_processPacket(S32PacketConfirmTransaction *,
 int32_t S32PacketConfirmTransaction_getWindowId(const S32PacketConfirmTransaction *);
 int16_t S32PacketConfirmTransaction_getActionNumber(const S32PacketConfirmTransaction *);
 bool S32PacketConfirmTransaction_func_148888_e(const S32PacketConfirmTransaction *);
+bool S32PacketConfirmTransaction_isInstance(const MCObject *);
 #endif

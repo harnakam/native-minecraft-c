@@ -15,4 +15,5 @@ bool S30PacketWindowItems_writePacketData(S30PacketWindowItems *, PacketBuffer *
 bool S30PacketWindowItems_processPacket(S30PacketWindowItems *, INetHandlerPlayClient);
 int32_t S30PacketWindowItems_func_148911_c(const S30PacketWindowItems *);
 ItemStackArray *S30PacketWindowItems_getItemStacks(const S30PacketWindowItems *);
+bool S30PacketWindowItems_isInstance(const MCObject *);
 #endif

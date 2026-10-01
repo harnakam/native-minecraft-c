@@ -11,4 +11,5 @@ S2EPacketCloseWindow *S2EPacketCloseWindow_new(MCObjectHeap *, int32_t windowId)
 bool S2EPacketCloseWindow_readPacketData(S2EPacketCloseWindow *, PacketBuffer *);
 bool S2EPacketCloseWindow_writePacketData(S2EPacketCloseWindow *, PacketBuffer *);
 bool S2EPacketCloseWindow_processPacket(S2EPacketCloseWindow *, INetHandlerPlayClient);
+bool S2EPacketCloseWindow_isInstance(const MCObject *);
 #endif

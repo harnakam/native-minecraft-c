@@ -1,4 +1,5 @@
 #include "util/MCGameplay.h"
+#include "util/MCGameplayWorld.h"
 #include <stdio.h>
 #include <string.h>
 static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
@@ -79,6 +80,45 @@ bool MCGameplay_abort(MCGameplayTransaction *transaction) {
     if (!transaction || !MCGameplay_free(&transaction->working)) return false;
     *transaction=(MCGameplayTransaction){0}; return true;
 }
+static bool remote_world(MCGameplayObjects *objects) {
+    return objects && MCGameplayWorld_isInstance(objects->world) &&
+        ((MCGameplayWorld *)objects->world)->owners == objects &&
+        ((MCGameplayWorld *)objects->world)->remote;
+}
+bool MCGameplay_acceptClientFrame(MCGameplayTransaction *transaction,
+    MCGameplayClientValidator validate, void *context, char *error, size_t size) {
+    if (transaction && MCObjectHeap_hasBorrowers(transaction->working.heap)) {
+        message(error,size,"Release working gameplay pointers before accepting a client frame");
+        return false;
+    }
+    if (!transaction || !transaction->active || !transaction->parent || !validate) {
+        message(error,size,"Client frame requires an active transaction and validator");
+        MCGameplay_abort(transaction); return false;
+    }
+    MCGameplay *parent=transaction->parent,*working=&transaction->working;
+    MCGameplayObjects *previous=MCGameplay_get(parent),*objects=MCGameplay_get(working);
+    bool ok=!parent->fatal && !parent->snapshot && !working->fatal && working->snapshot &&
+        MCObjectHeap_canAdopt(parent->heap,working->heap) && remote_world(previous) &&
+        remote_world(objects) && previous->commitSerial!=UINT64_MAX &&
+        objects->commitSerial==previous->commitSerial &&
+        objects->durableSerial==previous->durableSerial;
+    MCObjectRootScope scope={0}; MCObjectReadScope parentScope={0};
+    if (ok) ok=MCObjectReadScope_begin(&parentScope,parent->heap);
+    if (ok) ok=MCObjectRootScope_begin(&scope,working->heap);
+    if (ok) ok=validate(objects,context);
+    ok=ok && !working->fatal && !MCObjectHeap_failed(working->heap) &&
+        remote_world(objects) && objects->commitSerial==previous->commitSerial &&
+        objects->durableSerial==previous->durableSerial;
+    if (ok) { ++objects->commitSerial; MCObjectHeap_touch(working->heap); }
+    MCObjectRootScope_end(&scope);
+    MCObjectReadScope_end(&parentScope);
+    ok=ok && !parent->fatal && !working->fatal &&
+        MCObjectHeap_canAdopt(parent->heap,working->heap);
+    if (ok) ok=MCObjectHeap_adopt(parent->heap,working->heap);
+    if (!ok) message(error,size,"Client frame validation failed or its object graph is stale");
+    MCGameplay_abort(transaction);
+    return ok;
+}
 MCGameplayCommit MCGameplay_commit(MCGameplayTransaction *transaction,const char *path,
     const MCGameplayEncoders *encoders,void *context,char *error,size_t size) {
     if (transaction && MCObjectHeap_hasBorrowers(transaction->working.heap)) {
@@ -98,21 +138,29 @@ MCGameplayCommit MCGameplay_commit(MCGameplayTransaction *transaction,const char
     }
     mc_nbt players[MC_TRANSFER_MAX_PLAYERS]={{0}},items={0},maps={0};
     mc_transfer_player group[MC_TRANSFER_MAX_PLAYERS]; size_t count=0;
-    MCObjectRootScope scope={0};
-    bool encoded=MCObjectRootScope_begin(&scope,working->heap);
+    MCObjectRootScope scope={0}; MCObjectReadScope parentScope={0};
+    bool encoded=MCObjectReadScope_begin(&parentScope,parent->heap) &&
+        MCObjectRootScope_begin(&scope,working->heap);
     MCGameplayObjects *objects=MCGameplay_get(working);
     MCGameplayObjects *previous=MCGameplay_get(parent);
     encoded=encoded && objects!=NULL && previous!=NULL &&
-        previous->commitSerial!=UINT64_MAX && objects->commitSerial==previous->commitSerial;
+        previous->commitSerial!=UINT64_MAX && objects->commitSerial==previous->commitSerial &&
+        objects->durableSerial==previous->durableSerial;
     for (size_t i=0;i<MC_TRANSFER_MAX_PLAYERS && encoded;i++) if (objects->players[i]) {
         encoded=encoders->player(objects,i,&players[count],context);
         group[count]=(mc_transfer_player){objects->uuids[i],&players[count]}; ++count;
     }
     if (encoded) encoded=encoders->items(objects,&items,context);
     if (encoded && encoders->maps) encoded=encoders->maps(objects,&maps,context);
-    encoded=encoded && !working->fatal && !MCObjectHeap_failed(working->heap);
-    if (encoded) { ++objects->commitSerial; MCObjectHeap_touch(working->heap); }
+    encoded=encoded && !working->fatal && !MCObjectHeap_failed(working->heap) &&
+        objects->commitSerial==previous->commitSerial &&
+        objects->durableSerial==previous->durableSerial;
+    if (encoded) {
+        ++objects->commitSerial; objects->durableSerial=objects->commitSerial;
+        MCObjectHeap_touch(working->heap);
+    }
     MCObjectRootScope_end(&scope);
+    MCObjectReadScope_end(&parentScope);
     bool committed=false;
     bool ok=false;
     if (!encoded) message(error,size,"Could not encode the complete gameplay object graph");

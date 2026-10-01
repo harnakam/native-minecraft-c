@@ -2,7 +2,7 @@
 #include "renderer.h"
 #include "block/block.h"
 #include "crafting/crafting.h"
-#include "network/play/client/C08PacketPlayerBlockPlacement.h"
+#include "network/play/client/C08PacketPlayerBlockPlacementValue.h"
 #include <ctype.h>
 #include <errno.h>
 #include <float.h>
@@ -988,14 +988,14 @@ bool mc_client_ray(const mc_client *c, int *x, int *y, int *z, int *face) {
     return false;
 }
 
-static bool send_placement(mc_client *c,C08BlockPos position,int face,const mc_slot *held,bool air) {
-    C08PacketPlayerBlockPlacement placement; C08PacketPlayerBlockPlacement_init(&placement);
+static bool send_placement(mc_client *c,C08ValueBlockPos position,int face,const mc_slot *held,bool air) {
+    C08PacketPlayerBlockPlacementValue placement; C08PacketPlayerBlockPlacementValue_init(&placement);
     const mc_slot *stack=held->item_id<0 ? NULL : held;
-    bool ready=air ? C08PacketPlayerBlockPlacement_constructUseItem(&placement,stack) :
-        C08PacketPlayerBlockPlacement_construct(&placement,&position,face,stack,0.5f,0.5f,0.5f);
+    bool ready=air ? C08PacketPlayerBlockPlacementValue_constructUseItem(&placement,stack) :
+        C08PacketPlayerBlockPlacementValue_construct(&placement,&position,face,stack,0.5f,0.5f,0.5f);
     mc_buf packet; start_packet(&packet,0x08);
-    if (!ready || !C08PacketPlayerBlockPlacement_writePacketData(&placement,&packet)) packet.failed=true;
-    C08PacketPlayerBlockPlacement_free(&placement);
+    if (!ready || !C08PacketPlayerBlockPlacementValue_writePacketData(&placement,&packet)) packet.failed=true;
+    C08PacketPlayerBlockPlacementValue_free(&placement);
     return send_packet(c,&packet);
 }
 static void edit_block(mc_client *c, bool place) {
@@ -1006,7 +1006,7 @@ static void edit_block(mc_client *c, bool place) {
     if (!hit && !use_map) return;
     mc_buf packet;
     if (hit) {
-        if (place) { if (!send_placement(c,(C08BlockPos){x,y,z},face,held,false)) return; }
+        if (place) { if (!send_placement(c,(C08ValueBlockPos){x,y,z},face,held,false)) return; }
         else {
             start_packet(&packet,0x07); mc_put_varint(&packet,0);
             mc_put_position(&packet,x,y,z); mc_put_u8(&packet,(uint8_t)face);
@@ -1015,7 +1015,7 @@ static void edit_block(mc_client *c, bool place) {
     }
     /* A non-activating block use falls through to the held empty map's air
        use, matching the same right-click path when no block is in reach. */
-    if (use_map && !send_placement(c,(C08BlockPos){-1,-1,-1},255,held,true)) return;
+    if (use_map && !send_placement(c,(C08ValueBlockPos){-1,-1,-1},255,held,true)) return;
     start_packet(&packet,0x0a); send_packet(c,&packet);
 }
 

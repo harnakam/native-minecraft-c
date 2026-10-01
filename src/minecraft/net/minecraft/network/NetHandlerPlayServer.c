@@ -344,7 +344,10 @@ static bool creative_dispatch(MCObject *h, C10PacketCreativeInventoryAction *p) 
     return NetHandlerPlayServer_processCreativeInventoryAction((NetHandlerPlayServer *)h, p);
 }
 INetHandlerPlayServer NetHandlerPlayServer_asHandler(NetHandlerPlayServer *handler) {
-    static const INetHandlerPlayServerMethods methods = {close_dispatch, click_dispatch,
-                                                         confirm_dispatch, creative_dispatch};
+    static const INetHandlerPlayServerMethods methods = {
+        .processCloseWindow=close_dispatch,
+        .processClickWindow=click_dispatch,
+        .processConfirmTransaction=confirm_dispatch,
+        .processCreativeInventoryAction=creative_dispatch};
     return (INetHandlerPlayServer){(MCObject *)handler, &methods};
 }

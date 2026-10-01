@@ -61,3 +61,7 @@ int16_t S32PacketConfirmTransaction_getActionNumber(const S32PacketConfirmTransa
 bool S32PacketConfirmTransaction_func_148888_e(const S32PacketConfirmTransaction *p) {
     return p->field_148893_c;
 }
+
+bool S32PacketConfirmTransaction_isInstance(const MCObject *object) {
+    return object && object->klass == &klass;
+}

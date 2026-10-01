@@ -26,6 +26,10 @@ struct MCObject { MCObjectHeap *heap; const MCObjectClass *klass; };
 typedef struct { MCObjectHeap *heap; uint64_t id; } MCObjectRoot;
 /* Initialize with {0} before the first begin; end clears the scope for reuse. */
 typedef struct { MCObjectHeap *heap; bool active; } MCObjectRootScope;
+/* Native lifetime-only guard for an immutable parent graph. Unlike a mutable
+   RootScope, ending this guard does not invalidate snapshots by itself. Explicit
+   touch/mutable scopes still do. Never modify fields through a read guard. */
+typedef struct { MCObjectHeap *heap; bool active; } MCObjectReadScope;
 
 MCObjectHeap *MCObjectHeap_new(size_t byte_budget);
 void MCObjectHeap_free(MCObjectHeap *heap);
@@ -58,16 +62,18 @@ bool MCObjectRoot_rebind(MCObjectRoot *destination, MCObjectHeap *heap, const MC
 bool MCObjectRootScope_begin(MCObjectRootScope *scope, MCObjectHeap *heap);
 bool MCObjectRootScope_pin(MCObjectRootScope *scope, MCObject *object);
 void MCObjectRootScope_end(MCObjectRootScope *scope);
+bool MCObjectReadScope_begin(MCObjectReadScope *, MCObjectHeap *);
+void MCObjectReadScope_end(MCObjectReadScope *);
 
 /* No collection or adoption while any borrowed-pointer scope is active.
    Trace marking and snapshot remapping are iterative and cycle-aware. */
 bool MCObjectHeap_collect(MCObjectHeap *heap);
 MCObjectHeap *MCObjectHeap_clone(const MCObjectHeap *source);
-/* Single-writer preflight before a durable commit. This performs every adoption
+/* Single-writer preflight before a native graph adoption. This performs every adoption
    check without changing either graph. No source mutation may follow the check
    until adoption finishes. */
 bool MCObjectHeap_canAdopt(const MCObjectHeap *target,const MCObjectHeap *working);
-/* Replace the target graph atomically after durable commitment. Existing
+/* Replace the target graph atomically at the caller's validated commit boundary. Existing
    target root handles retain their IDs. All pointers borrowed before this
    operation become invalid. Native working-owner handles are rebound to the
    target by root ID before the empty working heap is freed. */

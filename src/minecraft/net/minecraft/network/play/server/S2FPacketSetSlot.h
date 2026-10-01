@@ -15,4 +15,5 @@ bool S2FPacketSetSlot_processPacket(S2FPacketSetSlot *, INetHandlerPlayClient);
 int32_t S2FPacketSetSlot_func_149175_c(const S2FPacketSetSlot *);
 int32_t S2FPacketSetSlot_func_149173_d(const S2FPacketSetSlot *);
 ItemStack *S2FPacketSetSlot_func_149174_e(const S2FPacketSetSlot *);
+bool S2FPacketSetSlot_isInstance(const MCObject *);
 #endif

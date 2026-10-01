@@ -128,10 +128,12 @@ class DropCraftingTests(unittest.TestCase):
             self.assertIsNotNone(picked)
             self.assertEqual(sum(s[1] for s in picked if s[0] == 276 and s[2] == 7 and s[3] == metadata()), 1)
             other.wait(0x13, lambda p: eid == read_vint(p, read_vint(p)[1])[0])
-            self.assertEqual(item_snapshot(self.world), [])
+        self.assertEqual(item_snapshot(self.world), [])
 
     def test_close_drops_cursor_and_inputs_durably_without_result_duplication(self):
-        with running_server(self.world) as port:
+        # Inspect the close action's committed creation snapshot, without a
+        # graceful POSIX shutdown saving later in-memory delay decrements.
+        with running_server(self.world, crash=True) as port:
             owner = self.peer(port, "CloseOwner")
             owner.creative(1, 17, 2)
             owner.creative(2, 264, 3)
@@ -145,17 +147,18 @@ class DropCraftingTests(unittest.TestCase):
             self.assertIn((276, 1, 7, metadata()), owner.dropped_slots())
             self.assertIn((17, 2, 0, b"\0"), owner.dropped_slots())
             self.assertIn((264, 3, 0, b"\0"), owner.dropped_slots())
-            entities = item_snapshot(self.world)
-            self.assertEqual(len(entities), 3)
-            self.assertTrue(all(e["PickupDelay"] == 40 for e in entities))
-            self.assertTrue(all("Thrower" not in e for e in entities))
+        entities = item_snapshot(self.world)
+        self.assertEqual(len(entities), 3)
+        self.assertTrue(all(e["PickupDelay"] == 40 for e in entities))
+        self.assertTrue(all("Thrower" not in e for e in entities))
         with running_server(self.world) as port:
             restored = self.peer(port, "CloseOwner")
             slots = inventory_payload(next(p for kind, p in restored.initial if kind == 0x30))
             self.assertTrue(all(s[0] == -1 for s in slots[:5]))
-            self.assertEqual(sum(e["Item"]["Count"] for e in item_snapshot(self.world)), 6)
-            self.assertEqual(len({e["C919EntityId"] for e in item_snapshot(self.world)}), 3)
-            self.assertNotIn(restored.entity, {e["C919EntityId"] for e in item_snapshot(self.world)})
+        entities = item_snapshot(self.world)
+        self.assertEqual(sum(e["Item"]["Count"] for e in entities), 6)
+        self.assertEqual(len({e["C919EntityId"] for e in entities}), 3)
+        self.assertNotIn(restored.entity, {e["C919EntityId"] for e in entities})
 
     def test_crafting_result_click_shift_number_clone_and_drop(self):
         with running_server(self.world) as port:
@@ -188,9 +191,9 @@ class DropCraftingTests(unittest.TestCase):
             peer.send(0x0d, b"\0")
             slots = inventory_payload(peer.wait(0x30))
             self.assertTrue(all(s[0] == -1 for s in slots[:5]))
-            counts = [(e["Item"]["id"], e["Item"]["Count"]) for e in item_snapshot(self.world)]
-            self.assertIn(("minecraft:planks", 64), counts)
-            self.assertIn(("minecraft:log", 1), counts)
+        counts = [(e["Item"]["id"], e["Item"]["Count"]) for e in item_snapshot(self.world)]
+        self.assertIn(("minecraft:planks", 64), counts)
+        self.assertIn(("minecraft:log", 1), counts)
 
     def test_full_creative_inventory_consumes_pickup_as_target_sink(self):
         with running_server(self.world) as port:
@@ -212,7 +215,7 @@ class DropCraftingTests(unittest.TestCase):
             collector.wait(0x0d, lambda p: read_vint(p)[0] == eid)
             snapshots = [inventory_payload(p) for kind, p in collector.observed if kind == 0x30]
             self.assertTrue(all(s[:3] == (3, 64, 0) for s in snapshots[-1][9:45]))
-            self.assertEqual(item_snapshot(self.world), [], "Creative discards a full-inventory remainder in 1.8")
+        self.assertEqual(item_snapshot(self.world), [], "Creative discards a full-inventory remainder in 1.8")
 
     def test_outside_click_drops_one_then_all_of_cursor(self):
         with running_server(self.world) as port:
@@ -225,7 +228,7 @@ class DropCraftingTests(unittest.TestCase):
             _, cursor = peer.click(-999, 0, 3, 0)
             self.assertEqual(cursor[0], -1)
             self.assertIn((264, 6, 0, metadata()), peer.dropped_slots())
-            self.assertEqual(sum(e["Item"]["Count"] for e in item_snapshot(self.world)), 7)
+        self.assertEqual(sum(e["Item"]["Count"] for e in item_snapshot(self.world)), 7)
 
     def test_world_merge_ignores_damage_only_for_items_without_subtypes(self):
         with running_server(self.world) as port:
@@ -239,25 +242,24 @@ class DropCraftingTests(unittest.TestCase):
                 self.assertEqual(actual, (item, 1, damage, metadata()))
                 spawned.append(eid)
             move(peer, x + 8, y, z)
-            deadline = time.monotonic() + 4
-            while time.monotonic() < deadline:
-                entities = item_snapshot(self.world)
-                gold = [e for e in entities if e["Item"]["id"] == "minecraft:gold_ingot"]
-                if len(gold) == 1 and gold[0]["Item"]["Count"] == 2:
-                    break
-                time.sleep(0.05)
-            else:
-                self.fail("same-NBT gold drops did not merge")
-            wool = [e for e in entities if e["Item"]["id"] == "minecraft:wool"]
-            self.assertEqual(sorted((e["Item"]["Damage"], e["Item"]["Count"]) for e in wool),
-                             [(7, 1), (8, 1)])
-            self.assertEqual(len(entities), 3)
-            merged_id = gold[0]["C919EntityId"]
-            peer.wait(0x1c, lambda p: item_packet(p)[0] == merged_id and item_packet(p)[1][1] == 2)
+            merged = peer.wait(0x1c, lambda p: item_packet(p)[1][:2] == (266, 2), seconds=4)
+            merged_id = item_packet(merged)[0]
             removed_id = next(eid for eid in spawned[:2] if eid != merged_id)
             destroyed = lambda p: removed_id == read_vint(p, read_vint(p)[1])[0]
             if not any(kind == 0x13 and destroyed(p) for kind, p in peer.observed):
                 peer.wait(0x13, destroyed)
+        # The packets follow durable commitment. Stop the checkpoint writer
+        # before opening its Windows target name; the observer must not make a
+        # valid server transfer fail with MoveFileEx sharing/access contention.
+        entities = item_snapshot(self.world)
+        gold = [e for e in entities if e["Item"]["id"] == "minecraft:gold_ingot"]
+        self.assertEqual(len(gold), 1)
+        self.assertEqual(gold[0]["Item"]["Count"], 2)
+        self.assertEqual(gold[0]["C919EntityId"], merged_id)
+        wool = [e for e in entities if e["Item"]["id"] == "minecraft:wool"]
+        self.assertEqual(sorted((e["Item"]["Damage"], e["Item"]["Count"]) for e in wool),
+                         [(7, 1), (8, 1)])
+        self.assertEqual(len(entities), 3)
 
     def test_invalid_existing_item_snapshot_refuses_startup_without_replacing_file(self):
         with running_server(self.world):
@@ -279,12 +281,12 @@ class DropCraftingTests(unittest.TestCase):
             blocked.mkdir()
             owner.send(7, b"\x04" + position(0, 0, 0) + b"\0")
             owner.wait(0x40)
-            player = decode_nbt(gzip.decompress(player_file(self.world, "AbortTransfer").read_bytes()))
-            held = next(e for e in player["Inventory"] if e["Slot"] == 0)
-            self.assertEqual((held["id"], held["Count"], held["Damage"]), ("minecraft:diamond_sword", 1, 7))
-            self.assertEqual(item_snapshot(self.world), [])
-            self.assertFalse(Path(str(self.world) + ".transfer.dat").exists())
             blocked.rmdir()
+        player = decode_nbt(gzip.decompress(player_file(self.world, "AbortTransfer").read_bytes()))
+        held = next(e for e in player["Inventory"] if e["Slot"] == 0)
+        self.assertEqual((held["id"], held["Count"], held["Damage"]), ("minecraft:diamond_sword", 1, 7))
+        self.assertEqual(item_snapshot(self.world), [])
+        self.assertFalse(Path(str(self.world) + ".transfer.dat").exists())
 
     def test_checkpoint_failure_recovers_committed_drop_exactly_once(self):
         with running_server(self.world) as port:
@@ -301,13 +303,14 @@ class DropCraftingTests(unittest.TestCase):
             restored = self.peer(port, "RecoverTransfer")
             slots = inventory_payload(next(p for kind, p in restored.initial if kind == 0x30))
             self.assertEqual(slots[36][0], -1)
-            entities = item_snapshot(self.world)
-            self.assertEqual(len(entities), 1)
-            self.assertEqual((entities[0]["Item"]["id"], entities[0]["Item"]["Count"]), ("minecraft:diamond_sword", 1))
-            self.assertEqual(entities[0]["Item"]["tag"]["display"]["Name"], "日本語の剣")
             self.assertFalse(Path(str(self.world) + ".transfer.dat").exists())
+        entities = item_snapshot(self.world)
+        self.assertEqual(len(entities), 1)
+        self.assertEqual((entities[0]["Item"]["id"], entities[0]["Item"]["Count"]), ("minecraft:diamond_sword", 1))
+        self.assertEqual(entities[0]["Item"]["tag"]["display"]["Name"], "日本語の剣")
         with running_server(self.world):
-            self.assertEqual(len(item_snapshot(self.world)), 1)
+            pass
+        self.assertEqual(len(item_snapshot(self.world)), 1)
 
 
 if __name__ == "__main__":
