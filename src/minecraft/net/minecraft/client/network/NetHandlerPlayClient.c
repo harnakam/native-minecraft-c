@@ -5,11 +5,13 @@ static void handler_trace(MCObject *o, MCObjectVisitor v, void *context) {
     h->gameController = v(h->gameController, context);
     h->dependencyContext = v(h->dependencyContext, context);
     h->clientWorldController = (MCGameplayWorld *)v((MCObject *)h->clientWorldController, context);
+    h->profile=(NativeGameProfile *)v((MCObject *)h->profile,context);
 }
 static const MCObjectClass handler_class = {"net.minecraft.client.network.NetHandlerPlayClient",
                                             MCObjectHeap_plainClone, handler_trace, NULL};
 bool NetHandlerPlayClient_isInstance(const MCObject *object) {
-    return object && object->klass == &handler_class;
+    return object && object->klass == &handler_class&&
+        MCObjectHeap_objectSize(object)>=sizeof(NetHandlerPlayClient);
 }
 static bool failed(MCObjectHeap *heap) {
     MCObjectHeap_fail(heap);
@@ -23,12 +25,10 @@ static bool dependencies_ready(const NetHandlerPlayClientDependencies *d) {
            d->selectedCreativeTabIndex && d->inventoryCreativeTabIndex &&
            d->closeScreenAndDropStack && d->addToSendQueue;
 }
-NetHandlerPlayClient *NetHandlerPlayClient_nativeNew(MCGameplayPlayer *player, MCObject *controller,
-                                                     MCObject *context,
-                                                     const NetHandlerPlayClientDependencies *d) {
-    MCObjectHeap *heap = player ? player->living.entity.object.heap : NULL;
-    if (!heap || !MCGameplayPlayer_isInstance((MCObject *)player) || !((MCGameplayWorld *)(player->living.entity.worldObj)) ||
-        !same_heap(heap, (MCObject *)((MCGameplayWorld *)(player->living.entity.worldObj))) || !((MCGameplayWorld *)(player->living.entity.worldObj))->remote ||
+NetHandlerPlayClient *NetHandlerPlayClient_nativeBootstrap(MCObjectHeap *heap,NativeGameProfile *profile,
+    MCObject *controller,MCObject *context,const NetHandlerPlayClientDependencies *d) {
+    if (!heap || (profile&&(!NativeGameProfile_isInstance((MCObject *)profile)||
+        !same_heap(heap,(MCObject *)profile)))||
         !controller || !same_heap(heap, controller) || !same_heap(heap, context) ||
         !dependencies_ready(d)) {
         failed(heap);
@@ -37,23 +37,56 @@ NetHandlerPlayClient *NetHandlerPlayClient_nativeNew(MCGameplayPlayer *player, M
     MCObjectRootScope scope = {0};
     if (!MCObjectRootScope_begin(&scope, heap))
         return NULL;
+    bool ok=MCObjectRootScope_pin(&scope,(MCObject *)profile)&&
+        MCObjectRootScope_pin(&scope,controller)&&MCObjectRootScope_pin(&scope,context);
     NetHandlerPlayClient *h =
-        (NetHandlerPlayClient *)MCObjectHeap_alloc(heap, sizeof(*h), &handler_class);
+        ok?(NetHandlerPlayClient *)MCObjectHeap_alloc(heap, sizeof(*h), &handler_class):NULL;
     if (h) {
         h->gameController = controller;
         h->dependencyContext = context;
-        h->clientWorldController = ((MCGameplayWorld *)(player->living.entity.worldObj));
+        h->profile=profile;
         h->dependencies = d;
-        player->handler = (MCObject *)h;
         MCObjectHeap_touch(heap);
     }
     MCObjectRootScope_end(&scope);
     return h;
 }
+bool NetHandlerPlayClient_nativeBindPlayer(NetHandlerPlayClient *h,MCGameplayPlayer *player) {
+    MCObjectHeap *heap=h?h->object.heap:NULL;
+    if(!NetHandlerPlayClient_isInstance((MCObject *)h)||
+        !MCGameplayPlayer_isInstance((MCObject *)player)||!same_heap(heap,(MCObject *)player))return failed(heap);
+    MCObject *world=player->living.entity.worldObj;
+    if(!MCGameplayWorld_isInstance(world)||!same_heap(heap,world)||
+        !((MCGameplayWorld *)world)->remote)return failed(heap);
+    MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,heap))return false;
+    bool ok=MCObjectRootScope_pin(&scope,(MCObject *)h)&&MCObjectRootScope_pin(&scope,(MCObject *)player)&&
+        MCObjectRootScope_pin(&scope,world);
+    if(ok) {h->clientWorldController=(MCGameplayWorld *)world;player->handler=(MCObject *)h;MCObjectHeap_touch(heap);}
+    MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(heap);
+}
+NativeGameProfile *NetHandlerPlayClient_getGameProfile(NetHandlerPlayClient *h) {
+    MCObjectHeap *heap=h?h->object.heap:NULL;
+    if(!NetHandlerPlayClient_isInstance((MCObject *)h)) {failed(heap);return NULL;}
+    MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,heap))return NULL;
+    NativeGameProfile *profile=h->profile;
+    bool ok=!profile||(NativeGameProfile_isInstance((MCObject *)profile)&&
+        MCObjectRootScope_pin(&scope,(MCObject *)profile));
+    if(!ok)failed(heap);
+    MCObjectRootScope_end(&scope);return ok?profile:NULL;
+}
+NetHandlerPlayClient *NetHandlerPlayClient_nativeNew(MCGameplayPlayer *player,MCObject *controller,
+    MCObject *context,const NetHandlerPlayClientDependencies *d) {
+    MCObjectHeap *heap=player?player->living.entity.object.heap:NULL;
+    if(!MCGameplayPlayer_isInstance((MCObject *)player)) {failed(heap);return NULL;}
+    MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,heap))return NULL;
+    NetHandlerPlayClient *h=NetHandlerPlayClient_nativeBootstrap(heap,player->gameProfile,controller,context,d);
+    bool ok=h&&NetHandlerPlayClient_nativeBindPlayer(h,player);
+    MCObjectRootScope_end(&scope);return ok?h:NULL;
+}
 static MCPacketThreadResult begin(NetHandlerPlayClient *h, MCObject *packet,
                                   MCObjectRootScope *scope) {
     MCObjectHeap *heap = h ? h->object.heap : NULL;
-    if (!heap || h->object.klass != &handler_class || !packet || !same_heap(heap, packet) ||
+    if (!heap || !NetHandlerPlayClient_isInstance((MCObject *)h) || !packet || !same_heap(heap, packet) ||
         !h->gameController || !same_heap(heap, h->gameController) ||
         !same_heap(heap, h->dependencyContext) || !dependencies_ready(h->dependencies)) {
         failed(heap);

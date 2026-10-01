@@ -161,13 +161,17 @@ static const PlayerControllerMPActionsDependencies action_deps={.getPlayer=get_p
     .addHeldItemToSendQueue=queue_held,.addCreativeItemToSendQueue=queue_creative,
     .addPlacementToSendQueue=queue_place,.itemUse=&item_use};
 static const EntityPlayerSPDependencies sp_deps={.addToSendQueue=queue_any,.blockPosOrigin=origin,.displayGuiScreenNull=display_null};
+static NativeGameProfile *source_profile(MCObject *context,NetHandlerPlayClient *handler) {
+    (void)context;return NetHandlerPlayClient_getGameProfile(handler);
+}
 static bool walking_actor(MCObject *c,EntityPlayerSP *sp) {
     MCClientBindings *b=binding(c);
-    return b && b->sp==sp && sp->nativeActor==b->player;
+    return b && b->sp==sp && EntityPlayerSP_isInstance((MCObject *)sp) &&
+        EntityPlayerSP_asPlayer(sp)==b->player && ((MCObject *)sp)->heap==c->heap;
 }
 static bool walking_sprint(MCObject *c,EntityPlayerSP *sp,bool *out) {
     if(!walking_actor(c,sp)||!out)return false;
-    *out=Entity_isSprinting(&sp->nativeActor->living.entity);return !MCObjectHeap_failed(c->heap);
+    *out=Entity_isSprinting(&EntityPlayerSP_asPlayer(sp)->living.entity);return !MCObjectHeap_failed(c->heap);
 }
 static bool walking_sneak(MCObject *c,EntityPlayerSP *sp,bool *out) {
     if(!walking_actor(c,sp)||!out)return false;
@@ -179,7 +183,7 @@ static bool walking_view(MCObject *c,EntityPlayerSP *sp,bool *out) {
     *out=true;return true;
 }
 static AxisAlignedBB *walking_box(MCObject *c,EntityPlayerSP *sp) {
-    return walking_actor(c,sp)?Entity_getEntityBoundingBox(&sp->nativeActor->living.entity):NULL;
+    return walking_actor(c,sp)?Entity_getEntityBoundingBox(&EntityPlayerSP_asPlayer(sp)->living.entity):NULL;
 }
 static const EntityPlayerSPWalkingDependencies walking_deps={walking_sprint,walking_sneak,walking_view,walking_box};
 bool mc_client_graph_set_input(MCGameplay *g,float strafe,float forward,bool jump,bool sneak,bool sprint) {
@@ -342,8 +346,8 @@ static MCClientBindings *eye_binding(MCObject *c,MCGameplayPlayer *p) {
     MCClientBindings *b=binding(c);
     if(!b||MCObjectHeap_objectSize(c)<sizeof(*b)||b->player!=p||
         !MCGameplayPlayer_isInstance((MCObject *)p)||p->living.entity.object.heap!=c->heap||
-        !EntityPlayerSP_isInstance((MCObject *)b->sp)||b->sp->object.heap!=c->heap||
-        b->sp->nativeActor!=p)return NULL;
+        !EntityPlayerSP_isInstance((MCObject *)b->sp)||((MCObject *)b->sp)->heap!=c->heap||
+        EntityPlayerSP_asPlayer(b->sp)!=p)return NULL;
     return b;
 }
 static bool eye_sleeping(MCObject *c,MCGameplayPlayer *p,bool *out) {
@@ -424,17 +428,27 @@ bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name
     NBTString *idText=n?NBTString_fromASCII(g->heap,text):NULL;
     NativeJavaUUID *id=idText?NativeJavaUUID_fromString(g->heap,idText):NULL;
     NativeGameProfile *profile=id?NativeGameProfile_new(g->heap,id,n):NULL;
-    MCGameplayPlayer *p=profile&&stats?MCGameplayPlayer_newWithProfile(w,profile,stats,mc_client_graph_crafting()):NULL;
+    NetHandlerPlayClient *h=profile&&stats&&b?
+        NetHandlerPlayClient_nativeBootstrap(g->heap,profile,(MCObject *)b,(MCObject *)b,&handler_deps):NULL;
+    EntityPlayerSP *sp=h?EntityPlayerSP_nativeAllocate(g->heap):NULL;
+    MCGameplayPlayer *p=EntityPlayerSP_asPlayer(sp);
     if (p && b) {
-        b->player=p; p->effects=(MCObject *)b;
-        b->origin=DataWatcher_blockPos(g->heap,0,0,0);
-        NetHandlerPlayClient *h=NetHandlerPlayClient_nativeNew(p,(MCObject *)b,(MCObject *)b,&handler_deps);
-        b->controller=h ? PlayerControllerMP_nativeNew(g->heap,h,(MCObject *)b,&controller_deps) : NULL;
-        b->sp=h ? EntityPlayerSP_nativeNew(p,h,(MCObject *)b,(MCObject *)b,&sp_deps) : NULL;
-        if(b->sp)b->sp->movementInput=MovementInput_new(g->heap);
-        ok=p->gameProfile->id && b->origin && b->controller && b->sp && b->sp->movementInput &&
-            EntityPlayerSP_bindWalking(b->sp,(MCObject *)b,&walking_deps) && MCGameplay_setPlayer(g,0,text,(MCObject *)p) && MCGameplayClientPackets_bind(p) &&
-            PlayerControllerMP_bindActions(b->controller,(MCObject *)b,(MCObject *)b,&action_deps);
+        /* Parent constructors and their virtual calls operate on this one SP.
+           These native aliases and transport bindings hold no second actor. */
+        b->player=p;b->sp=sp;p->effects=(MCObject *)b;
+        EntityPlayerSPConstructorDependencies constructors={MCGameplayPlayer_nativeConstructorDependencies(),source_profile};
+        ok=EntityPlayerSP_construct(sp,(MCObject *)b,(MCObject *)w,h,stats,&constructors,
+                mc_client_graph_crafting(),(MCObject *)p,w->randomRuntime,NativeEntityIDRuntime_process()) &&
+            MCGameplayPlayer_nativeAttachEnvironment(p,stats) && NetHandlerPlayClient_nativeBindPlayer(h,p) &&
+            EntityPlayerSP_bindActions(sp,(MCObject *)b,&sp_deps);
+        if(ok) {
+            b->origin=DataWatcher_blockPos(g->heap,0,0,0);
+            b->controller=PlayerControllerMP_nativeNew(g->heap,h,(MCObject *)b,&controller_deps);
+            sp->movementInput=MovementInput_new(g->heap);
+            ok=p->gameProfile->id && b->origin && b->controller && sp->movementInput &&
+                EntityPlayerSP_bindWalking(sp,(MCObject *)b,&walking_deps) && MCGameplay_setPlayer(g,0,text,(MCObject *)p) && MCGameplayClientPackets_bind(p) &&
+                PlayerControllerMP_bindActions(b->controller,(MCObject *)b,(MCObject *)b,&action_deps);
+        }
     } else ok=false;
     MCObjectRootScope_end(&scope);
     return ok && !MCObjectHeap_failed(g->heap);

@@ -18,8 +18,8 @@ typedef struct EntityPlayerDependencies {
 } EntityPlayerDependencies;
 typedef struct StatFileWriter StatFileWriter;
 typedef struct EntityPlayerMPWindowsDependencies EntityPlayerMPWindowsDependencies;
-/* Native concrete Player receiver for the translated abstract EntityPlayer
-   constructor. First-member inheritance is the single authoritative state.
+/* Authoritative state of the translated abstract EntityPlayer. Both the native
+   concrete Player and source ACP/SP descendants embed this first-member base.
    Native transport/stat/storage fields follow the original Player fields. */
 typedef struct MCGameplayPlayer {
     EntityLivingBase living;
@@ -64,9 +64,9 @@ typedef struct MCGameplayPlayer {
 /* Source class name and the native concrete receiver name designate the same
    authoritative object layout. Neither name allocates a second Player. */
 typedef MCGameplayPlayer EntityPlayer;
-/* Full source constructor/instance initialization on the actual canonical
-   native concrete Player receiver. Its single first-member LivingBase owns
-   Entity fields; no inherited state or Player mirror is allocated. */
+/* Full source constructor/instance initialization on the actual most-derived
+   receiver. Its first-member LivingBase owns Entity fields; no inherited state
+   or Player mirror is allocated. */
 bool EntityPlayer_construct(MCGameplayPlayer *,MCObject *world,NativeGameProfile *,
     const EntityPlayerDependencies *,const mc_crafting_dispatch *,MCObject *context,
     NativeJavaRandomRuntime *,NativeEntityIDRuntime *);

@@ -26,7 +26,7 @@ typedef struct {
   NetHandlerPlayClient *receivers[16];
   unsigned events[64], eventCount, packetCount, boxCount, failAt, failBox;
   bool sprint, sneak, view, useSourceSneak, mutateArgs, mutateSent, mutatePost,
-      mutateActions, swapActor, allowCollect, flipSprintState;
+      mutateActions, replaceFixtureActor, allowCollect, flipSprintState;
 } Fixture;
 static void trace(MCObject *o, MCObjectVisitor visit, void *context) {
   Fixture *f = (Fixture *)o;
@@ -107,8 +107,8 @@ static AxisAlignedBB *box(MCObject *context, EntityPlayerSP *sp) {
     e->boundingBox = AxisAlignedBB_new(context->heap, 0, 53, 0, 1, 54, 1);
     CHECK(e->boundingBox);
   }
-  if (f->swapActor)
-    sp->nativeActor = f->otherActor;
+  if (f->replaceFixtureActor)
+    f->actor = f->otherActor;
   MCObjectHeap_touch(context->heap);
   return e->boundingBox;
 }
@@ -210,8 +210,9 @@ static const NetHandlerPlayClientDependencies handlerDependencies = {
     .inventoryCreativeTabIndex = unused_inventory_tab,
     .closeScreenAndDropStack = unused_close,
     .addToSendQueue = unused_confirm};
-/* These tests construct actual source packets/handler and a canonical native
-   Player owner. The setter/body subset needs no full Player constructor. */
+/* Like the unchanged-JAR walking observer, this fixture assigns method fields
+   on a zeroed most-derived SP. It tests walking, not the full SP tick/constructor.
+   The owned Player and SP references are views of the same managed object. */
 static Fixture *setup(MCGameplay *g, MCObjectRootScope *scope) {
   CHECK(MCGameplay_init(g, 32 * 1024 * 1024));
   CHECK(MCObjectRootScope_begin(scope, g->heap));
@@ -221,8 +222,10 @@ static Fixture *setup(MCGameplay *g, MCObjectRootScope *scope) {
   CHECK(f->world);
   f->world->remote = true;
   CHECK(MCGameplay_setWorld(g, (MCObject *)f->world));
-  f->actor = MCGameplayPlayer_nativeAllocate(g->heap);
-  CHECK(f->actor);
+  f->sp = EntityPlayerSP_nativeAllocate(g->heap);
+  CHECK(f->sp);
+  f->actor = EntityPlayerSP_asPlayer(f->sp);
+  CHECK((MCObject *)f->actor == EntityPlayerSP_asObject(f->sp));
   f->otherActor = MCGameplayPlayer_nativeAllocate(g->heap);
   CHECK(f->otherActor);
   Entity *e = &f->actor->living.entity;
@@ -239,9 +242,8 @@ static Fixture *setup(MCGameplay *g, MCObjectRootScope *scope) {
   f->otherQueue = NetHandlerPlayClient_nativeNew(
       f->actor, (MCObject *)f, (MCObject *)f, &handlerDependencies);
   CHECK(f->otherQueue);
-  f->sp = EntityPlayerSP_nativeNew(f->actor, f->queue, (MCObject *)f,
-                                   (MCObject *)f, &spDependencies);
-  CHECK(f->sp);
+  f->sp->sendQueue=f->queue;f->sp->mc=(MCObject *)f;
+  CHECK(EntityPlayerSP_bindActions(f->sp,(MCObject *)f,&spDependencies));
   f->sp->movementInput = MovementInput_new(g->heap);
   CHECK(f->sp->movementInput);
   CHECK(EntityPlayerSP_bindWalking(f->sp, (MCObject *)f, &walking));
@@ -316,7 +318,7 @@ static void defaults_and_sneak(void) {
   CHECK(!EntityPlayerSP_isSneaking(f->sp) && !MCObjectHeap_failed(g.heap));
   f->sp->movementInput = NULL;
   CHECK(!EntityPlayerSP_isSneaking(f->sp) && !MCObjectHeap_failed(g.heap));
-  f->sp->nativeActor = NULL;
+  f->actor->sleeping = false;
   CHECK(!EntityPlayerSP_isSneaking(f->sp) && !MCObjectHeap_failed(g.heap));
   finish(&g, &scope, false);
 }
@@ -513,11 +515,13 @@ static void mutation_and_failure(void) {
   g = (MCGameplay){0};
   scope = (MCObjectRootScope){0};
   f = setup(&g, &scope);
-  f->swapActor = true;
-  CHECK(!EntityPlayerSP_onUpdateWalkingPlayer(f->sp) &&
-        MCObjectHeap_failed(g.heap));
-  CHECK(f->packetCount == 0);
-  finish(&g, &scope, true);
+  f->replaceFixtureActor = true;
+  EntityPlayerSP_asPlayer(f->sp)->living.entity.onGround=true;
+  CHECK(EntityPlayerSP_onUpdateWalkingPlayer(f->sp));
+  CHECK(f->actor==f->otherActor && EntityPlayerSP_asPlayer(f->sp)!=f->actor);
+  CHECK(f->packetCount==1 && kind(f->packets[0])==3 && f->sp->positionUpdateTicks==1);
+  CHECK(C03PacketPlayer_isOnGround((C03PacketPlayer *)f->packets[0]));
+  finish(&g, &scope, false);
 }
 static void lifetime_and_native_bounds(void) {
   MCGameplay g = {0};
@@ -535,7 +539,7 @@ static void lifetime_and_native_bounds(void) {
   MCGameplayObjects *owners = (MCGameplayObjects *)MCObjectRoot_get(&copied);
   Fixture *other = (Fixture *)((MCGameplayPlayer *)owners->players[0])->effects;
   CHECK(other && other != f);
-  CHECK(other->sp->nativeActor == other->actor &&
+  CHECK(EntityPlayerSP_asPlayer(other->sp) == other->actor &&
         other->sp->walkingContext == (MCObject *)other);
   CHECK(other->sp->movementInput != f->sp->movementInput &&
         other->packets[0] != f->packets[0]);
@@ -559,8 +563,11 @@ static void lifetime_and_native_bounds(void) {
     f = setup(&g, &scope);
     if (mode == 0)
       f->sp->walkingDependencies = NULL;
-    if (mode == 1)
-      f->sp->nativeActor = NULL;
+    MCObjectHeap *foreign=NULL;
+    if (mode == 1) {
+      foreign=MCObjectHeap_new(1024*1024);CHECK(foreign);
+      f->sp->walkingContext=MCObjectHeap_alloc(foreign,sizeof(Fixture),&fixtureClass);CHECK(f->sp->walkingContext);
+    }
     if (mode == 2) {
       size_t remaining = 32 * 1024 * 1024 - MCObjectHeap_liveBytes(g.heap);
       static const MCObjectClass cls = {"fixture.exhaust.walk", MCObjectHeap_plainClone,
@@ -572,13 +579,13 @@ static void lifetime_and_native_bounds(void) {
     CHECK(f->packetCount == 0);
     CHECK(f->sp->positionUpdateTicks == 0 && f->sp->lastReportedPosX == 0);
     finish(&g, &scope, true);
+    MCObjectHeap_free(foreign);
   }
   g = (MCGameplay){0};
   scope = (MCObjectRootScope){0};
   f = setup(&g, &scope);
-  f->sp->movementInput->sneak = true;
-  f->sp->nativeActor = NULL;
-  CHECK(!EntityPlayerSP_isSneaking(f->sp) && MCObjectHeap_failed(g.heap));
+  EntityPlayerSP *tinySP=(EntityPlayerSP *)MCObjectHeap_alloc(g.heap,sizeof(MCObject),EntityPlayerSP_asObject(f->sp)->klass);CHECK(tinySP);
+  CHECK(!EntityPlayerSP_isSneaking(tinySP) && MCObjectHeap_failed(g.heap));
   finish(&g, &scope, true);
   g = (MCGameplay){0};
   scope = (MCObjectRootScope){0};

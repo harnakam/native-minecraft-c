@@ -4,6 +4,7 @@
 #include "server/native_gameplay.h"
 #include "client/native_runtime.h"
 #include "entity/player/EntityPlayerDrops.h"
+#include "util/CombatTracker.h"
 #include "nbt/NBTTagByte.h"
 #include "nbt/NBTTagCompound.h"
 #include <limits.h>
@@ -483,7 +484,13 @@ static void native_client_virtual_eye_and_drop_position(void) {
         MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
         MCClientBindings *b=mc_client_graph_bindings(&tx.working);
         MCGameplayPlayer *p=mc_client_graph_player(&tx.working);
-        CHECK(b&&p&&b->player==p&&b->sp->nativeActor==p&&p->effects==(MCObject *)b);
+        CHECK(b&&p&&b->player==p&&p->effects==(MCObject *)b);
+        CHECK((MCObject *)b->sp==(MCObject *)p);
+        CHECK(EntityPlayerSP_isInstance((MCObject *)p)&&AbstractClientPlayer_isInstance((MCObject *)p)&&
+            EntityLivingBase_isInstance((MCObject *)p)&&Entity_isInstance((MCObject *)p));
+        CHECK(p->inventory->player==(MCObject *)p&&((ContainerPlayer *)p->inventoryContainer)->thePlayer==(MCObject *)p);
+        CHECK(p->living._combatTracker->fighter==&p->living&&b->sp->sendQueue==(NetHandlerPlayClient *)p->handler);
+        CHECK(b->sp->statWriter==p->stats&&NetHandlerPlayClient_getGameProfile(b->sp->sendQueue)==p->gameProfile);
         CHECK(b!=mc_client_graph_bindings(&parent));
         CHECK(Entity_setPosition(&p->living.entity,1.25,64.5,-9.75));
         p->sleeping=(state&2)!=0;

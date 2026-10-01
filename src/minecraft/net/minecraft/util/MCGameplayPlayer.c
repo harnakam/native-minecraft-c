@@ -1,9 +1,9 @@
 #include "util/MCGameplayPlayer.h"
 #include "entity/player/EntityPlayer.h"
+#include "client/entity/EntityPlayerSP.h"
 #include <math.h>
 
-static void trace(MCObject *object,MCObjectVisitor visit,void *context) {
-    MCGameplayPlayer *p=(MCGameplayPlayer *)object;
+void MCGameplayPlayer_traceFields(MCGameplayPlayer *p,MCObjectVisitor visit,void *context) {
     EntityPlayer_traceFields(p,visit,context);
     p->stats=(StatFileWriter *)visit((MCObject *)p->stats,context);
     p->savedFields=(NBTTagCompound *)visit((MCObject *)p->savedFields,context);
@@ -12,9 +12,13 @@ static void trace(MCObject *object,MCObjectVisitor visit,void *context) {
     p->effects=visit(p->effects,context);
     p->pendingPackets=visit(p->pendingPackets,context);
 }
+static void trace(MCObject *object,MCObjectVisitor visit,void *context) {
+    MCGameplayPlayer_traceFields((MCGameplayPlayer *)object,visit,context);
+}
 static const MCObjectClass klass={"C919.native.GameplayPlayer",MCObjectHeap_plainClone,trace,NULL};
 bool MCGameplayPlayer_isInstance(const MCObject *object) {
-    return object&&object->klass==&klass&&MCObjectHeap_objectSize(object)>=sizeof(MCGameplayPlayer);
+    return object&&(object->klass==&klass||EntityPlayerSP_isInstance(object))&&
+        MCObjectHeap_objectSize(object)>=sizeof(MCGameplayPlayer);
 }
 MCGameplayPlayer *MCGameplayPlayer_nativeAllocate(MCObjectHeap *heap) {
     return (MCGameplayPlayer *)MCObjectHeap_alloc(heap,sizeof(MCGameplayPlayer),&klass);
@@ -64,6 +68,22 @@ static const EntityPlayerDependencies player_dependencies={
     .entity=&entity_dependencies,.living=&living_dependencies,.isRemote=remote,
     .getSpawnPoint=spawn_point,.setLocationAndAngles=player_location
 };
+const EntityPlayerDependencies *MCGameplayPlayer_nativeConstructorDependencies(void) {
+    return &player_dependencies;
+}
+bool MCGameplayPlayer_nativeAttachEnvironment(MCGameplayPlayer *p,StatFileWriter *stats) {
+    MCObjectHeap *heap=p?p->living.entity.object.heap:NULL;
+    if(!MCGameplayPlayer_isInstance((MCObject *)p)||
+        (stats&&((MCObject *)stats)->heap!=heap)) {MCObjectHeap_fail(heap);return false;}
+    MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,heap))return false;
+    bool ok=MCObjectRootScope_pin(&scope,(MCObject *)p)&&MCObjectRootScope_pin(&scope,(MCObject *)stats);
+    if(ok) {
+        p->stats=stats;p->savedFields=NBTTagCompound_new(heap);MCObjectHeap_touch(heap);
+        ok=p->savedFields!=NULL&&!MCObjectHeap_failed(heap);
+    }
+    if(!ok)MCObjectHeap_fail(heap);
+    MCObjectRootScope_end(&scope);return ok;
+}
 static bool dependencies_ready(const mc_crafting_dispatch *d) {
     return d&&d->inventory&&d->world&&d->findMatchingRecipe&&d->getRemainingItems&&
         d->onCrafting&&d->triggerAchievement&&d->drop&&d->isPickaxe&&d->isHoe&&
@@ -84,7 +104,7 @@ MCGameplayPlayer *MCGameplayPlayer_newWithProfile(MCGameplayWorld *world,NativeG
     if(p) {
         ok=EntityPlayer_construct(p,(MCObject *)world,profile,&player_dependencies,crafting,(MCObject *)p,
             world->randomRuntime,NativeEntityIDRuntime_process());
-        if(ok) {p->stats=stats;p->savedFields=NBTTagCompound_new(heap);MCObjectHeap_touch(heap);ok=p->savedFields!=NULL;}
+        if(ok)ok=MCGameplayPlayer_nativeAttachEnvironment(p,stats);
     } else ok=false;
     if(!ok)MCObjectHeap_fail(heap);
     MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(heap)?p:NULL;

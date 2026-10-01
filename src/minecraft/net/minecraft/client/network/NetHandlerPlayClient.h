@@ -37,12 +37,21 @@ struct NetHandlerPlayClient {
     MCObject object;
     MCObject *gameController, *dependencyContext;
     MCGameplayWorld *clientWorldController;
+    NativeGameProfile *profile;
     const NetHandlerPlayClientDependencies *dependencies;
 };
-/* Native allocation for this method subset, not the full original constructor.
-   The initial remote actor retains the handler. No native actor pointer is
-   cached across controller player replacement or graph adoption. The caller
-   must retain the returned object before the next heap collection. */
+/* Native partial factory, not the full original constructor. The nullable
+   profile is retained before Player/SP construction; no player/world getter is
+   invoked here. The caller retains the result before collection/adoption. */
+NetHandlerPlayClient *NetHandlerPlayClient_nativeBootstrap(MCObjectHeap *,NativeGameProfile *,
+    MCObject *gameController,MCObject *context,const NetHandlerPlayClientDependencies *);
+/* Native post-constructor world/owner binding only. It invokes no controller
+   callbacks and does not cache a Player across replacements or graph adoption. */
+bool NetHandlerPlayClient_nativeBindPlayer(NetHandlerPlayClient *,MCGameplayPlayer *);
+/* Original direct getter; NULL profile is returned without an exception. */
+NativeGameProfile *NetHandlerPlayClient_getGameProfile(NetHandlerPlayClient *);
+/* Existing native fixture factory delegates bootstrap(player.gameProfile)
+   then bind. The initial remote actor retains the returned handler. */
 NetHandlerPlayClient *NetHandlerPlayClient_nativeNew(MCGameplayPlayer *initialPlayer,
                                                      MCObject *gameController, MCObject *context,
                                                      const NetHandlerPlayClientDependencies *);

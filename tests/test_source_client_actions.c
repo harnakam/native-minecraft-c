@@ -139,6 +139,9 @@ static bool display_null(MCObject *ctx, MCObject *mc) {
     return true;
 }
 static const EntityPlayerSPDependencies sp_dependencies = {queue_any, origin, display_null};
+static NativeGameProfile *profile(MCObject *context,NetHandlerPlayClient *handler) {
+    (void)context;return NetHandlerPlayClient_getGameProfile(handler);
+}
 static const PlayerControllerMPDependencies click_dependencies = {queue_click};
 static bool use_item(MCObject *ctx, const Item *item, ItemStack *s, MCObject *world,
                      MCObject *player, ItemStack **out) {
@@ -219,21 +222,24 @@ static Fixture *setup(MCGameplay *g, MCObjectRootScope *scope) {
     CHECK(MCGameplay_setWorld(g, (MCObject *)w));
     StatFileWriter *stats = StatFileWriter_new(g->heap);
     CHECK(stats);
-    MCGameplayPlayer *p =
-        MCGameplayPlayer_new(w, NBTString_fromASCII(g->heap, "Player"), stats, &crafting);
-    CHECK(p);
-    CHECK(MCGameplay_setPlayer(g, 0, "11111111-1111-1111-1111-111111111111", (MCObject *)p));
     Fixture *f = (Fixture *)MCObjectHeap_alloc(g->heap, sizeof(*f), &fixture_class);
     CHECK(f);
-    f->player = p;
-    p->effects = (MCObject *)f;
+    NativeGameProfile *identity=NativeGameProfile_new(g->heap,NULL,NBTString_fromASCII(g->heap,"Player"));
+    CHECK(identity);
+    NetHandlerPlayClient *h=NetHandlerPlayClient_nativeBootstrap(g->heap,identity,(MCObject *)f,(MCObject *)f,&handler_dependencies);
+    CHECK(h);
+    f->sp=EntityPlayerSP_nativeAllocate(g->heap);CHECK(f->sp);
+    MCGameplayPlayer *p=EntityPlayerSP_asPlayer(f->sp);
+    f->player=p;p->effects=(MCObject *)f;
+    const EntityPlayerSPConstructorDependencies constructors={MCGameplayPlayer_nativeConstructorDependencies(),profile};
+    CHECK(EntityPlayerSP_construct(f->sp,(MCObject *)f,(MCObject *)w,h,stats,&constructors,
+        &crafting,(MCObject *)p,w->randomRuntime,NativeEntityIDRuntime_process()));
+    CHECK(MCGameplayPlayer_nativeAttachEnvironment(p,stats)&&NetHandlerPlayClient_nativeBindPlayer(h,p));
+    CHECK(EntityPlayerSP_bindActions(f->sp,(MCObject *)f,&sp_dependencies));
+    CHECK((MCObject *)f->sp==(MCObject *)p&&p->handler==(MCObject *)h&&f->sp->sendQueue==h);
+    CHECK(MCGameplay_setPlayer(g, 0, "11111111-1111-1111-1111-111111111111", (MCObject *)p));
     f->origin = DataWatcher_blockPos(g->heap, 0, 0, 0);
     CHECK(f->origin);
-    NetHandlerPlayClient *h =
-        NetHandlerPlayClient_nativeNew(p, (MCObject *)f, (MCObject *)f, &handler_dependencies);
-    CHECK(h);
-    f->sp = EntityPlayerSP_nativeNew(p, h, (MCObject *)f, (MCObject *)f, &sp_dependencies);
-    CHECK(f->sp);
     f->controller = PlayerControllerMP_nativeNew(g->heap, h, (MCObject *)f, &click_dependencies);
     CHECK(f->controller);
     CHECK(PlayerControllerMP_bindActions(f->controller, (MCObject *)f, (MCObject *)f, &actions));
@@ -486,7 +492,7 @@ static void test_snapshot_identity(void) {
     CHECK(MCGameplay_begin(&g, &transaction));
     MCGameplayPlayer *p = (MCGameplayPlayer *)MCGameplay_get(&transaction.working)->players[0];
     Fixture *b = (Fixture *)p->effects;
-    CHECK(b != f && b->sp->nativeActor == p && b->controller->mc == (MCObject *)b &&
+    CHECK(b != f && EntityPlayerSP_asPlayer(b->sp) == p && (MCObject *)b->sp == (MCObject *)p && b->controller->mc == (MCObject *)b &&
           b->controller->actionsContext == (MCObject *)b);
     CHECK(b->sp->mc == (MCObject *)b && b->sp->dependencyContext == (MCObject *)b);
     CHECK(b->useReturn == InventoryPlayer_getCurrentItem(p->inventory) && b->useReturn != s);

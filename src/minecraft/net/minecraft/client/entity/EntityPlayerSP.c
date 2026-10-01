@@ -5,7 +5,9 @@
 
 static void trace(MCObject *o, MCObjectVisitor v, void *ctx) {
     EntityPlayerSP *p = (EntityPlayerSP *)o;
-    p->nativeActor = (MCGameplayPlayer *)v((MCObject *)p->nativeActor, ctx);
+    AbstractClientPlayer_traceFields(&p->clientPlayer,v,ctx);
+    p->statWriter=(StatFileWriter *)v((MCObject *)p->statWriter,ctx);
+    p->clientBrand=(NBTString *)v((MCObject *)p->clientBrand,ctx);
     p->sendQueue = (NetHandlerPlayClient *)v((MCObject *)p->sendQueue, ctx);
     p->mc = v(p->mc, ctx);
     p->dependencyContext = v(p->dependencyContext, ctx);
@@ -15,49 +17,58 @@ static void trace(MCObject *o, MCObjectVisitor v, void *ctx) {
 static const MCObjectClass klass = {"net.minecraft.client.entity.EntityPlayerSP",
                                     MCObjectHeap_plainClone, trace, NULL};
 bool EntityPlayerSP_isInstance(const MCObject *o) { return o && o->klass == &klass && MCObjectHeap_objectSize(o)>=sizeof(EntityPlayerSP); }
+MCGameplayPlayer *EntityPlayerSP_asPlayer(EntityPlayerSP *p) {return p? &p->clientPlayer.player:NULL;}
+MCObject *EntityPlayerSP_asObject(EntityPlayerSP *p) {return (MCObject *)p;}
+EntityPlayerSP *EntityPlayerSP_nativeAllocate(MCObjectHeap *heap) {
+    return (EntityPlayerSP *)MCObjectHeap_alloc(heap,sizeof(EntityPlayerSP),&klass);
+}
 static bool failure(MCObjectHeap *h) {
     MCObjectHeap_fail(h);
     return false;
 }
 static bool begin(EntityPlayerSP *p, MCObjectRootScope *scope) {
     if (!p || !EntityPlayerSP_isInstance((MCObject *)p))
-        return failure(p ? p->object.heap : NULL);
-    return MCObjectRootScope_begin(scope, p->object.heap) &&
+        return failure(p ? EntityPlayerSP_asObject(p)->heap : NULL);
+    return MCObjectRootScope_begin(scope, EntityPlayerSP_asObject(p)->heap) &&
            MCObjectRootScope_pin(scope, (MCObject *)p);
 }
 static bool end(EntityPlayerSP *p, MCObjectRootScope *scope, bool ok) {
-    ok = ok && !MCObjectHeap_failed(p->object.heap);
+    ok = ok && !MCObjectHeap_failed(EntityPlayerSP_asObject(p)->heap);
     if (!ok)
-        failure(p->object.heap);
+        failure(EntityPlayerSP_asObject(p)->heap);
     MCObjectRootScope_end(scope);
     return ok;
 }
-EntityPlayerSP *EntityPlayerSP_nativeNew(MCGameplayPlayer *actor, NetHandlerPlayClient *handler,
-                                         MCObject *mc, MCObject *ctx,
-                                         const EntityPlayerSPDependencies *d) {
-    MCObjectHeap *h = actor ? actor->living.entity.object.heap : NULL;
-    MCObjectRootScope scope = {0};
-    if (!MCGameplayPlayer_isInstance((MCObject *)actor) ||
-        !NetHandlerPlayClient_isInstance((MCObject *)handler) || !mc || !d || !d->addToSendQueue ||
-        !d->blockPosOrigin || !d->displayGuiScreenNull || !MCObjectRootScope_begin(&scope, h)) {
-        failure(h);
-        return NULL;
-    }
-    bool ok = MCObjectRootScope_pin(&scope, (MCObject *)actor) &&
-              MCObjectRootScope_pin(&scope, (MCObject *)handler) &&
-              MCObjectRootScope_pin(&scope, mc) && MCObjectRootScope_pin(&scope, ctx);
-    EntityPlayerSP *p = ok ? (EntityPlayerSP *)MCObjectHeap_alloc(h, sizeof(*p), &klass) : NULL;
-    if (p) {
-        p->nativeActor = actor;
-        p->sendQueue = handler;
-        p->mc = mc;
-        p->dependencyContext = ctx;
-        p->dependencies = d;
-    }
-    if (!p)
-        failure(h);
-    MCObjectRootScope_end(&scope);
-    return p;
+bool EntityPlayerSP_construct(EntityPlayerSP *p,MCObject *mc,MCObject *world,
+    NetHandlerPlayClient *handler,StatFileWriter *stats,const EntityPlayerSPConstructorDependencies *d,
+    const mc_crafting_dispatch *crafting,MCObject *context,NativeJavaRandomRuntime *random,NativeEntityIDRuntime *ids) {
+    MCObjectRootScope scope={0};if(!begin(p,&scope))return false;
+    MCObjectHeap *heap=EntityPlayerSP_asObject(p)->heap;
+    bool ok=false;
+    if(!d||!d->player||!d->getGameProfile||
+       !MCObjectRootScope_pin(&scope,mc)||!MCObjectRootScope_pin(&scope,world)||
+       !MCObjectRootScope_pin(&scope,(MCObject *)handler)||
+       !MCObjectRootScope_pin(&scope,(MCObject *)stats)||!MCObjectRootScope_pin(&scope,context))goto done;
+    /* This virtual call is evaluated as the super-constructor argument, before
+       any Entity allocation effects. Its nullable result is not prevalidated. */
+    if(!NetHandlerPlayClient_isInstance((MCObject *)handler))goto done;
+    NativeGameProfile *profile=d->getGameProfile(context,handler);
+    if(MCObjectHeap_failed(heap)||!MCObjectRootScope_pin(&scope,(MCObject *)profile))goto done;
+    if(!AbstractClientPlayer_construct(&p->clientPlayer,world,profile,d->player,crafting,context,random,ids))goto done;
+    p->sendQueue=handler;MCObjectHeap_touch(heap);
+    p->statWriter=stats;MCObjectHeap_touch(heap);
+    p->mc=mc;MCObjectHeap_touch(heap);
+    EntityPlayerSP_asPlayer(p)->living.entity.dimension=0;MCObjectHeap_touch(heap);
+    ok=true;
+done:
+    return end(p,&scope,ok);
+}
+bool EntityPlayerSP_bindActions(EntityPlayerSP *p,MCObject *context,const EntityPlayerSPDependencies *d) {
+    MCObjectRootScope scope={0};if(!begin(p,&scope))return false;
+    bool ok=d&&d->addToSendQueue&&d->blockPosOrigin&&d->displayGuiScreenNull&&
+        MCObjectRootScope_pin(&scope,context);
+    if(ok){p->dependencyContext=context;p->dependencies=d;MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);}
+    return end(p,&scope,ok);
 }
 static bool queue_packet(EntityPlayerSP *p, MCObject *packet, MCObjectRootScope *scope) {
     return packet && p->dependencies && p->dependencies->addToSendQueue &&
@@ -73,17 +84,17 @@ bool EntityPlayerSP_dropOneItem(EntityPlayerSP *p, bool all, EntityItem **out) {
     bool ok = p->dependencies && p->dependencies->blockPosOrigin &&
               MCObjectRootScope_pin(&scope, p->dependencyContext);
     DataWatcherBlockPos *pos = ok ? p->dependencies->blockPosOrigin(p->dependencyContext) : NULL;
-    ok = ok && !MCObjectHeap_failed(p->object.heap) && pos &&
+    ok = ok && !MCObjectHeap_failed(EntityPlayerSP_asObject(p)->heap) && pos &&
          DataWatcher_blockPosIsInstance((MCObject *)pos) &&
          MCObjectRootScope_pin(&scope, (MCObject *)pos);
     C07PacketPlayerDigging *packet =
         ok ? C07PacketPlayerDigging_new(
-                 p->object.heap,
+                 EntityPlayerSP_asObject(p)->heap,
                  C07PacketPlayerDigging_action(all ? C07_DROP_ALL_ITEMS : C07_DROP_ITEM), pos,
                  C07PacketPlayerDigging_facing(0))
            : NULL;
     ok = queue_packet(p, (MCObject *)packet, &scope);
-    if (ok && !MCObjectHeap_failed(p->object.heap))
+    if (ok && !MCObjectHeap_failed(EntityPlayerSP_asObject(p)->heap))
         *out = NULL;
     return end(p, &scope, ok);
 }
@@ -91,13 +102,13 @@ bool EntityPlayerSP_closeScreen(EntityPlayerSP *p) {
     MCObjectRootScope scope = {0};
     if (!begin(p, &scope))
         return false;
-    MCGameplayPlayer *actor = p->nativeActor;
+    MCGameplayPlayer *actor = EntityPlayerSP_asPlayer(p);
     bool ok = MCGameplayPlayer_isInstance((MCObject *)actor) &&
               MCObjectRootScope_pin(&scope, (MCObject *)actor) && actor->openContainer &&
               MCObjectRootScope_pin(&scope, (MCObject *)actor->openContainer);
     C0DPacketCloseWindow *packet =
-        ok ? C0DPacketCloseWindow_new(p->object.heap, actor->openContainer->windowId) : NULL;
-    ok = queue_packet(p, (MCObject *)packet, &scope) && !MCObjectHeap_failed(p->object.heap);
+        ok ? C0DPacketCloseWindow_new(EntityPlayerSP_asObject(p)->heap, actor->openContainer->windowId) : NULL;
+    ok = queue_packet(p, (MCObject *)packet, &scope) && !MCObjectHeap_failed(EntityPlayerSP_asObject(p)->heap);
     if (ok)
         ok = EntityPlayerSP_closeScreenAndDropStack(p);
     return end(p, &scope, ok);
@@ -106,7 +117,7 @@ bool EntityPlayerSP_closeScreenAndDropStack(EntityPlayerSP *p) {
     MCObjectRootScope scope = {0};
     if (!begin(p, &scope))
         return false;
-    MCGameplayPlayer *actor = p->nativeActor;
+    MCGameplayPlayer *actor = EntityPlayerSP_asPlayer(p);
     bool ok = MCGameplayPlayer_isInstance((MCObject *)actor) &&
               MCObjectRootScope_pin(&scope, (MCObject *)actor) && actor->inventory &&
               MCObjectRootScope_pin(&scope, (MCObject *)actor->inventory);
@@ -117,7 +128,7 @@ bool EntityPlayerSP_closeScreenAndDropStack(EntityPlayerSP *p) {
            Minecraft's GUI dependency subsequently closes its retained old GUI. */
         actor->openContainer =
             ((ContainerPlayer *)(actor->inventoryContainer)) ? actor->inventoryContainer : NULL;
-        MCObjectHeap_touch(p->object.heap);
+        MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);
         ok = p->dependencies && p->dependencies->displayGuiScreenNull && p->mc &&
              MCObjectRootScope_pin(&scope, p->mc) &&
              MCObjectRootScope_pin(&scope, p->dependencyContext) &&
@@ -152,7 +163,7 @@ bool EntityPlayerSP_bindWalking(EntityPlayerSP *p,MCObject *context,const Entity
     MCObjectRootScope scope={0};if(!begin(p,&scope))return false;
     bool ok=d&&d->isSprinting&&d->isSneaking&&d->isCurrentViewEntity&&d->getEntityBoundingBox&&
         MCObjectRootScope_pin(&scope,context);
-    if(ok){p->walkingContext=context;p->walkingDependencies=d;MCObjectHeap_touch(p->object.heap);}
+    if(ok){p->walkingContext=context;p->walkingDependencies=d;MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);}
     return end(p,&scope,ok);
 }
 bool EntityPlayerSP_isSneaking(EntityPlayerSP *p) {
@@ -168,7 +179,7 @@ bool EntityPlayerSP_isSneaking(EntityPlayerSP *p) {
             flag = input->sneak;
     }
     if (ok && flag) {
-        MCGameplayPlayer *actor = p->nativeActor;
+        MCGameplayPlayer *actor = EntityPlayerSP_asPlayer(p);
         ok = MCGameplayPlayer_isInstance((MCObject *)actor) &&
              MCObjectRootScope_pin(&scope, (MCObject *)actor);
         if (ok)
@@ -177,9 +188,9 @@ bool EntityPlayerSP_isSneaking(EntityPlayerSP *p) {
     return end(p, &scope, ok) && flag;
 }
 static bool walking_actor(EntityPlayerSP *p, MCGameplayPlayer *actor) {
-    return p->nativeActor == actor && MCGameplayPlayer_isInstance((MCObject *)actor) &&
-           actor->living.entity.object.heap == p->object.heap &&
-           !MCObjectHeap_failed(p->object.heap);
+    return EntityPlayerSP_asPlayer(p) == actor && MCGameplayPlayer_isInstance((MCObject *)actor) &&
+           actor->living.entity.object.heap == EntityPlayerSP_asObject(p)->heap &&
+           !MCObjectHeap_failed(EntityPlayerSP_asObject(p)->heap);
 }
 static bool walking_boolean(EntityPlayerSP *p, MCGameplayPlayer *actor,
                             bool (*method)(MCObject *, EntityPlayerSP *, bool *), bool *out,
@@ -201,7 +212,7 @@ static AxisAlignedBB *walking_box(EntityPlayerSP *p, MCGameplayPlayer *actor,
 static bool walking_queue(EntityPlayerSP *p, MCGameplayPlayer *actor,
                           NetHandlerPlayClient *captured, MCObject *packet,
                           MCObjectRootScope *scope) {
-    return packet && !MCObjectHeap_failed(p->object.heap) && p->dependencies &&
+    return packet && !MCObjectHeap_failed(EntityPlayerSP_asObject(p)->heap) && p->dependencies &&
            p->dependencies->addToSendQueue &&
            NetHandlerPlayClient_isInstance((MCObject *)captured) &&
            MCObjectHeap_objectSize((MCObject *)captured) >= sizeof *captured &&
@@ -220,7 +231,7 @@ bool EntityPlayerSP_onUpdateWalkingPlayer(EntityPlayerSP *p) {
     if (!begin(p, &scope))
         return false;
     bool ok = false, flag, flag1, current;
-    MCGameplayPlayer *actor = p->nativeActor;
+    MCGameplayPlayer *actor = EntityPlayerSP_asPlayer(p);
     const EntityPlayerSPWalkingDependencies *d = p->walkingDependencies;
     if (!walking_actor(p, actor) || !MCObjectRootScope_pin(&scope, (MCObject *)actor) ||
         !MCObjectRootScope_pin(&scope, p->walkingContext) || !d)
@@ -235,12 +246,12 @@ bool EntityPlayerSP_onUpdateWalkingPlayer(EntityPlayerSP *p) {
         if (!MCObjectRootScope_pin(&scope, (MCObject *)sendQueue))
             goto done;
         C0BPacketEntityAction *packet = C0BPacketEntityAction_new(
-            p->object.heap, e,
+            EntityPlayerSP_asObject(p)->heap, e,
             C0BPacketEntityAction_nativeAction(flag ? C0B_START_SPRINTING : C0B_STOP_SPRINTING));
         if (!walking_queue(p, actor, sendQueue, (MCObject *)packet, &scope))
             goto done;
         p->serverSprintState = flag;
-        MCObjectHeap_touch(p->object.heap);
+        MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);
     }
     if (!walking_boolean(p, actor, d->isSneaking, &flag1, &scope))
         goto done;
@@ -249,12 +260,12 @@ bool EntityPlayerSP_onUpdateWalkingPlayer(EntityPlayerSP *p) {
         if (!MCObjectRootScope_pin(&scope, (MCObject *)sendQueue))
             goto done;
         C0BPacketEntityAction *packet = C0BPacketEntityAction_new(
-            p->object.heap, e,
+            EntityPlayerSP_asObject(p)->heap, e,
             C0BPacketEntityAction_nativeAction(flag1 ? C0B_START_SNEAKING : C0B_STOP_SNEAKING));
         if (!walking_queue(p, actor, sendQueue, (MCObject *)packet, &scope))
             goto done;
         p->serverSneakState = flag1;
-        MCObjectHeap_touch(p->object.heap);
+        MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);
     }
     if (!walking_boolean(p, actor, d->isCurrentViewEntity, &current, &scope))
         goto done;
@@ -288,7 +299,7 @@ bool EntityPlayerSP_onUpdateWalkingPlayer(EntityPlayerSP *p) {
                 double y = box->minY, z = e->posZ;
                 float yaw = e->rotationYaw, pitch = e->rotationPitch;
                 bool ground = e->onGround;
-                packet = C06PacketPlayerPosLook_new(p->object.heap, x, y, z, yaw, pitch, ground);
+                packet = C06PacketPlayerPosLook_new(EntityPlayerSP_asObject(p)->heap, x, y, z, yaw, pitch, ground);
             } else if (flag2) {
                 sendQueue = p->sendQueue;
                 if (!MCObjectRootScope_pin(&scope, (MCObject *)sendQueue))
@@ -299,18 +310,18 @@ bool EntityPlayerSP_onUpdateWalkingPlayer(EntityPlayerSP *p) {
                     goto done;
                 double y = box->minY, z = e->posZ;
                 bool ground = e->onGround;
-                packet = C04PacketPlayerPosition_new(p->object.heap, x, y, z, ground);
+                packet = C04PacketPlayerPosition_new(EntityPlayerSP_asObject(p)->heap, x, y, z, ground);
             } else if (flag3) {
                 sendQueue = p->sendQueue;
                 if (!MCObjectRootScope_pin(&scope, (MCObject *)sendQueue))
                     goto done;
-                packet = C05PacketPlayerLook_new(p->object.heap, e->rotationYaw, e->rotationPitch,
+                packet = C05PacketPlayerLook_new(EntityPlayerSP_asObject(p)->heap, e->rotationYaw, e->rotationPitch,
                                                  e->onGround);
             } else {
                 sendQueue = p->sendQueue;
                 if (!MCObjectRootScope_pin(&scope, (MCObject *)sendQueue))
                     goto done;
-                packet = C03PacketPlayer_new(p->object.heap, e->onGround);
+                packet = C03PacketPlayer_new(EntityPlayerSP_asObject(p)->heap, e->onGround);
             }
             if (!walking_queue(p, actor, sendQueue, (MCObject *)packet, &scope))
                 goto done;
@@ -318,29 +329,29 @@ bool EntityPlayerSP_onUpdateWalkingPlayer(EntityPlayerSP *p) {
             sendQueue = p->sendQueue;
             if (!MCObjectRootScope_pin(&scope, (MCObject *)sendQueue))
                 goto done;
-            packet = C06PacketPlayerPosLook_new(p->object.heap, e->motionX, -999.0, e->motionZ,
+            packet = C06PacketPlayerPosLook_new(EntityPlayerSP_asObject(p)->heap, e->motionX, -999.0, e->motionZ,
                                                 e->rotationYaw, e->rotationPitch, e->onGround);
             if (!walking_queue(p, actor, sendQueue, (MCObject *)packet, &scope))
                 goto done;
             flag2 = false;
         }
         p->positionUpdateTicks = increment32(p->positionUpdateTicks);
-        MCObjectHeap_touch(p->object.heap);
+        MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);
         if (flag2) {
             p->lastReportedPosX = e->posX;
-            MCObjectHeap_touch(p->object.heap);
+            MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);
             box = walking_box(p, actor, d, &scope);
             if (!box)
                 goto done;
             p->lastReportedPosY = box->minY;
             p->lastReportedPosZ = e->posZ;
             p->positionUpdateTicks = 0;
-            MCObjectHeap_touch(p->object.heap);
+            MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);
         }
         if (flag3) {
             p->lastReportedYaw = e->rotationYaw;
             p->lastReportedPitch = e->rotationPitch;
-            MCObjectHeap_touch(p->object.heap);
+            MCObjectHeap_touch(EntityPlayerSP_asObject(p)->heap);
         }
     }
     ok = true;

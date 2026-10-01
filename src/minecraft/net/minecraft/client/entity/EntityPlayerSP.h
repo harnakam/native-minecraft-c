@@ -1,5 +1,6 @@
 #ifndef C919_SOURCE_ENTITY_PLAYER_SP_H
 #define C919_SOURCE_ENTITY_PLAYER_SP_H
+#include "client/entity/AbstractClientPlayer.h"
 #include "client/network/NetHandlerPlayClient.h"
 #include "entity/item/EntityItem.h"
 #include "network/play/client/C07PacketPlayerDigging.h"
@@ -8,6 +9,13 @@
 #include "util/MovementInput.h"
 
 typedef struct EntityPlayerSP EntityPlayerSP;
+
+typedef struct {
+    const EntityPlayerDependencies *player;
+    /* Original virtual getter. NULL with a clear heap reaches the parent
+       constructor's later source profile-dereference failure prefix. */
+    NativeGameProfile *(*getGameProfile)(MCObject *context,NetHandlerPlayClient *);
+} EntityPlayerSPConstructorDependencies;
 typedef struct {
     bool (*addToSendQueue)(MCObject *context, NetHandlerPlayClient *, MCObject *packet);
     DataWatcherBlockPos *(*blockPosOrigin)(MCObject *context);
@@ -25,24 +33,37 @@ typedef struct {
     AxisAlignedBB *(*getEntityBoundingBox)(MCObject *context,EntityPlayerSP *);
 } EntityPlayerSPWalkingDependencies;
 struct EntityPlayerSP {
-    MCObject object;
-    MCGameplayPlayer *nativeActor;
+    AbstractClientPlayer clientPlayer;
     NetHandlerPlayClient *sendQueue;
-    MCObject *mc, *dependencyContext;
-    const EntityPlayerSPDependencies *dependencies;
+    StatFileWriter *statWriter;
     double lastReportedPosX,lastReportedPosY,lastReportedPosZ;
     float lastReportedYaw,lastReportedPitch;
-    bool serverSprintState,serverSneakState;
+    bool serverSneakState,serverSprintState;
     int32_t positionUpdateTicks;
+    bool hasValidHealth;
+    NBTString *clientBrand;
     MovementInput *movementInput;
-    MCObject *walkingContext;
+    MCObject *mc;
+    int32_t sprintToggleTimer,sprintingTicksLeft;
+    float renderArmYaw,renderArmPitch,prevRenderArmYaw,prevRenderArmPitch;
+    int32_t horseJumpPowerCounter;
+    float horseJumpPower,timeInPortal,prevTimeInPortal;
+    /* Native bindings for unported Minecraft/GUI/current-view services. */
+    MCObject *dependencyContext,*walkingContext;
+    const EntityPlayerSPDependencies *dependencies;
     const EntityPlayerSPWalkingDependencies *walkingDependencies;
 };
-/* Native storage for this source-method subset; not the complete SP/base Entity
-   constructor. Context/controller/actor refs are traced and never value mirrors. */
-EntityPlayerSP *EntityPlayerSP_nativeNew(MCGameplayPlayer *, NetHandlerPlayClient *, MCObject *mc,
-                                         MCObject *context, const EntityPlayerSPDependencies *);
+MCGameplayPlayer *EntityPlayerSP_asPlayer(EntityPlayerSP *);
+MCObject *EntityPlayerSP_asObject(EntityPlayerSP *);
+/* Allocation only. Source construction runs on this zeroed most-derived
+   object; every parent virtual call retains that same managed identity. */
+EntityPlayerSP *EntityPlayerSP_nativeAllocate(MCObjectHeap *);
 bool EntityPlayerSP_isInstance(const MCObject *);
+bool EntityPlayerSP_construct(EntityPlayerSP *,MCObject *mc,MCObject *world,
+    NetHandlerPlayClient *,StatFileWriter *,const EntityPlayerSPConstructorDependencies *,
+    const mc_crafting_dispatch *,MCObject *context,NativeJavaRandomRuntime *,NativeEntityIDRuntime *);
+/* Action binding never assigns source mc/sendQueue/statWriter. */
+bool EntityPlayerSP_bindActions(EntityPlayerSP *,MCObject *context,const EntityPlayerSPDependencies *);
 bool EntityPlayerSP_dropOneItem(EntityPlayerSP *, bool dropAll, EntityItem **out);
 bool EntityPlayerSP_closeScreen(EntityPlayerSP *);
 bool EntityPlayerSP_closeScreenAndDropStack(EntityPlayerSP *);
