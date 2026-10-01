@@ -55,10 +55,20 @@ static void live_maps(void) {
     CHECK(FurnaceRecipes_getSmeltingExperience(r,b)==1.f);
     CHECK(FurnaceRecipes_addSmeltingRecipeForBlock(r,(const Block *)(uintptr_t)15,block_item,b,.35f));
     CHECK(FurnaceRecipes_getSmeltingResult(r,stack(h,15,-9,INT32_MAX))==b);
+    ItemStack *sourceKey,*sourceValue;
+    CHECK(FurnaceRecipeMap_entry(m,0,&sourceKey,&sourceValue));
+    CHECK(sourceKey&&sourceKey->item==ItemStack_registryItem(15)&&sourceKey->stackSize==1&&sourceKey->itemDamage==32767&&sourceValue==b);
+    /* The removed key is unreachable and is freed by collection. Compare the
+       clone with this actual retained entry, whose address remains live. */
     MCObjectRoot root={0};CHECK(MCObjectRoot_init(&root,h,(MCObject *)r));CHECK(MCObjectHeap_collect(h));
+    ItemStack *retainedKey,*retainedValue;
+    CHECK(FurnaceRecipeMap_entry(m,0,&retainedKey,&retainedValue));CHECK(retainedKey==sourceKey&&retainedValue==sourceValue);
     MCObjectHeap *copy=MCObjectHeap_clone(h);CHECK(copy);MCObjectRoot cr={0};CHECK(MCObjectRoot_rebind(&cr,copy,&root));
     FurnaceRecipes *rr=(FurnaceRecipes *)MCObjectRoot_get(&cr);ItemStack *ck,*cv;CHECK(rr!=r&&rr->smeltingList!=m);
-    CHECK(FurnaceRecipeMap_entry(rr->smeltingList,0,&ck,&cv));CHECK(ck!=key&&cv!=b&&cv->item==b->item);
+    CHECK(FurnaceRecipeMap_entry(rr->smeltingList,0,&ck,&cv));CHECK(ck!=sourceKey&&cv!=sourceValue&&ck->item==sourceKey->item&&cv->item==sourceValue->item);
+    CHECK(ck->object.heap==copy&&cv->object.heap==copy&&sourceKey->object.heap==h&&sourceValue->object.heap==h);
+    CHECK(ck->stackSize==sourceKey->stackSize&&ck->itemDamage==sourceKey->itemDamage&&cv->stackSize==sourceValue->stackSize&&cv->itemDamage==sourceValue->itemDamage);
+    CHECK(MCObjectHeap_identityHashCode((MCObject *)ck)==MCObjectHeap_identityHashCode((MCObject *)sourceKey)&&MCObjectHeap_identityHashCode((MCObject *)cv)==MCObjectHeap_identityHashCode((MCObject *)sourceValue));
     CHECK(FurnaceRecipes_getSmeltingResult(rr,ck)==cv&&FurnaceRecipes_getSmeltingExperience(rr,cv)==.35f);
     cv->itemDamage=7;MCObjectHeap_touch(copy);CHECK(b->itemDamage==0);
     MCObjectRoot_drop(&cr);MCObjectHeap_free(copy);MCObjectRoot_drop(&root);MCObjectHeap_free(h);
