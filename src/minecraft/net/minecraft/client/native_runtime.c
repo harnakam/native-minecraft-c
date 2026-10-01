@@ -47,7 +47,7 @@ MCClientBindings *mc_client_graph_bindings(const MCGameplay *g) {
 EntityItem *mc_client_graph_item(const MCGameplay *g,int32_t id) {
     MCGameplayObjects *o=g ? (MCGameplayObjects *)MCObjectRoot_get(&g->root) : NULL;
     if (o) for (size_t i=0;i<o->itemCount;i++)
-        if (EntityItem_isInstance(o->items[i]) && ((EntityItem *)o->items[i])->entityId==id) return (EntityItem *)o->items[i];
+        if (EntityItem_isInstance(o->items[i]) && ((EntityItem *)o->items[i])->entity.entityId==id) return (EntityItem *)o->items[i];
     return NULL;
 }
 static MCClientBindings *binding(MCObject *o) {
@@ -133,7 +133,7 @@ static MCObject *get_entity(MCObject *c,MCGameplayWorld *w,int32_t id) {
     if (!binding(c) || !w || w->object.heap!=c->heap) return NULL;
     for (size_t i=0;i<w->owners->itemCount;i++) {
         MCObject *o=w->owners->items[i];
-        if (EntityItem_isInstance(o) && ((EntityItem *)o)->entityId==id) return o;
+        if (EntityItem_isInstance(o) && ((EntityItem *)o)->entity.entityId==id) return o;
     }
     return NULL;
 }
@@ -218,12 +218,15 @@ static bool entity_achievement(MCObject *c,MCObject *p,EntityItemAchievement whi
     return stat && EntityPlayerSP_triggerAchievement(b->sp,stat);
 }
 static bool silent(MCObject *c,const EntityItem *e) {
-    return binding(c) && e && DataWatcher_getWatchableObjectByte(e->dataWatcher,4)==1;
+    if (!binding(c)||!EntityItem_isInstance((const MCObject *)e)||e->entity.object.heap!=c->heap) {
+        MCObjectHeap_fail(c?c->heap:NULL);return false;
+    }
+    return Entity_isSilent((Entity *)&e->entity);
 }
 static float entity_random(MCObject *c,EntityItem *e) {
     float value=0;
-    if (!binding(c)||!EntityItem_isInstance((MCObject *)e)||e->object.heap!=c->heap||
-        !e->rand||e->rand->object.heap!=c->heap||!NativeJavaRandom_nextFloat(e->rand,&value)) {
+    if (!binding(c)||!EntityItem_isInstance((MCObject *)e)||e->entity.object.heap!=c->heap||
+        !e->entity.rand||e->entity.rand->object.heap!=c->heap||!NativeJavaRandom_nextFloat(e->entity.rand,&value)) {
         MCObjectHeap_fail(c?c->heap:NULL);return 0;
     }
     return value;
@@ -238,21 +241,39 @@ static bool pickup_unported(MCObject *c,MCObject *p,EntityItem *e,int32_t n) {
     (void)p; (void)e; (void)n; MCObjectHeap_fail(c->heap); return false;
 }
 static bool entity_dead(MCObject *c,EntityItem *e) {
-    if (!binding(c) || !e || e->object.heap!=c->heap) return false;
+    if (!binding(c) || !e || e->entity.object.heap!=c->heap) return false;
     /* Native inherited Entity.setDead field adapter. */
-    e->isDead=true; MCObjectHeap_touch(c->heap); return true;
+    e->entity.isDead=true; MCObjectHeap_touch(c->heap); return true;
 }
 static const EntityItemDependencies entity_deps={.logMissingItem=log_missing,.isRemote=remote,
     .inventory=entity_inventory,.name=entity_name,.findPlayer=find_player,.triggerAchievement=entity_achievement,
     .isSilent=silent,.nextFloat=entity_random,.playSoundAtEntity=sound_unported,
     .onItemPickup=pickup_unported,.setDead=entity_dead};
+static bool entity_init(MCObject *c,Entity *e) {
+    return binding(c) && EntityItem_entityInit((EntityItem *)e);
+}
+static bool entity_position(MCObject *c,Entity *e,double x,double y,double z) {
+    return binding(c) && Entity_setPosition(e,x,y,z);
+}
+static bool entity_box(MCObject *c,Entity *e,AxisAlignedBB *box) {
+    return binding(c) && Entity_setEntityBoundingBox(e,box);
+}
+static bool entity_dimension(MCObject *c,MCObject *world,int32_t *out) {
+    if (!binding(c) || !MCGameplayWorld_isInstance(world) || !out) return false;
+    *out=((MCGameplayWorld *)world)->dimension;return true;
+}
+static bool entity_remote(MCObject *c,MCObject *world,bool *out) {
+    if (!binding(c) || !MCGameplayWorld_isInstance(world) || !out) return false;
+    *out=((MCGameplayWorld *)world)->remote;return true;
+}
+static bool entity_location(MCObject *c,Entity *e,double x,double y,double z,float yaw,float pitch) {
+    return binding(c) && Entity_setLocationAndAngles(e,x,y,z,yaw,pitch);
+}
+static const EntityDependencies entity_base_dependencies={.entityInit=entity_init,.setPosition=entity_position,
+    .setEntityBoundingBox=entity_box,.getDimensionId=entity_dimension,.isRemote=entity_remote,.setLocationAndAngles=entity_location};
 static bool base_constructor(MCObject *c,EntityItem *e,MCObject *w) {
-    if (!binding(c) || !MCGameplayWorld_isInstance(w)) return false;
-    e->worldObj=w; e->entityId=((MCGameplayWorld *)w)->nextEntityId;
-    uint32_t next=(uint32_t)e->entityId+1u;
-    memcpy(&((MCGameplayWorld *)w)->nextEntityId,&next,sizeof next);
-    return EntityItem_nativeInitializeRandom(e,((MCGameplayWorld *)w)->randomRuntime)&&
-        EntityItem_nativeInitializeDataWatcher(e,NULL,NULL);
+    return binding(c) && MCGameplayWorld_isInstance(w) &&
+        Entity_construct(&e->entity,w,&entity_base_dependencies,c,((MCGameplayWorld *)w)->randomRuntime,NativeEntityIDRuntime_process());
 }
 static double random_double(MCObject *c) {
     MCClientBindings *b=binding(c);double value=0;
@@ -269,8 +290,8 @@ static float random_float(MCObject *c,MCGameplayPlayer *p) {
     }
     return value;
 }
-static bool size_entity(MCObject *c,EntityItem *e,float w,float h) { if (!binding(c)) return false; e->width=w; e->height=h; return true; }
-static bool position_entity(MCObject *c,EntityItem *e,double x,double y,double z) { if (!binding(c)) return false; e->posX=x; e->posY=y; e->posZ=z; return true; }
+static bool size_entity(MCObject *c,EntityItem *e,float w,float h) { return binding(c) && Entity_setSize(&e->entity,w,h); }
+static bool position_entity(MCObject *c,EntityItem *e,double x,double y,double z) { return binding(c) && Entity_setPosition(&e->entity,x,y,z); }
 static const EntityItemConstructorDependencies constructors={base_constructor,random_double,size_entity,position_entity};
 static float eye(MCObject *c,MCGameplayPlayer *p) { (void)c; return EntityPlayer_getEyeHeight(p); }
 static NBTString *player_name(MCObject *c,MCGameplayPlayer *p) { return binding(c) ? p->name : NULL; }
@@ -375,7 +396,7 @@ bool mc_client_graph_drop(MCGameplay *g,bool all) {
     return b && EntityPlayerSP_dropOneItem(b->sp,all,&out);
 }
 bool mc_client_graph_creative(MCGameplay *g,int32_t id,int32_t damage) {
-    MCClientBindings *b=mc_client_graph_bindings(g); if (!b || !b->player->creative) return false;
+    MCClientBindings *b=mc_client_graph_bindings(g); if (!b || !MCGameplayPlayer_isCreativeMode((MCObject *)b->player)) return false;
     ItemStack *s=ItemStack_new(g->heap,ItemStack_registryItem(id),mc_item_stack_limit((int16_t)id),damage);
     if (!s || !InventoryPlayer_setInventorySlotContents(b->player->inventory,b->player->inventory->currentItem,s)) return false;
     /* Explicit native creative catalog action. It sets the real hotbar then
@@ -400,7 +421,7 @@ bool mc_client_graph_spawn_item_packet(MCGameplay *g,int32_t id,double x,double 
     int32_t pitch,int32_t yaw,int32_t data,double vx,double vy,double vz) {
     MCClientBindings *b=mc_client_graph_bindings(g);
     MCGameplayObjects *o=MCGameplay_get(g); if (!b || !o) return false;
-    for (size_t i=0;i<o->itemCount;i++) if (EntityItem_isInstance(o->items[i]) && ((EntityItem *)o->items[i])->entityId==id) {
+    for (size_t i=0;i<o->itemCount;i++) if (EntityItem_isInstance(o->items[i]) && ((EntityItem *)o->items[i])->entity.entityId==id) {
         if (!MCGameplay_removeItem(g,i)) return false;
         break;
     }
@@ -410,8 +431,8 @@ bool mc_client_graph_spawn_item_packet(MCGameplay *g,int32_t id,double x,double 
     EntityItem *e=EntityItem_new_position(g->heap,(MCObject *)b->player->worldObj,(MCObject *)b,
         &entity_deps,&constructors,x,y,z);
     if (!e) return false;
-    e->entityId=id;e->rotationPitch=spawn_angle(pitch);e->rotationYaw=spawn_angle(yaw);
-    if (data>0) {e->motionX=vx;e->motionY=vy;e->motionZ=vz;}
+    e->entity.entityId=id;e->entity.rotationPitch=spawn_angle(pitch);e->entity.rotationYaw=spawn_angle(yaw);
+    if (data>0) {e->entity.motionX=vx;e->entity.motionY=vy;e->entity.motionZ=vz;}
     MCObjectHeap_touch(g->heap);
     return NativeItemMotion_validate(e) && MCGameplay_addItem(g,(MCObject *)e);
 }

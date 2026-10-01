@@ -28,5 +28,11 @@ bool MCGameplayStorage_encodeMaps(const MCGameplayObjects *,mc_nbt *,void *conte
 bool MCGameplayStorage_loadPlayer(MCGameplayPlayer *,const mc_nbt *,const mc_crafting_dispatch *);
 bool MCGameplayStorage_loadItems(MCGameplayWorld *,const mc_nbt *,MCObject *entityContext,
     const EntityItemDependencies *,const EntityItemConstructorDependencies *);
+/* Live native engine restoration: retain each newly constructed source Entity
+   ID. The legacy C919EntityId field is validated as envelope data but does not
+   override the process-wide source constructor allocation. loadItems above
+   remains the legacy persisted-ID roundtrip adapter. */
+bool MCGameplayStorage_loadItemsWithSourceIDs(MCGameplayWorld *,const mc_nbt *,MCObject *entityContext,
+    const EntityItemDependencies *,const EntityItemConstructorDependencies *);
 bool MCGameplayStorage_loadMaps(MCGameplayWorld *,const mc_nbt *);
 #endif

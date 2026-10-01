@@ -254,7 +254,7 @@ static void remove_item(mc_client *c,mc_client_item *item) {
     MCObjectRootScope scope={0};
     if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) {
         MCGameplayObjects *o=MCGameplay_get(&c->gameplay);
-        for (size_t i=0;o && i<o->itemCount;i++) if (EntityItem_isInstance(o->items[i]) && ((EntityItem *)o->items[i])->entityId==item->eid) {
+        for (size_t i=0;o && i<o->itemCount;i++) if (EntityItem_isInstance(o->items[i]) && ((EntityItem *)o->items[i])->entity.entityId==item->eid) {
             (void)MCGameplay_removeItem(&c->gameplay,i); break;
         }
         MCObjectRootScope_end(&scope);
@@ -267,7 +267,7 @@ static void clear_items(mc_client *c) {
 static void unload_items(mc_client *c,int x,int z) {
     for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) {
         mc_client_item *item=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,item->eid);
-        if (item->active && e && mc_floor_div16((int)floor(e->posX))==x && mc_floor_div16((int)floor(e->posZ))==z) remove_item(c,item);
+        if (item->active && e && mc_floor_div16((int)floor(e->entity.posX))==x && mc_floor_div16((int)floor(e->entity.posZ))==z) remove_item(c,item);
     }
 }
 static void receive_object(mc_client *c,mc_buf *b) {
@@ -368,16 +368,20 @@ static bool correct_position(mc_client *c, double x, double y, double z, float y
     return true;
 }
 
-static void send_abilities(mc_client *c) {
-    mc_buf packet;
-    start_packet(&packet, 0x13);
-    mc_put_u8(&packet, (uint8_t)((c->gamemode == 1 ? 9 : 0) | (c->can_fly ? 4 : 0) | (c->flying ? 2 : 0)));
-    mc_put_f32(&packet, 0.05f); mc_put_f32(&packet, 0.1f);
-    send_packet(c, &packet);
-}
-
 static bool begin_frame(mc_client *,MCGameplayTransaction *,MCObjectRootScope *);
 static bool finish_frame(mc_client *,MCGameplayTransaction *,bool);
+static void send_abilities(mc_client *c) {
+    MCGameplayTransaction tx={0};MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return;
+    MCGameplayPlayer *p=mc_client_graph_player(&tx.working);
+    PlayerCapabilities *caps=MCGameplayPlayer_capabilities((MCObject *)p);
+    bool ok=caps!=NULL;
+    if (ok && caps->allowFlying) {caps->isFlying=!caps->isFlying;MCObjectHeap_touch(tx.working.heap);}
+    C13PacketPlayerAbilities *packet=ok?C13PacketPlayerAbilities_new(tx.working.heap,caps):NULL;
+    ok=packet && MCGameplayClientPackets_addToSendQueue(p,(MCObject *)packet);
+    MCObjectRootScope_end(&scope);if (finish_frame(c,&tx,ok)) c->velocity_y=0;
+}
+
 static void send_slot(mc_client *c,int slot) {
     MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
     if (!begin_frame(c,&tx,&scope)) return;
@@ -392,7 +396,6 @@ static void configure_player(mc_client *c) {
     mc_put_u8(&packet, 1); mc_put_u8(&packet, 127); send_packet(c, &packet);
     start_packet(&packet, 0x17);
     mc_put_string(&packet, "MC|Brand"); mc_put_string(&packet, "C919 native"); send_packet(c, &packet);
-    if (c->gamemode == 1) c->can_fly = true;
     send_slot(c, mc_client_selected(c));
 }
 
@@ -403,6 +406,8 @@ static void gui_view(mc_client *c) {
     MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
     c->inventory_open=b && b->screenOpen; c->creative_open=b && b->creativeScreen;
     c->window_id=b ? (uint8_t)b->player->openContainer->windowId : 0;
+    PlayerCapabilities *caps=b?MCGameplayPlayer_capabilities((MCObject *)b->player):NULL;
+    c->can_fly=caps && caps->allowFlying;c->flying=caps && caps->isFlying;
 }
 static bool finish_frame(mc_client *c,MCGameplayTransaction *tx,bool ok) {
     char error[160];
@@ -430,16 +435,22 @@ static void actor_native_state(mc_client *c) {
     if (b) {
         b->player->posX=c->x; b->player->posY=c->y; b->player->posZ=c->z;
         b->player->rotationYaw=c->yaw; b->player->rotationPitch=c->pitch;
-        b->player->entityId=c->entity_id; b->player->creative=c->gamemode==1; b->player->spectator=c->gamemode==3;
+        b->player->entityId=c->entity_id; b->player->spectator=c->gamemode==3;
         b->player->dimension=c->dimension;
         b->player->worldObj->dimension=c->dimension;
         if (c->gamemode!=1) b->creativeScreen=false;
-        static const PlayerControllerMPGameType *const modes[]={&PlayerControllerMP_SURVIVAL,&PlayerControllerMP_CREATIVE,&PlayerControllerMP_ADVENTURE,&PlayerControllerMP_SPECTATOR};
-        if (c->gamemode>=0 && c->gamemode<4) b->controller->currentGameType=modes[c->gamemode];
         MCObjectHeap_touch(c->gameplay.heap);
     }
     MCObjectRootScope_end(&scope);
     gui_view(c);
+}
+static bool apply_game_type(mc_client *c) {
+    MCGameplayTransaction tx={0};MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return false;
+    MCClientBindings *b=mc_client_graph_bindings(&tx.working);
+    bool ok=b && PlayerControllerMP_setGameType(b->controller,WorldSettingsGameType_getByID(c->gamemode));
+    if (ok && c->gamemode!=1) b->creativeScreen=false;
+    MCObjectRootScope_end(&scope);return finish_frame(c,&tx,ok);
 }
 static void reset_window(mc_client *c) {
     c->window_ready=false; ++c->window_generation; c->window_title[0]=0;
@@ -530,7 +541,7 @@ static void receive_source_packet(mc_client *c,mc_buf *b,int32_t id) {
             MCObjectReadScope read={0};
             if (MCObjectReadScope_begin(&read,c->gameplay.heap)) {
                 EntityItem *entity=mc_client_graph_item(&c->gameplay,eid);
-                item->metadata_ready=entity && DataWatcher_getWatchableObjectItemStack(entity->dataWatcher,10)!=NULL;
+                item->metadata_ready=entity && DataWatcher_getWatchableObjectItemStack(entity->entity.dataWatcher,10)!=NULL;
                 MCObjectReadScope_end(&read);
             }
             ++c->item_metadata;
@@ -601,7 +612,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
                 c->joined = true;
                 snprintf(c->status, sizeof(c->status), "Connected; loading terrain");
                 printf("JOIN entity=%d gamemode=%d dimension=%d\n", c->entity_id, c->gamemode, c->dimension);
-                actor_native_state(c); configure_player(c);
+                actor_native_state(c); if (apply_game_type(c)) configure_player(c);
             }
             break;
         }
@@ -617,7 +628,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
         }
         case 0x07:
             c->dimension = mc_get_i32(b); (void)mc_get_u8(b); c->gamemode = mc_get_u8(b); skip_string(b);
-            if (!b->failed) { close_inventory(c,false); clear_items(c); MCObjectRootScope map_scope={0}; if (MCObjectRootScope_begin(&map_scope,c->gameplay.heap)) { mc_maps *maps=mc_client_maps(c); mc_maps_free(maps); mc_maps_init(maps); MCObjectRootScope_end(&map_scope); } mc_world_free(&c->world); mc_world_init(&c->world, 0); memset(c->players, 0, sizeof(c->players)); c->positioned = false; c->velocity_y = 0; actor_native_state(c); }
+            if (!b->failed) { close_inventory(c,false); clear_items(c); MCObjectRootScope map_scope={0}; if (MCObjectRootScope_begin(&map_scope,c->gameplay.heap)) { mc_maps *maps=mc_client_maps(c); mc_maps_free(maps); mc_maps_init(maps); MCObjectRootScope_end(&map_scope); } mc_world_free(&c->world); mc_world_init(&c->world, 0); memset(c->players, 0, sizeof(c->players)); c->positioned = false; c->velocity_y = 0; actor_native_state(c); (void)apply_game_type(c); }
             break;
         case 0x08: {
             double x = mc_get_f64(b), y = mc_get_f64(b), z = mc_get_f64(b);
@@ -657,7 +668,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             int32_t entity=mc_get_varint(b); double vx=mc_get_i16(b)/8000.0,vy=mc_get_i16(b)/8000.0,vz=mc_get_i16(b)/8000.0;
             if (b->failed || b->pos!=b->len) { b->failed=true; break; }
             mc_client_item *item=client_item(c,entity);
-            if (item) { MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) { e->motionX=vx; e->motionY=vy; e->motionZ=vz; } MCObjectRootScope_end(&scope); } }
+            if (item) { MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) { e->entity.motionX=vx; e->entity.motionY=vy; e->entity.motionZ=vz; } MCObjectRootScope_end(&scope); } }
             break;
         }
         case 0x13: {
@@ -671,7 +682,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
         case 0x14: {
             int32_t eid=mc_get_varint(b); unsigned ground=mc_get_u8(b);
             if (b->failed || b->pos!=b->len || ground>1) { b->failed=true; break; }
-            mc_client_item *item=client_item(c,eid); if (item) { MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,eid); if (e) e->onGround=ground!=0; MCObjectRootScope_end(&scope); } }
+            mc_client_item *item=client_item(c,eid); if (item) { MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,eid); if (e) e->entity.onGround=ground!=0; MCObjectRootScope_end(&scope); } }
             break;
         }
         case 0x15: case 0x16: case 0x17: case 0x18: {
@@ -698,9 +709,9 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             if (item) {
                 if (id!=0x16) {
                     item->server_x=(int32_t)llround(next_x*32); item->server_y=(int32_t)llround(next_y*32); item->server_z=(int32_t)llround(next_z*32);
-                    MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) { e->posX=next_x; e->posY=next_y; e->posZ=next_z; } MCObjectRootScope_end(&scope); }
+                    MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) { (void)Entity_setPosition(&e->entity,next_x,next_y,next_z); } MCObjectRootScope_end(&scope); }
                 }
-                MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) e->onGround=ground!=0; MCObjectRootScope_end(&scope); }
+                MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) e->entity.onGround=ground!=0; MCObjectRootScope_end(&scope); }
             }
             break;
         }
@@ -750,9 +761,8 @@ static void handle_packet(mc_client *c, mc_buf *b) {
                 if (value<0 || value>3 || value!=(float)(int)value) b->failed=true;
                 else {
                     c->gamemode=(int)value; actor_native_state(c);
-                    c->can_fly=c->gamemode==1 || c->gamemode==3;
-                    if (!c->can_fly) { c->flying=false; c->velocity_y=0; }
-                    else if (c->gamemode==3) c->flying=true;
+                    if (!apply_game_type(c)) b->failed=true;
+                    if (!c->flying) c->velocity_y=0;
                     if (c->gamemode!=1) {
                         c->creative_open=false;
                         snprintf(c->inventory_status,sizeof(c->inventory_status),"Server changed game mode; creative selection is unavailable");
@@ -773,11 +783,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             else if (!finish_frame(c,&tx,true)) b->failed=true;
             break;
         }
-        case 0x39: {
-            int flags = mc_get_u8(b); (void)mc_get_f32(b); (void)mc_get_f32(b);
-            c->can_fly = (flags & 4) != 0; c->flying = (flags & 2) != 0;
-            break;
-        }
+        case 0x39: receive_source_packet(c,b,id); break;
         case 0x40: {
             char reason[256];
             if (read_chat(b, reason, sizeof(reason))) { snprintf(c->status, sizeof(c->status), "Disconnected: %.235s", reason); c->disconnected = true; fprintf(stderr, "%s\n", c->status); }
@@ -952,7 +958,7 @@ static void update_player(mc_client *c, const mc_input *input, double dt,int32_t
         for (int32_t step=0;step<ticks && !MCObjectHeap_failed(c->gameplay.heap);step++) for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) {
             mc_client_item *item=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,item->eid);
             if (item->active && e && !NativeItemMotion_validate(e)) break;
-            if (item->active && item->metadata_ready && e && body_loaded(c,e->posX,e->posZ))
+            if (item->active && item->metadata_ready && e && body_loaded(c,e->entity.posX,e->entity.posZ))
                 (void)NativeItemMotion_tick(e,&c->world);
         }
         MCObjectRootScope_end(&motion_scope);
@@ -971,7 +977,7 @@ static void update_player(mc_client *c, const mc_input *input, double dt,int32_t
         c->yaw = fmodf(c->yaw, 360.0f);
         if (c->pitch < -89.5f) c->pitch = -89.5f;
         if (c->pitch > 89.5f) c->pitch = 89.5f;
-        if (input->toggle_flight && c->can_fly) { c->flying = !c->flying; c->velocity_y = 0; send_abilities(c); }
+        if (input->toggle_flight && c->can_fly) send_abilities(c);
         double forward = (input->forward ? 1 : 0) - (input->backward ? 1 : 0);
         double strafe = (input->right ? 1 : 0) - (input->left ? 1 : 0);
         double magnitude = sqrt(forward * forward + strafe * strafe);
@@ -1280,14 +1286,21 @@ int main(int argc, char **argv) {
            c->joined,c->positioned,c->world.count,c->chunks_received,non_air,c->block_updates,players,c->packets_received,c->x,c->y,c->z,c->inventory_packets,c->inventory_rejections,c->gamemode,items,c->item_spawns,c->item_metadata,c->item_collects);
     MCObjectRootScope diagnostic={0};
     if (MCObjectRootScope_begin(&diagnostic,c->gameplay.heap)) {
+        MCClientBindings *binding=mc_client_graph_bindings(&c->gameplay);
+        PlayerCapabilities *caps=binding?MCGameplayPlayer_capabilities((MCObject *)binding->player):NULL;
+        if (caps) {
+            uint32_t flyBits,walkBits;memcpy(&flyBits,&caps->flySpeed,4);memcpy(&walkBits,&caps->walkSpeed,4);
+            unsigned flags=(caps->disableDamage?1u:0u)|(caps->isFlying?2u:0u)|(caps->allowFlying?4u:0u)|(caps->isCreativeMode?8u:0u)|(caps->allowEdit?16u:0u);
+            printf("CLIENT_ABILITIES flags=%u fly_bits=%08x walk_bits=%08x controller_mode=%d\n",flags,flyBits,walkBits,WorldSettingsGameType_getID(binding->controller->currentGameType));
+        }
         for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) if (c->items[i].active) {
             const mc_client_item *entry=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,entry->eid);
-            ItemStack *stack=e ? DataWatcher_getWatchableObjectItemStack(e->dataWatcher,10) : NULL;
+            ItemStack *stack=e ? DataWatcher_getWatchableObjectItemStack(e->entity.dataWatcher,10) : NULL;
             mc_buf tag; mc_buf_init(&tag); if (stack && stack->stackTagCompound) (void)NBTWire_encodeCompound(&tag,stack->stackTagCompound);
             printf("CLIENT_ITEM eid=%d ready=%d id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx server_position=%.3f,%.3f,%.3f position=%.3f,%.3f,%.3f rotation=%.6f,%.6f\n",
                 entry->eid,entry->metadata_ready,stack ? ItemStack_registryId(stack->item) : -1,stack ? stack->stackSize : 0,stack ? stack->itemDamage : 0,tag.len,(unsigned long)crc32(0,tag.data,(uInt)tag.len),
-                entry->server_x/32.0,entry->server_y/32.0,entry->server_z/32.0,e ? e->posX : 0,e ? e->posY : 0,e ? e->posZ : 0,
-                e ? e->rotationPitch : 0,e ? e->rotationYaw : 0);
+                entry->server_x/32.0,entry->server_y/32.0,entry->server_z/32.0,e ? e->entity.posX : 0,e ? e->entity.posY : 0,e ? e->entity.posZ : 0,
+                e ? e->entity.rotationPitch : 0,e ? e->entity.rotationYaw : 0);
             mc_buf_free(&tag);
         }
         for (int i=0;i<45;i++) {

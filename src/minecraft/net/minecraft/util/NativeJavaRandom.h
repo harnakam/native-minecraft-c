@@ -3,7 +3,7 @@
 #include "util/MCObjectHeap.h"
 
 /* Independently authored mathematical Java 8 Random API platform adapter.
-   This is not a copied JDK class. Gaussian/streams/serialization/subclass
+   This is not a copied JDK class. Streams/serialization/subclass
    dispatch are not implemented here. The scalar state is also usable by the
    native process Math.random service outside gameplay transaction heaps. */
 typedef struct {
@@ -24,6 +24,7 @@ bool NativeJavaRandomState_nextLong(NativeJavaRandomState *,int64_t *);
 bool NativeJavaRandomState_nextBoolean(NativeJavaRandomState *,bool *);
 bool NativeJavaRandomState_nextFloat(NativeJavaRandomState *,float *);
 bool NativeJavaRandomState_nextDouble(NativeJavaRandomState *,double *);
+bool NativeJavaRandomState_nextGaussian(NativeJavaRandomState *,double *);
 bool NativeJavaRandomState_nextBytes(NativeJavaRandomState *,uint8_t *,size_t length);
 
 NativeJavaRandom *NativeJavaRandom_new(MCObjectHeap *,int64_t seed);
@@ -36,10 +37,16 @@ bool NativeJavaRandom_nextLong(NativeJavaRandom *,int64_t *);
 bool NativeJavaRandom_nextBoolean(NativeJavaRandom *,bool *);
 bool NativeJavaRandom_nextFloat(NativeJavaRandom *,float *);
 bool NativeJavaRandom_nextDouble(NativeJavaRandom *,double *);
+bool NativeJavaRandom_nextGaussian(NativeJavaRandom *,double *);
 bool NativeJavaRandom_nextBytes(NativeJavaRandom *,uint8_t *,size_t length);
 /* Plain-state invalid arguments return false before any mutation. Managed
    failures additionally fail the heap, the native source-exception boundary.
-   Scalar output arguments remain unchanged on failure. Callers retain managed
+   Output arguments remain unchanged on failure. Uncached Gaussian additionally
+   requires the NativeStrictMath numerical environment (nearest-even, ordinary
+   IEEE binary64, gradual underflow, no floating contraction/fast math). An
+   unsupported environment fails before consuming draws; cached Gaussian only
+   returns stored bits and consumes no draws. setSeed clears cache validity and
+   preserves its stale double bits. Callers retain managed
    references as usual; operations allocate no objects or invoke callbacks.
    Managed wrappers obey the single-writer heap contract. Process concurrency
    belongs to the separate runtime service, not this state implementation.

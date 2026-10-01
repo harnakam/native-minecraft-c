@@ -61,31 +61,31 @@ EntityItem *EntityPlayer_dropItem(MCGameplayPlayer *player,ItemStack *stack,bool
         if (!MCObjectHeap_failed(h)) {
             float angle=multiply(multiply(d->nextFloat(context,player),3.1415927f),2.0f);
             if (!MCObjectHeap_failed(h)) {
-                entity->motionX=(double)multiply(-MathHelper_sin(angle),speed);
-                entity->motionZ=(double)multiply(MathHelper_cos(angle),speed);
-                entity->motionY=0.20000000298023224; MCObjectHeap_touch(h);
+                entity->entity.motionX=(double)multiply(-MathHelper_sin(angle),speed);
+                entity->entity.motionZ=(double)multiply(MathHelper_cos(angle),speed);
+                entity->entity.motionY=0.20000000298023224; MCObjectHeap_touch(h);
             }
         }
     } else if (ok) {
         float speed=0.3f;
         float yaw=multiply(divide(player->rotationYaw,180.0f),3.1415927f);
         float pitch=multiply(divide(player->rotationPitch,180.0f),3.1415927f);
-        entity->motionX=(double)multiply(multiply(-MathHelper_sin(yaw),MathHelper_cos(pitch)),speed);
-        entity->motionZ=(double)multiply(multiply(MathHelper_cos(yaw),MathHelper_cos(pitch)),speed);
-        entity->motionY=(double)add(multiply(-MathHelper_sin(pitch),speed),0.1f); MCObjectHeap_touch(h);
+        entity->entity.motionX=(double)multiply(multiply(-MathHelper_sin(yaw),MathHelper_cos(pitch)),speed);
+        entity->entity.motionZ=(double)multiply(multiply(MathHelper_cos(yaw),MathHelper_cos(pitch)),speed);
+        entity->entity.motionY=(double)add(multiply(-MathHelper_sin(pitch),speed),0.1f); MCObjectHeap_touch(h);
         float angle=multiply(multiply(d->nextFloat(context,player),3.1415927f),2.0f);
         if (!MCObjectHeap_failed(h)) speed=multiply(0.02f,d->nextFloat(context,player));
         if (!MCObjectHeap_failed(h)) {
             double cos=d->mathCos(context,(double)angle);
-            if (!MCObjectHeap_failed(h)) {volatile double delta=cos*(double)speed;entity->motionX+=delta;MCObjectHeap_touch(h);}
+            if (!MCObjectHeap_failed(h)) {volatile double delta=cos*(double)speed;entity->entity.motionX+=delta;MCObjectHeap_touch(h);}
         }
         float first=0,second=0;
         if (!MCObjectHeap_failed(h)) first=d->nextFloat(context,player);
         if (!MCObjectHeap_failed(h)) second=d->nextFloat(context,player);
         if (!MCObjectHeap_failed(h)) {
-            entity->motionY+=(double)multiply(add(first,-second),0.1f);
+            entity->entity.motionY+=(double)multiply(add(first,-second),0.1f);
             double sin=d->mathSin(context,(double)angle);
-            if (!MCObjectHeap_failed(h)) {volatile double delta=sin*(double)speed;entity->motionZ+=delta;MCObjectHeap_touch(h);}
+            if (!MCObjectHeap_failed(h)) {volatile double delta=sin*(double)speed;entity->entity.motionZ+=delta;MCObjectHeap_touch(h);}
         }
     }
     ok=ok&&!MCObjectHeap_failed(h);

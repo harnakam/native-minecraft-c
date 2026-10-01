@@ -241,6 +241,30 @@ bool NetHandlerPlayClient_handleEntityMetadata(NetHandlerPlayClient *h,
 static bool metadata_dispatch(MCObject *o, S1CPacketEntityMetadata *p) {
     return NetHandlerPlayClient_handleEntityMetadata((NetHandlerPlayClient *)o, p);
 }
+bool NetHandlerPlayClient_handlePlayerAbilities(NetHandlerPlayClient *h,S39PacketPlayerAbilities *packet) {
+    MCObjectRootScope scope={0};MCPacketThreadResult thread=begin(h,(MCObject *)packet,&scope);
+    if (thread!=MC_PACKET_THREAD_EXECUTE) return end(h,&scope,thread==MC_PACKET_THREAD_QUEUED);
+    MCGameplayPlayer *player=current_player(h);
+    bool ok=player && S39PacketPlayerAbilities_isInstance((MCObject *)packet) && MCObjectRootScope_pin(&scope,(MCObject *)player);
+    /* Source captures the player once; each statement captures its current
+       capabilities receiver before evaluating the packet getter. */
+    PlayerCapabilities *caps=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    if (caps) {caps->isFlying=S39PacketPlayerAbilities_isFlying(packet);MCObjectHeap_touch(h->object.heap);} else ok=false;
+    caps=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    if (caps) {caps->isCreativeMode=S39PacketPlayerAbilities_isCreativeMode(packet);MCObjectHeap_touch(h->object.heap);} else ok=false;
+    caps=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    if (caps) {caps->disableDamage=S39PacketPlayerAbilities_isInvulnerable(packet);MCObjectHeap_touch(h->object.heap);} else ok=false;
+    caps=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    if (caps) {caps->allowFlying=S39PacketPlayerAbilities_isAllowFlying(packet);MCObjectHeap_touch(h->object.heap);} else ok=false;
+    caps=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    ok=caps && PlayerCapabilities_setFlySpeed(caps,S39PacketPlayerAbilities_getFlySpeed(packet));
+    caps=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    ok=caps && PlayerCapabilities_setPlayerWalkSpeed(caps,S39PacketPlayerAbilities_getWalkSpeed(packet));
+    return end(h,&scope,ok);
+}
+static bool abilities_dispatch(MCObject *h,S39PacketPlayerAbilities *p) {
+    return NetHandlerPlayClient_handlePlayerAbilities((NetHandlerPlayClient *)h,p);
+}
 static bool close_dispatch(MCObject *o, S2EPacketCloseWindow *p) {
     return NetHandlerPlayClient_handleCloseWindow((NetHandlerPlayClient *)o, p);
 }
@@ -258,7 +282,8 @@ static const INetHandlerPlayClientMethods handler_methods = {
     .handleSetSlot = slot_dispatch,
     .handleWindowItems = items_dispatch,
     .handleConfirmTransaction = confirm_dispatch,
-    .handleEntityMetadata = metadata_dispatch};
+    .handleEntityMetadata = metadata_dispatch,
+    .handlePlayerAbilities = abilities_dispatch};
 INetHandlerPlayClient NetHandlerPlayClient_asHandler(NetHandlerPlayClient *h) {
     return (INetHandlerPlayClient){(MCObject *)h, &handler_methods};
 }

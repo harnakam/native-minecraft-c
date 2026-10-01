@@ -8,6 +8,15 @@ set(MC_SOURCE src/minecraft/net/minecraft)
 set(ZLIB_USE_STATIC_LIBS ON)
 find_package(ZLIB REQUIRED)
 add_library(c919-core STATIC
+    ${MC_SOURCE}/util/NativeStrictMathLog.c
+    ${MC_SOURCE}/util/NativeStrictMathSqrt.c
+    ${MC_SOURCE}/util/NativeEntityIDRuntime.c
+    ${MC_SOURCE}/util/AxisAlignedBB.c
+    ${MC_SOURCE}/command/CommandResultStats.c
+    ${MC_SOURCE}/entity/player/PlayerCapabilities.c
+    ${MC_SOURCE}/world/WorldSettingsGameType.c
+    ${MC_SOURCE}/network/play/client/C13PacketPlayerAbilities.c
+    ${MC_SOURCE}/network/play/server/S39PacketPlayerAbilities.c
     ${MC_SOURCE}/network/protocol.c
     ${MC_SOURCE}/network/PacketBuffer.c
     ${MC_SOURCE}/network/NativePacket.c
@@ -126,6 +135,11 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/world/map.c
     ${MC_SOURCE}/world/storage/MapData.c
     ${MC_SOURCE}/world/storage.c)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(${MC_SOURCE}/util/NativeJavaRandom.c
+        ${MC_SOURCE}/util/NativeStrictMathLog.c ${MC_SOURCE}/util/NativeStrictMathSqrt.c
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-fast-math")
+endif()
 target_include_directories(c919-core PUBLIC ${MC_SOURCE})
 target_link_libraries(c919-core PUBLIC ZLIB::ZLIB)
 if(WIN32)
@@ -152,7 +166,7 @@ if(WIN32)
     target_link_libraries(c919-client PRIVATE opengl32 gdi32 user32)
 endif()
 if(BUILD_TESTING)
-    foreach(name protocol gameplay_client_frame source_packet_placement source_empty_map source_action_packets source_client_actions source_server_use source_map_refs source_inventory_animation source_hotbar source_timer java_random native_random_runtime source_uuid source_uuid_nbt native_item_motion native_packets packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
+    foreach(name java_gaussian player_capabilities source_entity_constructor source_ability_packets protocol gameplay_client_frame source_packet_placement source_empty_map source_action_packets source_client_actions source_server_use source_map_refs source_inventory_animation source_hotbar source_timer java_random native_random_runtime source_uuid source_uuid_nbt native_item_motion native_packets packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
         add_executable(test-${name} tests/test_${name}.c)
         target_link_libraries(test-${name} PRIVATE c919-core)
         c919_warnings(test-${name})
@@ -197,4 +211,6 @@ if(BUILD_TESTING)
     set_tests_properties(client-animation PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>;C919_CLIENT=$<TARGET_FILE:c919-client>" TIMEOUT 60)
     add_test(NAME source-graph-network COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_graph_network.py)
     set_tests_properties(source-graph-network PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>" TIMEOUT 60)
+    add_test(NAME client-abilities COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_abilities.py)
+    set_tests_properties(client-abilities PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>;C919_CLIENT=$<TARGET_FILE:c919-client>" TIMEOUT 90)
 endif()

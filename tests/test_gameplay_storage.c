@@ -45,12 +45,31 @@ static bool silent(MCObject *ctx,const EntityItem *e) {(void)ctx;(void)e;return 
 static float next_float(MCObject *ctx,EntityItem *e) {(void)ctx;(void)e;CHECK(false);return 0;}
 static bool sound(MCObject *ctx,MCObject *w,MCObject *p,const char *n,float v,float pitch) {(void)ctx;(void)w;(void)p;(void)n;(void)v;(void)pitch;CHECK(false);return false;}
 static bool pickup(MCObject *ctx,MCObject *p,EntityItem *e,int32_t n) {(void)ctx;(void)p;(void)e;(void)n;CHECK(false);return false;}
-static bool dead(MCObject *ctx,EntityItem *e) {((Effects *)ctx)->dead++;e->isDead=true;MCObjectHeap_touch(ctx->heap);return true;}
+static bool dead(MCObject *ctx,EntityItem *e) {((Effects *)ctx)->dead++;e->entity.isDead=true;MCObjectHeap_touch(ctx->heap);return true;}
 static const EntityItemDependencies entity_dependencies={logged,remote,inventory,name,find,achieve,silent,next_float,sound,pickup,dead};
-static bool base_constructor(MCObject *ctx,EntityItem *e,MCObject *w) {CHECK(ctx->heap==w->heap&&e->health==0&&EntityItem_getDataWatcher(e)==NULL);MCGameplayWorld *world=(MCGameplayWorld *)w;e->entityId=world->nextEntityId++;e->rand=NativeJavaRandom_new(e->object.heap,17);e->entityUniqueID=NativeJavaUUID_new(e->object.heap,37,e->entityId);CHECK(e->rand&&e->entityUniqueID);((Effects *)ctx)->constructed=e;return EntityItem_nativeInitializeDataWatcher(e,&watcherMethods,ctx);}
+/* Source superclass dependencies used by the fixture: no alternate
+   Entity state or guessed constructor body. Observer counters remain scoped
+   to the subclass/dependency calls tested by this suite. */
+static bool inherited_init(MCObject *c,Entity *e) {(void)c;return EntityItem_entityInit((EntityItem *)e);}
+static bool inherited_position(MCObject *c,Entity *e,double x,double y,double z) {(void)c;return Entity_setPosition(e,x,y,z);}
+static bool inherited_bounds(MCObject *c,Entity *e,AxisAlignedBB *b) {(void)c;return Entity_setEntityBoundingBox(e,b);}
+static bool inherited_dimension(MCObject *c,MCObject *w,int32_t *out) {(void)c;CHECK(MCGameplayWorld_isInstance(w));*out=((MCGameplayWorld *)w)->dimension;return true;}
+static const EntityDependencies inherited_methods={.entityInit=inherited_init,.setPosition=inherited_position,.setEntityBoundingBox=inherited_bounds,.getDimensionId=inherited_dimension,.watcher=&watcherMethods};
+static bool base_constructor(MCObject *ctx,EntityItem *e,MCObject *w) {
+    CHECK(ctx->heap==w->heap&&e->health==0&&EntityItem_getDataWatcher(e)==NULL);
+    MCGameplayWorld *world=(MCGameplayWorld *)w;
+    NativeEntityIDRuntime *ids=NativeEntityIDRuntime_new(world->nextEntityId++);CHECK(ids);
+    bool ok=Entity_construct(&e->entity,w,&inherited_methods,ctx,world->randomRuntime,ids);
+    CHECK(NativeEntityIDRuntime_free(ids));if(!ok)return false;
+    /* Deliberately deterministic fixture identities for save-order tests. */
+    e->entity.rand=NativeJavaRandom_new(e->entity.object.heap,17);
+    e->entity.entityUniqueID=NativeJavaUUID_new(e->entity.object.heap,37,e->entity.entityId);
+    CHECK(e->entity.rand&&e->entity.entityUniqueID);((Effects *)ctx)->constructed=e;
+    MCObjectHeap_touch(ctx->heap);return true;
+}
 static double math_random(MCObject *ctx) {MCObjectHeap_touch(ctx->heap);return 0.25;}
-static bool size_entity(MCObject *ctx,EntityItem *e,float w,float h) {CHECK(ctx->heap==e->object.heap);e->width=w;e->height=h;return true;}
-static bool position_entity(MCObject *ctx,EntityItem *e,double x,double y,double z) {CHECK(ctx->heap==e->object.heap);Effects *effects=(Effects *)ctx;if(effects->positions<2)effects->watchedAtPosition[effects->positions]=effects->watched;effects->positions++;if(effects->positions==effects->failPosition)return false;e->posX=x;e->posY=y;e->posZ=z;MCObjectHeap_touch(ctx->heap);return true;}
+static bool size_entity(MCObject *ctx,EntityItem *e,float w,float h) {CHECK(ctx->heap==e->entity.object.heap);return Entity_setSize(&e->entity,w,h);}
+static bool position_entity(MCObject *ctx,EntityItem *e,double x,double y,double z) {CHECK(ctx->heap==e->entity.object.heap);Effects *effects=(Effects *)ctx;if(effects->positions<2)effects->watchedAtPosition[effects->positions]=effects->watched;effects->positions++;if(effects->positions==effects->failPosition)return false;return Entity_setPosition(&e->entity,x,y,z);}
 static const EntityItemConstructorDependencies constructors={base_constructor,math_random,size_entity,position_entity};
 static NBTString *display(MCObject *world,const ItemStack *s) {(void)world;return NBTString_fromASCII(s->object.heap,"Book");}
 static ItemStack *recipe(InventoryCrafting *g,MCObject *w) {return CraftingManager_findMatchingRecipe(((MCGameplayWorld *)w)->manager,g,w,display,w);}
@@ -88,10 +107,10 @@ static void roundtrip_sources_foreign_and_names(void) {
 }
 static void workbench_recovery_and_item_envelope(void) {
     MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);mc_crafting_position pos={1,2,3};ContainerWorkbench *b=ContainerWorkbench_new(p->inventory,(MCObject *)p->worldObj,&pos,&crafting);CHECK(b);b->container.windowId=17;p->openContainer=&b->container;ItemStack *shared=book(p,-1);CHECK(InventoryCrafting_setInventorySlotContents(b->craftMatrix,0,shared)&&InventoryCrafting_setInventorySlotContents(b->craftMatrix,8,shared)&&InventoryPlayer_setItemStack(p->inventory,shared));mc_nbt playerData={0};encode_player(p,&playerData);
-    EntityItem *entity=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2.0,shared);CHECK(entity);entity->entityId=INT32_MIN;entity->health=128;entity->age=-6000;entity->delayBeforeCanPickup=-9;entity->motionX=0.1;entity->motionY=-0.2;entity->motionZ=0.3;entity->onGround=true;entity->savedFields=NBTTagCompound_new(g.heap);CHECK(entity->savedFields&&NBTTagCompound_setFloat_ascii(entity->savedFields,"foreignEntity",2.5f)&&EntityItem_setOwner(entity,p->name)&&EntityItem_setThrower(entity,p->name));CHECK(MCGameplay_addItem(&g,(MCObject *)entity));
+    EntityItem *entity=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2.0,shared);CHECK(entity);entity->entity.entityId=INT32_MIN;entity->health=128;entity->age=-6000;entity->delayBeforeCanPickup=-9;entity->entity.motionX=0.1;entity->entity.motionY=-0.2;entity->entity.motionZ=0.3;entity->entity.onGround=true;entity->savedFields=NBTTagCompound_new(g.heap);CHECK(entity->savedFields&&NBTTagCompound_setFloat_ascii(entity->savedFields,"foreignEntity",2.5f)&&EntityItem_setOwner(entity,p->name)&&EntityItem_setThrower(entity,p->name));CHECK(MCGameplay_addItem(&g,(MCObject *)entity));
     p->worldObj->savedItemFields=NBTTagCompound_new(g.heap);p->worldObj->savedItemRootName=NBTString_fromUTF8(g.heap,"アイテム世界");CHECK(p->worldObj->savedItemFields&&p->worldObj->savedItemRootName&&NBTTagCompound_setDouble_ascii(p->worldObj->savedItemFields,"foreignItems",-7.5));mc_nbt itemData={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&itemData,NULL));
     MCGameplay copy={0};MCObjectRootScope copiedScope={0};MCGameplayPlayer *q=setup(&copy,&copiedScope);CHECK(MCGameplayStorage_loadPlayer(q,&playerData,&crafting));CHECK(q->openContainer!=&q->inventoryContainer->container&&ContainerWorkbench_isInstance((MCObject *)q->openContainer));ContainerWorkbench *recovered=(ContainerWorkbench *)q->openContainer;CHECK(!recovered->hasPosition&&InventoryCrafting_getStackInSlot(recovered->craftMatrix,0)->stackSize==-1);
-    CHECK(MCGameplayStorage_loadItems(q->worldObj,&itemData,q->effects,&entity_dependencies,&constructors));CHECK(q->worldObj->owners->itemCount==1);EntityItem *e=(EntityItem *)q->worldObj->owners->items[0];CHECK(e->entityId==INT32_MIN&&e->health==128&&e->age==-6000&&e->delayBeforeCanPickup==-9&&watched(e)->stackSize==-1&&e->posX==1.25&&e->posY==20.5&&e->posZ==-2&&e->motionY==-0.2&&e->onGround);CHECK(NBTTagCompound_getTagId_ascii(e->savedFields,"foreignEntity")==5&&NBTTagCompound_getFloat_ascii(e->savedFields,"foreignEntity")==2.5f&&NBTString_equals(e->owner,q->name));CHECK(NBTString_equals(q->worldObj->savedItemRootName,p->worldObj->savedItemRootName)&&NBTTagCompound_getDouble_ascii(q->worldObj->savedItemFields,"foreignItems")==-7.5);
+    CHECK(MCGameplayStorage_loadItems(q->worldObj,&itemData,q->effects,&entity_dependencies,&constructors));CHECK(q->worldObj->owners->itemCount==1);EntityItem *e=(EntityItem *)q->worldObj->owners->items[0];CHECK(e->entity.entityId==INT32_MIN&&e->health==128&&e->age==-6000&&e->delayBeforeCanPickup==-9&&watched(e)->stackSize==-1&&e->entity.posX==1.25&&e->entity.posY==20.5&&e->entity.posZ==-2&&e->entity.motionY==-0.2&&e->entity.onGround);CHECK(NBTTagCompound_getTagId_ascii(e->savedFields,"foreignEntity")==5&&NBTTagCompound_getFloat_ascii(e->savedFields,"foreignEntity")==2.5f&&NBTString_equals(e->owner,q->name));CHECK(NBTString_equals(q->worldObj->savedItemRootName,p->worldObj->savedItemRootName)&&NBTTagCompound_getDouble_ascii(q->worldObj->savedItemFields,"foreignItems")==-7.5);
     CHECK(EntityPlayerMPWindows_closeContainer(q));Effects *effects=(Effects *)q->effects;CHECK(effects->drops==3&&q->openContainer==&q->inventoryContainer->container&&!InventoryPlayer_getItemStack(q->inventory)&&!InventoryCrafting_getStackInSlot(recovered->craftMatrix,0)&&q->worldObj->owners->itemCount==4);CHECK(effects->dropped[0]!=effects->dropped[1]&&effects->dropped[1]!=effects->dropped[2]);
     mc_nbt_free(&itemData);mc_nbt_free(&playerData);finish(&copy,&copiedScope);finish(&g,&scope);
 }
@@ -134,19 +153,19 @@ static void uuid_authority_profile_order_and_random_nonpersistence(void) {
           NBTTagCompound_getLong_ascii(playerTag,"UUIDLeast")==-2);
     CHECK(!NBTTagCompound_hasKey_ascii(playerTag,"RandomSeed")&&!NBTTagCompound_hasKey_ascii(playerTag,"rand"));random_unchanged(&playerRandom,p->rand);
     EntityItem *e=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2,book(p,1));CHECK(e&&MCGameplay_addItem(&g,(MCObject *)e));
-    e->entityUniqueID=NativeJavaUUID_new(g.heap,INT64_MIN,INT64_MAX);e->savedFields=NBTTagCompound_new(g.heap);CHECK(e->entityUniqueID&&e->savedFields&&
+    e->entity.entityUniqueID=NativeJavaUUID_new(g.heap,INT64_MIN,INT64_MAX);e->savedFields=NBTTagCompound_new(g.heap);CHECK(e->entity.entityUniqueID&&e->savedFields&&
         NBTTagCompound_setLong_ascii(e->savedFields,"UUIDMost",3)&&NBTTagCompound_setLong_ascii(e->savedFields,"UUIDLeast",4));
-    NativeJavaRandomState entityRandom=e->rand->state;mc_nbt itemData={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&itemData,NULL));
+    NativeJavaRandomState entityRandom=e->entity.rand->state;mc_nbt itemData={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&itemData,NULL));
     NBTTagCompound *itemsTag=storage_tag(g.heap,&itemData);NBTTagCompound *entry=NBTTagList_getCompoundTagAt(NBTTagCompound_getTagList_ascii(itemsTag,"Entities",10),0);
     CHECK(entry&&NBTTagCompound_getLong_ascii(entry,"UUIDMost")==INT64_MIN&&NBTTagCompound_getLong_ascii(entry,"UUIDLeast")==INT64_MAX);
-    CHECK(!NBTTagCompound_hasKey_ascii(entry,"RandomSeed")&&!NBTTagCompound_hasKey_ascii(entry,"rand"));random_unchanged(&entityRandom,e->rand);
+    CHECK(!NBTTagCompound_hasKey_ascii(entry,"RandomSeed")&&!NBTTagCompound_hasKey_ascii(entry,"rand"));random_unchanged(&entityRandom,e->entity.rand);
     MCGameplay loaded={0};MCObjectRootScope loadedScope={0};MCGameplayPlayer *q=setup(&loaded,&loadedScope);NativeJavaRandomState readRandom=q->rand->state;
     NativeJavaUUID *profile=q->gameProfileUUID;CHECK(MCGameplayStorage_loadPlayer(q,&playerData,&crafting));
     CHECK(q->entityUniqueID==profile&&q->entityUniqueID->mostSignificantBits==12288&&q->entityUniqueID->leastSignificantBits==INT64_MIN+1);
     CHECK(InventoryPlayer_getStackInSlot(q->inventory,0)->stackSize==-1);random_unchanged(&readRandom,q->rand);
     CHECK(MCGameplayStorage_loadItems(q->worldObj,&itemData,q->effects,&entity_dependencies,&constructors));EntityItem *restored=(EntityItem *)MCGameplay_get(&loaded)->items[0];
-    CHECK(restored->entityUniqueID->mostSignificantBits==INT64_MIN&&restored->entityUniqueID->leastSignificantBits==INT64_MAX);
-    random_unchanged(&entityRandom,restored->rand);
+    CHECK(restored->entity.entityUniqueID->mostSignificantBits==INT64_MIN&&restored->entity.entityUniqueID->leastSignificantBits==INT64_MAX);
+    random_unchanged(&entityRandom,restored->entity.rand);
     /* Legacy input uses the actual UUID adapter, then player profile reset;
        malformed legacy input stops before both reset and Inventory reads. */
     CHECK(NBTTagCompound_removeTag_ascii(playerTag,"UUIDMost")&&NBTTagCompound_removeTag_ascii(playerTag,"UUIDLeast"));mc_nbt legacy={0};snapshot(playerTag,&legacy);
@@ -154,7 +173,7 @@ static void uuid_authority_profile_order_and_random_nonpersistence(void) {
     CHECK(NBTTagCompound_removeTag_ascii(entry,"UUIDMost")&&NBTTagCompound_removeTag_ascii(entry,"UUIDLeast")&&
           NBTTagCompound_setString_ascii(entry,"UUID",NBTString_fromASCII(g.heap,"1-2-3-4-5---")));snapshot(itemsTag,&legacy);
     CHECK(MCGameplayStorage_loadItems(q->worldObj,&legacy,q->effects,&entity_dependencies,&constructors));restored=(EntityItem *)MCGameplay_get(&loaded)->items[0];
-    CHECK(restored->entityUniqueID->mostSignificantBits==INT64_C(0x0000000100020003)&&restored->entityUniqueID->leastSignificantBits==INT64_C(0x0004000000000005));random_unchanged(&entityRandom,restored->rand);mc_nbt_free(&legacy);
+    CHECK(restored->entity.entityUniqueID->mostSignificantBits==INT64_C(0x0000000100020003)&&restored->entity.entityUniqueID->leastSignificantBits==INT64_C(0x0004000000000005));random_unchanged(&entityRandom,restored->entity.rand);mc_nbt_free(&legacy);
     CHECK(NBTTagCompound_setString_ascii(playerTag,"UUID",NBTString_fromASCII(g.heap,"invalid")));snapshot(playerTag,&legacy);
     ItemStack *before=book(q,7);CHECK(InventoryPlayer_setInventorySlotContents(q->inventory,0,before));MCObjectRootScope_end(&loadedScope);
     MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&loaded,&tx)&&MCObjectRootScope_begin(&loadedScope,tx.working.heap));MCGameplayPlayer *bad=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
@@ -167,7 +186,7 @@ static void uuid_authority_profile_order_and_random_nonpersistence(void) {
 }
 static void malformed_item_uuid_preserves_prefix_and_abort_preserves_parent(void) {
     MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);
-    EntityItem *original=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2,book(p,1));CHECK(original&&MCGameplay_addItem(&g,(MCObject *)original));original->motionX=0.5;original->age=37;original->onGround=true;
+    EntityItem *original=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2,book(p,1));CHECK(original&&MCGameplay_addItem(&g,(MCObject *)original));original->entity.motionX=0.5;original->age=37;original->entity.onGround=true;
     mc_nbt data={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&data,NULL));NBTTagCompound *root=storage_tag(g.heap,&data);
     NBTTagCompound *entry=NBTTagList_getCompoundTagAt(NBTTagCompound_getTagList_ascii(root,"Entities",10),0);CHECK(entry&&
         NBTTagCompound_removeTag_ascii(entry,"UUIDMost")&&NBTTagCompound_removeTag_ascii(entry,"UUIDLeast")&&
@@ -175,11 +194,11 @@ static void malformed_item_uuid_preserves_prefix_and_abort_preserves_parent(void
     MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx)&&MCObjectRootScope_begin(&scope,tx.working.heap));
     MCGameplayPlayer *copy=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];Effects *effects=(Effects *)copy->effects;effects->positions=0;
     EntityItem *old=(EntityItem *)MCGameplay_get(&tx.working)->items[0];CHECK(!MCGameplayStorage_loadItems(copy->worldObj,&data,copy->effects,&entity_dependencies,&constructors)&&MCObjectHeap_failed(tx.working.heap));
-    EntityItem *partial=effects->constructed;CHECK(partial&&partial!=old&&partial->posX==1.25&&partial->posY==20.5&&partial->posZ==-2&&partial->motionX==0.5&&partial->onGround);
-    CHECK(partial->entityUniqueID&&partial->entityUniqueID->mostSignificantBits==37&&partial->age==0&&effects->positions==0);
+    EntityItem *partial=effects->constructed;CHECK(partial&&partial!=old&&partial->entity.posX==1.25&&partial->entity.posY==20.5&&partial->entity.posZ==-2&&partial->entity.motionX==0.5&&partial->entity.onGround);
+    CHECK(partial->entity.entityUniqueID&&partial->entity.entityUniqueID->mostSignificantBits==37&&partial->age==0&&effects->positions==0);
     CHECK(MCGameplay_get(&tx.working)->items[0]==(MCObject *)old&&old->age==37);
     MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx)&&MCObjectRootScope_begin(&scope,g.heap));
-    CHECK(MCGameplay_get(&g)->items[0]==(MCObject *)original&&original->age==37&&original->motionX==0.5);mc_nbt_free(&data);finish(&g,&scope);
+    CHECK(MCGameplay_get(&g)->items[0]==(MCObject *)original&&original->age==37&&original->entity.motionX==0.5);mc_nbt_free(&data);finish(&g,&scope);
 }
 static void missing_profile_fails_after_base_uuid_before_inventory(void) {
     MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);ItemStack *old=book(p,7);CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,0,old));
@@ -228,11 +247,28 @@ static void item_list_boundaries_and_invalid_adoption(void) {
 }
 static void native_position_restore_and_failure(void) {
     for(unsigned which=0;which<3;which++) {
-        MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);ItemStack *shared=book(p,1);CHECK(InventoryPlayer_setItemStack(p->inventory,shared));EntityItem *original=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2.0,shared);CHECK(original&&MCGameplay_addItem(&g,(MCObject *)original));original->motionX=10;original->motionY=-10.000000000000002;original->motionZ=1e308;original->age=37;mc_nbt data={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&data,NULL));
+        MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);ItemStack *shared=book(p,1);CHECK(InventoryPlayer_setItemStack(p->inventory,shared));EntityItem *original=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2.0,shared);CHECK(original&&MCGameplay_addItem(&g,(MCObject *)original));original->entity.motionX=10;original->entity.motionY=-10.000000000000002;original->entity.motionZ=1e308;original->age=37;mc_nbt data={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&data,NULL));
         MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx)&&MCObjectRootScope_begin(&scope,tx.working.heap));MCGameplayPlayer *copy=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];Effects *effects=(Effects *)copy->effects;effects->positions=effects->watched=0;effects->failPosition=which;EntityItem *old=(EntityItem *)MCGameplay_get(&tx.working)->items[0];bool ok=MCGameplayStorage_loadItems(copy->worldObj,&data,copy->effects,&entity_dependencies,&constructors);
-        if(which==0){CHECK(ok&&!MCObjectHeap_failed(tx.working.heap));EntityItem *loaded=(EntityItem *)MCGameplay_get(&tx.working)->items[0];CHECK(loaded!=old&&loaded->posX==1.25&&loaded->posY==20.5&&loaded->posZ==-2&&loaded->age==37);CHECK(loaded->motionX==10&&loaded->motionY==0&&loaded->motionZ==0);CHECK(effects->positions==2&&effects->watchedAtPosition[0]==1&&effects->watchedAtPosition[1]==2);}
+        if(which==0){CHECK(ok&&!MCObjectHeap_failed(tx.working.heap));EntityItem *loaded=(EntityItem *)MCGameplay_get(&tx.working)->items[0];CHECK(loaded!=old&&loaded->entity.posX==1.25&&loaded->entity.posY==20.5&&loaded->entity.posZ==-2&&loaded->age==37);CHECK(loaded->entity.motionX==10&&loaded->entity.motionY==0&&loaded->entity.motionZ==0);CHECK(effects->positions==2&&effects->watchedAtPosition[0]==1&&effects->watchedAtPosition[1]==2);}
         else {CHECK(!ok&&MCObjectHeap_failed(tx.working.heap)&&MCGameplay_get(&tx.working)->items[0]==(MCObject *)old);CHECK(effects->positions==which&&effects->watched==which);}
-        MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx)&&MCObjectRootScope_begin(&scope,g.heap));CHECK(MCGameplay_get(&g)->items[0]==(MCObject *)original&&watched(original)==InventoryPlayer_getItemStack(p->inventory)&&original->motionY==-10.000000000000002&&original->age==37);mc_nbt_free(&data);finish(&g,&scope);
+        MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx)&&MCObjectRootScope_begin(&scope,g.heap));CHECK(MCGameplay_get(&g)->items[0]==(MCObject *)original&&watched(original)==InventoryPlayer_getItemStack(p->inventory)&&original->entity.motionY==-10.000000000000002&&original->age==37);mc_nbt_free(&data);finish(&g,&scope);
     }
 }
-int main(void) {uuid_authority_profile_order_and_random_nonpersistence();malformed_item_uuid_preserves_prefix_and_abort_preserves_parent();missing_profile_fails_after_base_uuid_before_inventory();roundtrip_sources_foreign_and_names();workbench_recovery_and_item_envelope();maps_and_snapshot_metadata();durable_group_and_packet_preflight();source_inventory_last_wins_and_partial_rollback();malformed_extensions_and_profile_dependency();storage_byte_cap_and_persistence_tracker();item_list_boundaries_and_invalid_adoption();native_position_restore_and_failure();printf("gameplay storage: %u checks passed\n",checks);return 0;}
+static void source_constructor_ids_survive_native_load(void) {
+    MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);
+    EntityItem *original=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,
+        &entity_dependencies,&constructors,1.25,20.5,-2.0,book(p,1));
+    CHECK(original&&MCGameplay_addItem(&g,(MCObject *)original));
+    original->entity.entityId=INT32_MIN;original->age=37;MCObjectHeap_touch(g.heap);
+    mc_nbt data={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&data,NULL));
+    int32_t expected=p->worldObj->nextEntityId;
+    CHECK(MCGameplayStorage_loadItemsWithSourceIDs(p->worldObj,&data,p->effects,&entity_dependencies,&constructors));
+    EntityItem *loaded=(EntityItem *)MCGameplay_get(&g)->items[0];
+    CHECK(loaded!=original&&loaded->entity.entityId==expected&&loaded->entity.entityId!=INT32_MIN);
+    CHECK(loaded->age==37&&loaded->entity.posY==20.5&&watched(loaded)->stackSize==1);
+    CHECK(p->worldObj->nextEntityId==expected+1);
+    CHECK(MCGameplayStorage_loadItems(p->worldObj,&data,p->effects,&entity_dependencies,&constructors));
+    loaded=(EntityItem *)MCGameplay_get(&g)->items[0];CHECK(loaded->entity.entityId==INT32_MIN);
+    mc_nbt_free(&data);finish(&g,&scope);
+}
+int main(void) {source_constructor_ids_survive_native_load();uuid_authority_profile_order_and_random_nonpersistence();malformed_item_uuid_preserves_prefix_and_abort_preserves_parent();missing_profile_fails_after_base_uuid_before_inventory();roundtrip_sources_foreign_and_names();workbench_recovery_and_item_envelope();maps_and_snapshot_metadata();durable_group_and_packet_preflight();source_inventory_last_wins_and_partial_rollback();malformed_extensions_and_profile_dependency();storage_byte_cap_and_persistence_tracker();item_list_boundaries_and_invalid_adoption();native_position_restore_and_failure();printf("gameplay storage: %u checks passed\n",checks);return 0;}

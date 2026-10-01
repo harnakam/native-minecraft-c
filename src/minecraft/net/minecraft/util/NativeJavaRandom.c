@@ -1,4 +1,5 @@
 #include "util/NativeJavaRandom.h"
+#include "util/NativeStrictMath.h"
 #include <float.h>
 #include <limits.h>
 
@@ -70,6 +71,33 @@ bool NativeJavaRandomState_nextBytes(NativeJavaRandomState *s,uint8_t *out,size_
     }
     return true;
 }
+bool NativeJavaRandomState_nextGaussian(NativeJavaRandomState *s,double *out) {
+    if (!s || !out) return false;
+    if (s->haveNextNextGaussian) {
+        s->haveNextNextGaussian=false;
+        *out=s->nextNextGaussian;
+        return true;
+    }
+    /* The platform numerical boundary fails before consuming this stream.
+       The cache-only path above needs no arithmetic or environment support. */
+    if (!NativeStrictMath_isSupported()) return false;
+    double horizontal,vertical,radius;
+    for (;;) {
+        double uniform;
+        if (!NativeJavaRandomState_nextDouble(s,&uniform)) return false;
+        horizontal=2.0*uniform-1.0;
+        if (!NativeJavaRandomState_nextDouble(s,&uniform)) return false;
+        vertical=2.0*uniform-1.0;
+        radius=horizontal*horizontal+vertical*vertical;
+        if (radius>=1.0 || radius==0.0) continue;
+        break;
+    }
+    double factor=NativeStrictMath_sqrt(-2.0*NativeStrictMath_log(radius)/radius);
+    s->nextNextGaussian=vertical*factor;
+    s->haveNextNextGaussian=true;
+    *out=horizontal*factor;
+    return true;
+}
 static const MCObjectClass klass={"C919.native.JavaRandomAdapter",MCObjectHeap_plainClone,NULL,NULL};
 bool NativeJavaRandom_isInstance(const MCObject *o) {
     return o && o->klass==&klass && MCObjectHeap_objectSize(o)>=sizeof(NativeJavaRandom);
@@ -106,6 +134,7 @@ SCALAR_WRAPPER(nextLong,int64_t)
 SCALAR_WRAPPER(nextBoolean,bool)
 SCALAR_WRAPPER(nextFloat,float)
 SCALAR_WRAPPER(nextDouble,double)
+SCALAR_WRAPPER(nextGaussian,double)
 #undef SCALAR_WRAPPER
 bool NativeJavaRandom_nextBits(NativeJavaRandom *r,int32_t bits,int32_t *out) {
     if (!valid(r,out)) return false;

@@ -6,6 +6,7 @@
 #include "nbt/NBTString.h"
 #include "util/NativeJavaRandomRuntime.h"
 #include "util/NativeJavaUUID.h"
+#include "entity/Entity.h"
 
 typedef struct EntityItem EntityItem;
 typedef enum {
@@ -30,29 +31,23 @@ typedef struct {
     bool (*setDead)(MCObject *context,EntityItem *entity);
 } EntityItemDependencies;
 struct EntityItem {
-    MCObject object;
+    Entity entity;
     int32_t age,delayBeforeCanPickup,health;
     NBTString *thrower,*owner;
-    /* Native storage for inherited Entity state. The actual DataWatcher owns
-       slot10; no separate ItemStack owner or metadata value mirror exists.
-       Complete inherited Entity/World implementations remain dependencies. */
-    MCObject *worldObj,*dependencyContext;
-    int32_t entityId;
-    double posX,posY,posZ,motionX,motionY,motionZ;
-    float hoverStart,rotationYaw,rotationPitch,width,height;
-    int32_t ticksExisted;
-    bool isDead,onGround,noClip;
-    DataWatcher *dataWatcher;
-    NativeJavaRandom *rand;
-    NativeJavaUUID *entityUniqueID;
+    /* Native dependency context, distinct from inherited Entity state. The
+       sole actual DataWatcher owns slot10; there is no ItemStack mirror.
+       Entity constructor state is the first member; complete physics and
+       World/Living/Player classes remain separate dependencies. */
+    MCObject *dependencyContext;
+    float hoverStart;
     /* Native persistence envelope metadata, distinct from source class fields. */
     NBTTagCompound *savedFields;
     const EntityItemDependencies *dependencies;
 };
-/* Native allocation only. This is not an original EntityItem constructor:
-   base Entity construction, size/position/random/hover and physics are pending.
-   The watcher is initially NULL. Explicitly initialize the native inherited
-   watcher segment before invoking original watcher-dependent methods. */
+/* Native fixture allocation only, not an original EntityItem constructor.
+   It sets world and health5 without executing Entity_construct; its watcher,
+   bounds, Random and UUID remain NULL. Production constructors below require
+   the complete Entity constructor, not a later segment repair. */
 EntityItem *EntityItem_nativeNew(MCObjectHeap *,MCObject *world,MCObject *context,const EntityItemDependencies *);
 bool EntityItem_isInstance(const MCObject *);
 /* Explicit native inherited Entity RNG segment. New entity-owned Random and
@@ -61,17 +56,17 @@ bool EntityItem_isInstance(const MCObject *);
 bool EntityItem_nativeInitializeRandom(EntityItem *,NativeJavaRandomRuntime *);
 DataWatcher *EntityItem_getDataWatcher(EntityItem *);
 /* Original virtual entityInit body: adds the null ItemStack entry10/type5.
-   An explicit native adapter for the inherited Entity constructor segment
-   creates the watcher, adds source base entries0/1/3/2/4, then dispatches this
-   body. It does not implement the complete Entity constructor. NULL methods
+   Entity_construct dispatches it at the original virtual-call point. The
+   separately named native fixture segment below is not that constructor.
+   NULL methods
    select Entity's actual inherited onDataWatcherUpdate empty body; an explicit
    override/context is retained and traced by DataWatcher. Initialization must
    occur at the inherited constructor's virtual-call point, not afterward. */
 bool EntityItem_entityInit(EntityItem *);
 bool EntityItem_nativeInitializeDataWatcher(EntityItem *,const DataWatcherDependencies *,MCObject *context);
-/* Actual three constructor bodies, with explicit unported inherited Entity
-   and Math.random dependencies. baseConstructor invokes its real virtual
-   entityInit/DataWatcher work (using the explicit segment adapter above).
+/* Actual three constructor bodies. The native dispatch baseConstructor must
+   invoke the complete Entity_construct with real provider/virtual methods;
+   Math.random is the checked external process service dependency.
    A missing watcher after base construction is failure, never repaired by
    EntityItem afterward. setSize/setPosition implement inherited state.
    Callbacks use this retained context, and false is a native failure. */

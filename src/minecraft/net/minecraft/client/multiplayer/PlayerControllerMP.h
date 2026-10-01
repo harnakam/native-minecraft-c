@@ -6,20 +6,18 @@
 #include "network/play/client/C10PacketCreativeInventoryAction.h"
 #include "network/play/client/C08PacketPlayerBlockPlacement.h"
 #include "item/ItemStackUse.h"
+#include "world/WorldSettingsGameType.h"
 typedef struct PlayerControllerMP PlayerControllerMP;
 typedef struct {
     bool (*addToSendQueue)(MCObject *context, NetHandlerPlayClient *, C0EPacketClickWindow *);
 } PlayerControllerMPDependencies;
-/* Immutable native WorldSettings.GameType identities for this method subset.
-   The complete GameType class/capability setup is a separate dependency. */
-typedef struct {
-    int32_t id;
-} PlayerControllerMPGameType;
-extern const PlayerControllerMPGameType PlayerControllerMP_NOT_SET;
-extern const PlayerControllerMPGameType PlayerControllerMP_SURVIVAL;
-extern const PlayerControllerMPGameType PlayerControllerMP_CREATIVE;
-extern const PlayerControllerMPGameType PlayerControllerMP_ADVENTURE;
-extern const PlayerControllerMPGameType PlayerControllerMP_SPECTATOR;
+typedef WorldSettingsGameType PlayerControllerMPGameType;
+#define PlayerControllerMP_NOT_SET WorldSettingsGameType_NOT_SET
+#define PlayerControllerMP_SURVIVAL WorldSettingsGameType_SURVIVAL
+#define PlayerControllerMP_CREATIVE WorldSettingsGameType_CREATIVE
+#define PlayerControllerMP_ADVENTURE WorldSettingsGameType_ADVENTURE
+#define PlayerControllerMP_SPECTATOR WorldSettingsGameType_SPECTATOR
+
 typedef struct {
     MCGameplayPlayer *(*getPlayer)(MCObject *context, MCObject *mc);
     bool (*addHeldItemToSendQueue)(MCObject *context, NetHandlerPlayClient *,
@@ -48,6 +46,8 @@ PlayerControllerMP *PlayerControllerMP_nativeNew(MCObjectHeap *, NetHandlerPlayC
 bool PlayerControllerMP_isInstance(const MCObject *);
 bool PlayerControllerMP_bindActions(PlayerControllerMP *, MCObject *mc, MCObject *context,
                                     const PlayerControllerMPActionsDependencies *);
+bool PlayerControllerMP_setGameType(PlayerControllerMP *,const WorldSettingsGameType *);
+bool PlayerControllerMP_setPlayerCapabilities(PlayerControllerMP *,MCGameplayPlayer *);
 bool PlayerControllerMP_syncCurrentPlayItem(PlayerControllerMP *);
 bool PlayerControllerMP_sendSlotPacket(PlayerControllerMP *, ItemStack *, int32_t slotId);
 bool PlayerControllerMP_sendPacketDropItem(PlayerControllerMP *, ItemStack *);

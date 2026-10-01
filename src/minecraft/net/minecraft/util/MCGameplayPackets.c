@@ -10,6 +10,7 @@ CODEC(S2FPacketSetSlot, 0x2f)
 CODEC(S30PacketWindowItems, 0x30)
 CODEC(S32PacketConfirmTransaction, 0x32)
 CODEC(S1CPacketEntityMetadata, 0x1c)
+CODEC(S39PacketPlayerAbilities, 0x39)
 #undef CODEC
 static const MCPacketCodec codecs[] = {
     {0x04, NativePacket_isInstance, NativePacket_writePacketData},
@@ -26,7 +27,8 @@ static const MCPacketCodec codecs[] = {
     {0x30, S30PacketWindowItems_isInstance, write_S30PacketWindowItems},
     {0x32, S32PacketConfirmTransaction_isInstance, write_S32PacketConfirmTransaction},
     {0x34, NativePacket_isInstance, NativePacket_writePacketData},
-    {0x37, NativePacket_isInstance, NativePacket_writePacketData}};
+    {0x37, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x39,S39PacketPlayerAbilities_isInstance,write_S39PacketPlayerAbilities}};
 static const MCPacketQueueProfile profile = {codecs, sizeof codecs / sizeof *codecs, true};
 static MCObject *packets(const MCGameplayPlayer *p) {
     if (!p)
@@ -131,4 +133,8 @@ MCGameplayPacketsResult MCGameplayPackets_flush(MCGameplay *game, size_t index,
     default:
         return MC_GAMEPLAY_PACKETS_FAILED;
     }
+}
+
+bool MCGameplayPackets_sendAbilities(MCGameplayPlayer *p,S39PacketPlayerAbilities *packet) {
+    MCObject *q=packets(p);return q && MCPacketQueue_append(q,(MCObject *)packet,0x39);
 }

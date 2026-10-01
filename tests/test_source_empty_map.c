@@ -53,10 +53,24 @@ static bool sound(MCObject *o,MCObject *w,MCObject *p,const char *s,float v,floa
 static bool pickup(MCObject *o,MCObject *p,EntityItem *e,int32_t n) {(void)p;(void)e;(void)n;return unexpected(o);}
 static bool dead(MCObject *o,EntityItem *e) {(void)e;return unexpected(o);}
 static const EntityItemDependencies entityDeps={log_missing,is_remote,inventory,player_name,find,entity_achievement,silent,entity_random,sound,pickup,dead};
-static bool base(MCObject *o,EntityItem *e,MCObject *w) {Fixture *f=(Fixture *)o;CHECK(e->health==0&&e->worldObj==w);e->entityId=7;f->entity=e;MCObjectHeap_touch(o->heap);return EntityItem_nativeInitializeDataWatcher(e,NULL,NULL);}
+/* Source superclass dependencies used by the fixture: no alternate
+   Entity state or guessed constructor body. Observer counters remain scoped
+   to the subclass/dependency calls tested by this suite. */
+static bool inherited_init(MCObject *c,Entity *e) {(void)c;return EntityItem_entityInit((EntityItem *)e);}
+static bool inherited_position(MCObject *c,Entity *e,double x,double y,double z) {(void)c;return Entity_setPosition(e,x,y,z);}
+static bool inherited_bounds(MCObject *c,Entity *e,AxisAlignedBB *b) {(void)c;return Entity_setEntityBoundingBox(e,b);}
+static bool inherited_dimension(MCObject *c,MCObject *w,int32_t *out) {(void)c;CHECK(MCGameplayWorld_isInstance(w));*out=((MCGameplayWorld *)w)->dimension;return true;}
+static const EntityDependencies inherited_methods={.entityInit=inherited_init,.setPosition=inherited_position,.setEntityBoundingBox=inherited_bounds,.getDimensionId=inherited_dimension};
+static bool base(MCObject *o,EntityItem *e,MCObject *w) {
+    Fixture *f=(Fixture *)o;CHECK(e->health==0&&e->entity.worldObj==NULL);
+    NativeEntityIDRuntime *ids=NativeEntityIDRuntime_new(7);CHECK(ids);
+    bool ok=Entity_construct(&e->entity,w,&inherited_methods,o,f->player->worldObj->randomRuntime,ids);
+    CHECK(NativeEntityIDRuntime_free(ids));if(!ok)return false;
+    f->entity=e;MCObjectHeap_touch(o->heap);return true;
+}
 static double math_random(MCObject *o) {CHECK(MCObjectHeap_hasBorrowers(o->heap));return 0.25;}
-static bool size(MCObject *o,EntityItem *e,float w,float h) {e->width=w;e->height=h;MCObjectHeap_touch(o->heap);return true;}
-static bool position(MCObject *o,EntityItem *e,double x,double y,double z) {e->posX=x;e->posY=y;e->posZ=z;MCObjectHeap_touch(o->heap);return true;}
+static bool size(MCObject *o,EntityItem *e,float w,float h) {(void)o;return Entity_setSize(&e->entity,w,h);}
+static bool position(MCObject *o,EntityItem *e,double x,double y,double z) {(void)o;return Entity_setPosition(&e->entity,x,y,z);}
 static const EntityItemConstructorDependencies constructors={base,math_random,size,position};
 static float eye(MCObject *o,MCGameplayPlayer *p) {(void)p;CHECK(MCObjectHeap_hasBorrowers(o->heap));return 1.62f;}
 static float random_float(MCObject *o,MCGameplayPlayer *p) {(void)p;CHECK(MCObjectHeap_hasBorrowers(o->heap));return 0.25f;}
@@ -97,7 +111,7 @@ static Fixture *setup(MCGameplay *g,int32_t count,bool full,bool creative,bool r
     MCGameplayPlayer *p=MCGameplayPlayer_new(world,n,stats,&crafting);CHECK(p&&MCGameplay_setPlayer(g,0,"11111111-1111-1111-1111-111111111111",(MCObject *)p));
     Fixture *f=(Fixture *)MCObjectHeap_alloc(g->heap,sizeof(*f),&fixtureClass);CHECK(f);f->player=p;p->effects=(MCObject *)f;
     f->stat=StatBase_newIdentity(g->heap,NBTString_fromASCII(g->heap,"stat.useItem.minecraft.map"),STAT_BASE_KIND_BASE);CHECK(f->stat);
-    p->creative=creative;world->remote=remote;world->dimension=dimension;world->maps.next_id=next;p->posX=x;p->posZ=z;p->posY=64;
+    p->capabilities->isCreativeMode=creative;world->remote=remote;world->dimension=dimension;world->maps.next_id=next;p->posX=x;p->posZ=z;p->posY=64;
     if(full)for(int i=1;i<36;i++)CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,i,ItemStack_new(g->heap,ItemStack_registryItem(1),64,0)));
     f->input=ItemStack_new(g->heap,ItemStack_registryItem(395),count,0);CHECK(f->input&&InventoryPlayer_setInventorySlotContents(p->inventory,0,f->input));
     CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,38,f->input)); /* Cross-owner source alias. */

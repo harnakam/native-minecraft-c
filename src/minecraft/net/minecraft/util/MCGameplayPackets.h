@@ -6,6 +6,7 @@
 #include "network/play/server/S30PacketWindowItems.h"
 #include "network/play/server/S32PacketConfirmTransaction.h"
 #include "network/play/server/S1CPacketEntityMetadata.h"
+#include "network/play/server/S39PacketPlayerAbilities.h"
 
 typedef enum {
     MC_GAMEPLAY_PACKET_EQUIPMENT = 0x04,
@@ -22,7 +23,8 @@ typedef enum {
     MC_GAMEPLAY_PACKET_ITEMS = 0x30,
     MC_GAMEPLAY_PACKET_CONFIRM = 0x32,
     MC_GAMEPLAY_PACKET_MAP = 0x34,
-    MC_GAMEPLAY_PACKET_STATISTICS = 0x37
+    MC_GAMEPLAY_PACKET_STATISTICS = 0x37,
+    MC_GAMEPLAY_PACKET_ABILITIES = 0x39
 } MCGameplayPacketKind;
 /* Native managed deferred transport queue. Entries retain the original packet
    objects; their constructors copy stack occurrences exactly as the source.
@@ -36,6 +38,7 @@ bool MCGameplayPackets_sendConfirmTransaction(MCGameplayPlayer *, int32_t window
                                               bool accepted);
 /* Source metadata keeps the original WatchableObject/ItemStack references.
    Native packet classes retain immutable encoded transport messages only. */
+bool MCGameplayPackets_sendAbilities(MCGameplayPlayer *,S39PacketPlayerAbilities *);
 bool MCGameplayPackets_sendMetadata(MCGameplayPlayer *,S1CPacketEntityMetadata *);
 bool MCGameplayPackets_sendNative(MCGameplayPlayer *,const mc_buf *completeMessage);
 int32_t MCGameplayPackets_count(const MCGameplayPlayer *);

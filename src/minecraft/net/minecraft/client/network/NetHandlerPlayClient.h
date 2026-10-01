@@ -8,6 +8,7 @@
 #include "network/play/server/S32PacketConfirmTransaction.h"
 #include "network/play/server/S1CPacketEntityMetadata.h"
 #include "network/play/client/C0FPacketConfirmTransaction.h"
+#include "network/play/server/S39PacketPlayerAbilities.h"
 
 typedef struct NetHandlerPlayClient NetHandlerPlayClient;
 /* Native bindings for the source Minecraft, GUI, EntityPlayerSP, thread and
@@ -52,5 +53,6 @@ bool NetHandlerPlayClient_handleSetSlot(NetHandlerPlayClient *, S2FPacketSetSlot
 bool NetHandlerPlayClient_handleWindowItems(NetHandlerPlayClient *, S30PacketWindowItems *);
 bool NetHandlerPlayClient_handleConfirmTransaction(NetHandlerPlayClient *,
                                                    S32PacketConfirmTransaction *);
+bool NetHandlerPlayClient_handlePlayerAbilities(NetHandlerPlayClient *,S39PacketPlayerAbilities *);
 bool NetHandlerPlayClient_handleEntityMetadata(NetHandlerPlayClient *, S1CPacketEntityMetadata *);
 #endif

@@ -68,7 +68,7 @@ static void construction_and_source_crafting(void) {
     CHECK(player->inventory->player==(MCObject *)player&&player->openContainer==&player->inventoryContainer->container);
     CHECK(ContainerList_size(player->openContainer->inventorySlots)==45&&player->inventoryContainer->thePlayer==(MCObject *)player);
     CHECK(MCGameplayPlayer_inventory((MCObject *)player)==player->inventory&&MCGameplayPlayer_world((MCObject *)player)==(MCObject *)world);
-    CHECK(!MCGameplayPlayer_isCreativeMode((MCObject *)player)&&!MCGameplayWorld_isRemote((MCObject *)world));player->creative=true;world->remote=true;CHECK(MCGameplayPlayer_isCreativeMode((MCObject *)player)&&MCGameplayWorld_isRemote((MCObject *)world));player->creative=false;world->remote=false;
+    CHECK(!MCGameplayPlayer_isCreativeMode((MCObject *)player)&&!MCGameplayWorld_isRemote((MCObject *)world));player->capabilities->isCreativeMode=true;world->remote=true;CHECK(MCGameplayPlayer_isCreativeMode((MCObject *)player)&&MCGameplayWorld_isRemote((MCObject *)world));player->capabilities->isCreativeMode=false;world->remote=false;
     player->posX=1;player->posY=2;player->posZ=3;CHECK(MCGameplayPlayer_getDistanceSq((MCObject *)player,4,6,3)==25);CHECK(isnan(MCGameplayPlayer_getDistanceSq((MCObject *)player,NAN,0,0)));
     CHECK(MCGameplayWorld_isCraftingTable((MCObject *)world,1,2,3)&&!MCGameplayWorld_isCraftingTable((MCObject *)world,1,1,3));
     ItemStack *source=stack(game.heap,387,2,7);NBTTagCompound *tag=NBTTagCompound_new(game.heap);CHECK(tag);CHECK(NBTTagCompound_setInteger_ascii(tag,"generation",0));CHECK(ItemStack_setTagCompound(source,tag));

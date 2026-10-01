@@ -48,7 +48,7 @@ ItemStack *ItemEmptyMap_onItemRightClick(const Item *self,ItemStack *input,
                             EntityItem *ignored=NULL;
                             ok=dependencies&&dependencies->dropPlayerItemWithRandomChoice&&
                                 dependencies->dropPlayerItemWithRandomChoice(context,player,filled,false,&ignored);
-                            if(ok&&ignored&&(!EntityItem_isInstance((MCObject *)ignored)||ignored->object.heap!=heap))ok=false;
+                            if(ok&&ignored&&(!EntityItem_isInstance((MCObject *)ignored)||ignored->entity.object.heap!=heap))ok=false;
                             if(!ok)fail(heap);
                         }
                         if(ok&&!MCObjectHeap_failed(heap)) {

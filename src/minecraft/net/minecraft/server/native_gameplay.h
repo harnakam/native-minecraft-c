@@ -17,6 +17,9 @@ const EntityItemConstructorDependencies *mc_server_graph_item_constructors(void)
 /* Calls below operate only on disposable working graphs under a RootScope. */
 bool mc_server_graph_add_player(MCGameplay *, size_t index, const char *uuid, const char *name,
                                 int32_t entityId, double x, double y, double z, bool creative);
+/* Live admission retains the global Entity constructor ID; zero is valid.
+   The explicit-ID overload above remains a native fixture/import adapter. */
+bool mc_server_graph_add_player_auto(MCGameplay *,size_t,const char *,const char *,double,double,double,bool);
 int32_t mc_server_graph_allocate_entity(MCGameplayWorld *);
 bool mc_server_graph_drop(MCGameplayPlayer *, bool all);
 bool mc_server_graph_use_item(MCGameplayPlayer *);

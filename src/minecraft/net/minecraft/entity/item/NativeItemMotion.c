@@ -10,23 +10,42 @@ bool NativeItemMotion_positionSupported(double x, double y, double z) {
     return isfinite(x) && isfinite(y) && isfinite(z) && fabs(x) <= limit && fabs(y) <= limit &&
            fabs(z) <= limit;
 }
+static bool source_box_supported(const EntityItem *e) {
+    if (!e->entity.entityDependencies)
+        return true;
+    const AxisAlignedBB *b=e->entity.boundingBox;
+    if (!AxisAlignedBB_isInstance((const MCObject *)b)||b->object.heap!=e->entity.object.heap)
+        return false;
+    const double values[6]={b->minX,b->minY,b->minZ,b->maxX,b->maxY,b->maxZ};
+    for(unsigned i=0;i<6;i++)
+        if(!isfinite(values[i])||fabs(values[i])>67108840.0)
+            return false;
+    return b->maxX>b->minX&&b->maxX-b->minX<=8&&
+           b->maxY>b->minY&&b->maxY-b->minY<=8&&
+           b->maxZ>b->minZ&&b->maxZ-b->minZ<=8;
+}
 bool NativeItemMotion_validate(const EntityItem *e) {
     bool valid = e && EntityItem_isInstance((const MCObject *)e) &&
-                 NativeItemMotion_positionSupported(e->posX, e->posY, e->posZ) &&
-                 isfinite(e->motionX) && isfinite(e->motionY) && isfinite(e->motionZ) &&
-                 fabs(e->motionX) <= 16 && fabs(e->motionY) <= 16 && fabs(e->motionZ) <= 16 &&
-                 isfinite(e->width) && isfinite(e->height) && e->width > 0 && e->width <= 8 &&
-                 e->height > 0 && e->height <= 8;
+                 NativeItemMotion_positionSupported(e->entity.posX, e->entity.posY, e->entity.posZ) &&
+                 isfinite(e->entity.motionX) && isfinite(e->entity.motionY) && isfinite(e->entity.motionZ) &&
+                 fabs(e->entity.motionX) <= 16 && fabs(e->entity.motionY) <= 16 && fabs(e->entity.motionZ) <= 16 &&
+                 isfinite(e->entity.width) && isfinite(e->entity.height) && e->entity.width > 0 && e->entity.width <= 8 &&
+                 e->entity.height > 0 && e->entity.height <= 8 && source_box_supported(e);
     if (!valid)
-        MCObjectHeap_fail(e ? e->object.heap : NULL);
+        MCObjectHeap_fail(e ? e->entity.object.heap : NULL);
     return valid;
 }
 typedef struct {
     double low[3], high[3];
 } entity_box;
 static entity_box bounds(const EntityItem *e) {
-    entity_box box = {{e->posX - e->width * 0.5, e->posY, e->posZ - e->width * 0.5},
-                      {e->posX + e->width * 0.5, e->posY + e->height, e->posZ + e->width * 0.5}};
+    if(e->entity.entityDependencies) {
+        const AxisAlignedBB *b=e->entity.boundingBox;
+        entity_box box={{b->minX,b->minY,b->minZ},{b->maxX,b->maxY,b->maxZ}};
+        return box;
+    }
+    entity_box box = {{e->entity.posX - e->entity.width * 0.5, e->entity.posY, e->entity.posZ - e->entity.width * 0.5},
+                      {e->entity.posX + e->entity.width * 0.5, e->entity.posY + e->entity.height, e->entity.posZ + e->entity.width * 0.5}};
     return box;
 }
 static double collision_offset(const mc_world *world, entity_box *box, unsigned axis,
@@ -106,14 +125,14 @@ static bool push_out(EntityItem *e, const mc_world *world) {
                         box.high[2] > z + shapes[i].min_z && box.low[2] < z + shapes[i].max_z)
                         overlaps = true;
             }
-    int x = (int)floor(e->posX), y = (int)floor(e->posY + 0.125), z = (int)floor(e->posZ);
+    int x = (int)floor(e->entity.posX), y = (int)floor(e->entity.posY + 0.125), z = (int)floor(e->entity.posZ);
     if (!overlaps && !full_cube(mc_world_get(world, x, y, z)))
         return false;
     unsigned direction = 2;
     double nearest = 10000;
     const int offsets[5][3] = {{-1, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
-    const double distances[5] = {e->posX - x, 1 - (e->posX - x), 1 - (e->posY + 0.125 - y),
-                                 e->posZ - z, 1 - (e->posZ - z)};
+    const double distances[5] = {e->entity.posX - x, 1 - (e->entity.posX - x), 1 - (e->entity.posY + 0.125 - y),
+                                 e->entity.posZ - z, 1 - (e->entity.posZ - z)};
     for (unsigned i = 0; i < 5; i++)
         if (!full_cube(
                 mc_world_get(world, x + offsets[i][0], y + offsets[i][1], z + offsets[i][2])) &&
@@ -122,38 +141,39 @@ static bool push_out(EntityItem *e, const mc_world *world) {
             direction = i;
         }
     double speed =
-        0.1 + (random_word((uint32_t)e->entityId + e->ticksExisted) & 0xffffffu) / 16777216.0 * 0.2;
+        0.1 + (random_word((uint32_t)e->entity.entityId + e->entity.ticksExisted) & 0xffffffu) / 16777216.0 * 0.2;
     if (direction < 2)
-        e->motionX = direction == 0 ? -speed : speed;
+        e->entity.motionX = direction == 0 ? -speed : speed;
     else if (direction == 2)
-        e->motionY = speed;
+        e->entity.motionY = speed;
     else
-        e->motionZ = direction == 3 ? -speed : speed;
+        e->entity.motionZ = direction == 3 ? -speed : speed;
     return true;
 }
 bool NativeItemMotion_tick(EntityItem *e, const mc_world *world) {
     if (!NativeItemMotion_validate(e))
         return false;
-    if (!world || !e->health || e->age >= 6000 || e->posY < -64)
+    if (!world || !e->health || e->age >= 6000 || e->entity.posY < -64)
         return false;
-    e->ticksExisted = java_increment(e->ticksExisted);
+    e->entity.ticksExisted = java_increment(e->entity.ticksExisted);
+    MCObjectHeap_touch(e->entity.object.heap);
     if (e->delayBeforeCanPickup > 0 && e->delayBeforeCanPickup != 32767)
         e->delayBeforeCanPickup--;
-    double previous_x = e->posX, previous_y = e->posY, previous_z = e->posZ;
+    double previous_x = e->entity.posX, previous_y = e->entity.posY, previous_z = e->entity.posZ;
     unsigned material =
-        mc_world_get(world, (int)floor(e->posX), (int)floor(e->posY), (int)floor(e->posZ)) >> 4;
+        mc_world_get(world, (int)floor(e->entity.posX), (int)floor(e->entity.posY), (int)floor(e->entity.posZ)) >> 4;
     if (material == 10 || material == 11)
         e->health = e->health > 4 ? e->health - 4 : 0;
-    else if ((material == 51 && e->ticksExisted % 20 == 0) || material == 81)
+    else if ((material == 51 && e->entity.ticksExisted % 20 == 0) || material == 81)
         e->health = e->health > 0 ? e->health - 1 : 0;
     if (!e->health)
         return false;
-    e->motionY -= 0.03999999910593033;
+    e->entity.motionY -= 0.03999999910593033;
     bool no_clip = push_out(e, world);
-    e->noClip = no_clip;
+    e->entity.noClip = no_clip;
     entity_box box = bounds(e);
-    double old_vy = e->motionY;
-    double dy = e->motionY, dx = e->motionX, dz = e->motionZ;
+    double old_vy = e->entity.motionY;
+    double dy = e->entity.motionY, dx = e->entity.motionX, dz = e->entity.motionZ;
     if (no_clip) {
         box.low[0] += dx;
         box.high[0] += dx;
@@ -162,44 +182,50 @@ bool NativeItemMotion_tick(EntityItem *e, const mc_world *world) {
         box.low[2] += dz;
         box.high[2] += dz;
     } else {
-        dy = collision_offset(world, &box, 1, e->motionY);
-        dx = collision_offset(world, &box, 0, e->motionX);
-        dz = collision_offset(world, &box, 2, e->motionZ);
+        dy = collision_offset(world, &box, 1, e->entity.motionY);
+        dx = collision_offset(world, &box, 0, e->entity.motionX);
+        dz = collision_offset(world, &box, 2, e->entity.motionZ);
     }
-    e->posX = (box.low[0] + box.high[0]) * 0.5;
-    e->posY = box.low[1];
-    e->posZ = (box.low[2] + box.high[2]) * 0.5;
-    e->onGround = dy != old_vy && old_vy < 0;
-    if (dx != e->motionX)
-        e->motionX = 0;
-    if (dz != e->motionZ)
-        e->motionZ = 0;
+    e->entity.posX = (box.low[0] + box.high[0]) * 0.5;
+    e->entity.posY = box.low[1];
+    e->entity.posZ = (box.low[2] + box.high[2]) * 0.5;
+    e->entity.onGround = dy != old_vy && old_vy < 0;
+    if (dx != e->entity.motionX)
+        e->entity.motionX = 0;
+    if (dz != e->entity.motionZ)
+        e->entity.motionZ = 0;
     unsigned below =
-        mc_world_get(world, (int)floor(e->posX), (int)floor(e->posY) - 1, (int)floor(e->posZ)) >> 4;
+        mc_world_get(world, (int)floor(e->entity.posX), (int)floor(e->entity.posY) - 1, (int)floor(e->entity.posZ)) >> 4;
     if (dy != old_vy)
-        e->motionY = below == 165 && old_vy < 0 ? -old_vy : 0;
-    bool moved = (int)previous_x != (int)e->posX || (int)previous_y != (int)e->posY ||
-                 (int)previous_z != (int)e->posZ;
-    if (moved || e->ticksExisted % 25 == 0) {
+        e->entity.motionY = below == 165 && old_vy < 0 ? -old_vy : 0;
+    bool moved = (int)previous_x != (int)e->entity.posX || (int)previous_y != (int)e->entity.posY ||
+                 (int)previous_z != (int)e->entity.posZ;
+    if (moved || e->entity.ticksExisted % 25 == 0) {
         material =
-            mc_world_get(world, (int)floor(e->posX), (int)floor(e->posY), (int)floor(e->posZ)) >> 4;
+            mc_world_get(world, (int)floor(e->entity.posX), (int)floor(e->entity.posY), (int)floor(e->entity.posZ)) >> 4;
         if (material == 10 || material == 11) {
-            e->motionY = 0.20000000298023224;
-            e->motionX = random_signed((uint32_t)e->entityId + e->ticksExisted * 4u);
-            e->motionZ = random_signed((uint32_t)e->entityId + e->ticksExisted * 4u + 2u);
+            e->entity.motionY = 0.20000000298023224;
+            e->entity.motionX = random_signed((uint32_t)e->entity.entityId + e->entity.ticksExisted * 4u);
+            e->entity.motionZ = random_signed((uint32_t)e->entity.entityId + e->entity.ticksExisted * 4u + 2u);
         }
     }
     float friction = 0.98f;
-    if (e->onGround) {
+    if (e->entity.onGround) {
         float slipperiness = (below == 79 || below == 174) ? 0.98f : below == 165 ? 0.8f : 0.6f;
         friction = slipperiness * 0.98f;
     }
-    e->motionX *= friction;
-    e->motionZ *= friction;
-    e->motionY *= 0.9800000190734863;
-    if (e->onGround)
-        e->motionY *= -0.5;
+    e->entity.motionX *= friction;
+    e->entity.motionZ *= friction;
+    e->entity.motionY *= 0.9800000190734863;
+    if (e->entity.onGround)
+        e->entity.motionY *= -0.5;
     if (e->age != -32768)
         e->age = java_increment(e->age);
-    return e->age < 6000 && e->posY >= -64;
+    /* Native motion uses the source-owned box, including setSize's anchored
+       shrink. Restore the actual owned Entity box after its scalar movement;
+       native-only scalar fixtures have no inherited source dependency table. */
+    if(e->entity.entityDependencies&&
+       !Entity_setPosition(&e->entity,e->entity.posX,e->entity.posY,e->entity.posZ))
+        return false;
+    return e->age < 6000 && e->entity.posY >= -64;
 }

@@ -1,10 +1,12 @@
 #include "util/MCGameplayPlayer.h"
 #include "util/MathHelper.h"
+#include "util/NativeEntityIDRuntime.h"
 #include <math.h>
 
 static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
     MCGameplayPlayer *player=(MCGameplayPlayer *)object;
     player->worldObj=(MCGameplayWorld *)visitor((MCObject *)player->worldObj,context);
+    player->capabilities=(PlayerCapabilities *)visitor((MCObject *)player->capabilities,context);
     player->inventory=(InventoryPlayer *)visitor((MCObject *)player->inventory,context);
     player->inventoryContainer=(ContainerPlayer *)visitor((MCObject *)player->inventoryContainer,context);
     player->openContainer=(Container *)visitor((MCObject *)player->openContainer,context);
@@ -59,10 +61,11 @@ MCGameplayPlayer *MCGameplayPlayer_new(MCGameplayWorld *world,NBTString *name,
     MCGameplayPlayer *player=(MCGameplayPlayer *)MCObjectHeap_alloc(heap,sizeof(*player),&klass);
     if (player) {
         player->worldObj=world; player->name=name; player->stats=stats;
-        bool randomReady=inherited_random_segment(player);
+        bool randomReady=NativeEntityIDRuntime_next(NativeEntityIDRuntime_process(),&player->entityId) && inherited_random_segment(player);
         player->savedFields=randomReady?NBTTagCompound_new(heap):NULL;
         player->inventory=randomReady?InventoryPlayer_new(heap,(MCObject *)player,MCGameplayPlayer_isCreativeMode):NULL;
-        if (player->savedFields && player->inventory) {
+        player->capabilities=player->inventory?PlayerCapabilities_new(heap):NULL;
+        if (player->savedFields && player->inventory && player->capabilities) {
             player->inventoryContainer=ContainerPlayer_new(player->inventory,!world->remote,(MCObject *)player,dependencies);
             if (player->inventoryContainer) {
                 player->openContainer=&player->inventoryContainer->container;
@@ -73,7 +76,7 @@ MCGameplayPlayer *MCGameplayPlayer_new(MCGameplayWorld *world,NBTString *name,
                 player->rotationYaw=0;player->rotationPitch=0;MCObjectHeap_touch(heap);
             }
         }
-        if (!player->savedFields || !player->inventory || !player->inventoryContainer || MCObjectHeap_failed(heap)) {
+        if (!player->savedFields || !player->inventory || !player->inventoryContainer || !player->capabilities || MCObjectHeap_failed(heap)) {
             MCObjectHeap_fail(heap); player=NULL;
         }
     }
@@ -93,9 +96,16 @@ MCObject *MCGameplayPlayer_world(MCObject *object) {
     MCGameplayPlayer *player=player_object(object);
     return player ? (MCObject *)player->worldObj : NULL;
 }
-bool MCGameplayPlayer_isCreativeMode(const MCObject *object) {
+PlayerCapabilities *MCGameplayPlayer_capabilities(const MCObject *object) {
     const MCGameplayPlayer *player=player_object(object);
-    return player && player->creative;
+    PlayerCapabilities *caps=player?player->capabilities:NULL;
+    if (!caps || caps->object.heap!=object->heap || !PlayerCapabilities_isInstance((MCObject *)caps)) {
+        MCObjectHeap_fail(object?object->heap:NULL);return NULL;
+    }
+    return caps;
+}
+bool MCGameplayPlayer_isCreativeMode(const MCObject *object) {
+    PlayerCapabilities *caps=MCGameplayPlayer_capabilities(object);return caps && caps->isCreativeMode;
 }
 double MCGameplayPlayer_getDistanceSq(const MCObject *object,double x,double y,double z) {
     const MCGameplayPlayer *player=player_object(object);

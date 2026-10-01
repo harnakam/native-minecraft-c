@@ -351,12 +351,12 @@ static void test_sync_and_creative(void) {
           C09PacketHeldItemChange_getSlotId((C09PacketHeldItemChange *)f->packets[0]) == 8);
     CHECK(PlayerControllerMP_syncCurrentPlayItem(c) && f->packetCount == 1);
     ItemStack *s = stack(f, -7);
-    f->player->creative = true;
+    f->player->capabilities->isCreativeMode = true;
     clear(f);
     CHECK(PlayerControllerMP_sendSlotPacket(c, s, 99) &&
           PlayerControllerMP_sendPacketDropItem(c, s) && f->packetCount == 0);
     c->currentGameType = &PlayerControllerMP_CREATIVE;
-    f->player->creative = false;
+    f->player->capabilities->isCreativeMode = false;
     CHECK(PlayerControllerMP_sendSlotPacket(c, s, 99));
     C10PacketCreativeInventoryAction *p = (C10PacketCreativeInventoryAction *)f->packets[0];
     CHECK(p->slotId == 99 && p->stack != s && p->stack->stackSize == -7);

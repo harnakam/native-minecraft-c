@@ -7,10 +7,10 @@ static bool uuid_ref(MCObjectHeap *heap, NativeJavaUUID *uuid) {
     return uuid && uuid->object.heap==heap && NativeJavaUUID_isInstance((MCObject *)uuid) &&
         !MCObjectHeap_failed(heap) ? true : fail(heap);
 }
-NativeJavaUUID *Entity_getUniqueID(MCObject *entity) {
+NativeJavaUUID *EntityUUIDNBT_nativeGetUniqueID(MCObject *entity) {
     NativeJavaUUID *uuid=NULL;
     if (MCGameplayPlayer_isInstance(entity)) uuid=((MCGameplayPlayer *)entity)->entityUniqueID;
-    else if (EntityItem_isInstance(entity)) uuid=((EntityItem *)entity)->entityUniqueID;
+    else if (EntityItem_isInstance(entity)) uuid=((EntityItem *)entity)->entity.entityUniqueID;
     else { fail(entity?entity->heap:NULL); return NULL; }
     /* The original field getter may return NULL; the following dereference in
        the writer is what requires a UUID. Cross-heap references are invalid. */
@@ -21,11 +21,11 @@ static bool native_set(MCObject *entity, NativeJavaUUID *uuid) {
     MCObjectHeap *heap=entity?entity->heap:NULL;
     if (!uuid_ref(heap,uuid)) return false;
     if (MCGameplayPlayer_isInstance(entity)) ((MCGameplayPlayer *)entity)->entityUniqueID=uuid;
-    else if (EntityItem_isInstance(entity)) ((EntityItem *)entity)->entityUniqueID=uuid;
+    else if (EntityItem_isInstance(entity)) ((EntityItem *)entity)->entity.entityUniqueID=uuid;
     else return fail(heap);
     MCObjectHeap_touch(heap); return true;
 }
-static const EntityUUIDNBTDispatch native_dispatch={Entity_getUniqueID,native_set};
+static const EntityUUIDNBTDispatch native_dispatch={EntityUUIDNBT_nativeGetUniqueID,native_set};
 const EntityUUIDNBTDispatch *EntityUUIDNBT_nativeOwnerDispatch(void) { return &native_dispatch; }
 static bool begin(MCObject *entity, NBTTagCompound *tag, MCObjectRootScope *scope) {
     MCObjectHeap *heap=entity?entity->heap:NULL;

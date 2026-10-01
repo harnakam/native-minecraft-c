@@ -1,9 +1,4 @@
 #include "client/multiplayer/PlayerControllerMP.h"
-const PlayerControllerMPGameType PlayerControllerMP_NOT_SET = {-1};
-const PlayerControllerMPGameType PlayerControllerMP_SURVIVAL = {0};
-const PlayerControllerMPGameType PlayerControllerMP_CREATIVE = {1};
-const PlayerControllerMPGameType PlayerControllerMP_ADVENTURE = {2};
-const PlayerControllerMPGameType PlayerControllerMP_SPECTATOR = {3};
 static void trace(MCObject *object, MCObjectVisitor visit, void *context) {
     PlayerControllerMP *self = (PlayerControllerMP *)object;
     self->netClientHandler =
@@ -63,6 +58,27 @@ bool PlayerControllerMP_bindActions(PlayerControllerMP *self, MCObject *mc, MCOb
         MCObjectHeap_touch(self->object.heap);
     }
     return actions_end(self, &scope, ok);
+}
+bool PlayerControllerMP_setPlayerCapabilities(PlayerControllerMP *self,MCGameplayPlayer *player) {
+    MCObjectRootScope scope={0};if (!actions_begin(self,&scope)) return false;
+    bool ok=MCGameplayPlayer_isInstance((MCObject *)player) && MCObjectRootScope_pin(&scope,(MCObject *)player);
+    const WorldSettingsGameType *receiver=self->currentGameType;
+    PlayerCapabilities *caps=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    ok=caps && WorldSettingsGameType_configurePlayerCapabilities(receiver,caps);
+    return actions_end(self,&scope,ok);
+}
+bool PlayerControllerMP_setGameType(PlayerControllerMP *self,const WorldSettingsGameType *type) {
+    MCObjectRootScope scope={0};if (!actions_begin(self,&scope)) return false;
+    /* Original assignment precedes dereferencing Minecraft.thePlayer. */
+    self->currentGameType=type;MCObjectHeap_touch(self->object.heap);
+    const WorldSettingsGameType *receiver=self->currentGameType;
+    const PlayerControllerMPActionsDependencies *d=self->actionsDependencies;
+    bool ok=d && d->getPlayer && self->mc && MCObjectRootScope_pin(&scope,self->mc) && MCObjectRootScope_pin(&scope,self->actionsContext);
+    MCGameplayPlayer *player=ok?d->getPlayer(self->actionsContext,self->mc):NULL;
+    ok=ok && MCGameplayPlayer_isInstance((MCObject *)player) && MCObjectRootScope_pin(&scope,(MCObject *)player);
+    PlayerCapabilities *caps=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    ok=caps && WorldSettingsGameType_configurePlayerCapabilities(receiver,caps);
+    return actions_end(self,&scope,ok);
 }
 bool PlayerControllerMP_syncCurrentPlayItem(PlayerControllerMP *self) {
     MCObjectRootScope scope = {0};

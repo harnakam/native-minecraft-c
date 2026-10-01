@@ -14,42 +14,39 @@ static int32_t java_subtract(int32_t a,int32_t b) {
     return value<=INT32_MAX?(int32_t)value:-1-(int32_t)(UINT32_MAX-value);
 }
 static bool effect(EntityItem *entity,bool completed) {
-    if (!completed) MCObjectHeap_fail(entity->object.heap);
-    return completed&&!MCObjectHeap_failed(entity->object.heap);
+    if (!completed) MCObjectHeap_fail(entity->entity.object.heap);
+    return completed&&!MCObjectHeap_failed(entity->entity.object.heap);
 }
 static void trace(MCObject *o,MCObjectVisitor visitor,void *context) {
     EntityItem *entity=(EntityItem *)o;
-    entity->worldObj=visitor(entity->worldObj,context);
+    Entity_traceFields(&entity->entity,visitor,context);
     entity->dependencyContext=visitor(entity->dependencyContext,context);
-    entity->dataWatcher=(DataWatcher *)visitor((MCObject *)entity->dataWatcher,context);
     entity->owner=(NBTString *)visitor((MCObject *)entity->owner,context);
     entity->thrower=(NBTString *)visitor((MCObject *)entity->thrower,context);
     entity->savedFields=(NBTTagCompound *)visitor((MCObject *)entity->savedFields,context);
-    entity->rand=(NativeJavaRandom *)visitor((MCObject *)entity->rand,context);
-    entity->entityUniqueID=(NativeJavaUUID *)visitor((MCObject *)entity->entityUniqueID,context);
 }
 static const MCObjectClass klass={"net.minecraft.entity.item.EntityItem",MCObjectHeap_plainClone,trace,NULL};
-bool EntityItem_isInstance(const MCObject *object) {return object&&object->klass==&klass;}
+bool EntityItem_isInstance(const MCObject *object) {return object&&object->klass==&klass&&MCObjectHeap_objectSize(object)>=sizeof(EntityItem);}
 bool EntityItem_nativeInitializeRandom(EntityItem *entity,NativeJavaRandomRuntime *runtime) {
-    MCObjectHeap *heap=entity?entity->object.heap:NULL;
-    if (!EntityItem_isInstance((MCObject *)entity)||entity->rand||entity->entityUniqueID||entity->dataWatcher||!runtime) {
+    MCObjectHeap *heap=entity?entity->entity.object.heap:NULL;
+    if (!EntityItem_isInstance((MCObject *)entity)||entity->entity.rand||entity->entity.entityUniqueID||entity->entity.dataWatcher||!runtime) {
         MCObjectHeap_fail(heap);return false;
     }
     MCObjectRootScope scope={0};
     if (!MCObjectRootScope_begin(&scope,heap)) return false;
-    entity->rand=NativeJavaRandomRuntime_newRandom(runtime,heap);
-    if (entity->rand) entity->entityUniqueID=MathHelper_getRandomUuid(entity->rand);
-    bool ok=entity->rand&&entity->entityUniqueID&&!MCObjectHeap_failed(heap);
+    entity->entity.rand=NativeJavaRandomRuntime_newRandom(runtime,heap);
+    if (entity->entity.rand) entity->entity.entityUniqueID=MathHelper_getRandomUuid(entity->entity.rand);
+    bool ok=entity->entity.rand&&entity->entity.entityUniqueID&&!MCObjectHeap_failed(heap);
     MCObjectHeap_touch(heap);
     if (!ok) MCObjectHeap_fail(heap);
     MCObjectRootScope_end(&scope);return ok;
 }
-DataWatcher *EntityItem_getDataWatcher(EntityItem *entity) {return entity?entity->dataWatcher:NULL;}
+DataWatcher *EntityItem_getDataWatcher(EntityItem *entity) {return entity?entity->entity.dataWatcher:NULL;}
 static DataWatcher *required_watcher(EntityItem *entity) {
-    MCObjectHeap *heap=entity?entity->object.heap:NULL;
-    if (!EntityItem_isInstance((MCObject *)entity)||!DataWatcher_isInstance((MCObject *)entity->dataWatcher)||
-        ((MCObject *)entity->dataWatcher)->heap!=heap) {MCObjectHeap_fail(heap);return NULL;}
-    return entity->dataWatcher;
+    MCObjectHeap *heap=entity?entity->entity.object.heap:NULL;
+    if (!EntityItem_isInstance((MCObject *)entity)||!DataWatcher_isInstance((MCObject *)entity->entity.dataWatcher)||
+        ((MCObject *)entity->entity.dataWatcher)->heap!=heap) {MCObjectHeap_fail(heap);return NULL;}
+    return entity->entity.dataWatcher;
 }
 static bool inherited_watcher_update(MCObject *context,MCObject *owner,int32_t id) {
     (void)context;
@@ -63,14 +60,14 @@ bool EntityItem_entityInit(EntityItem *entity) {
     return watcher&&DataWatcher_addObjectByDataType(watcher,10,5);
 }
 bool EntityItem_nativeInitializeDataWatcher(EntityItem *entity,const DataWatcherDependencies *methods,MCObject *context) {
-    MCObjectHeap *heap=entity?entity->object.heap:NULL;MCObjectRootScope scope={0};
-    if (!EntityItem_isInstance((MCObject *)entity)||entity->dataWatcher||(context&&context->heap!=heap)) {
+    MCObjectHeap *heap=entity?entity->entity.object.heap:NULL;MCObjectRootScope scope={0};
+    if (!EntityItem_isInstance((MCObject *)entity)||entity->entity.dataWatcher||(context&&context->heap!=heap)) {
         MCObjectHeap_fail(heap);return false;
     }
     if (!MCObjectRootScope_begin(&scope,heap)) return false;
     bool ok=MCObjectRootScope_pin(&scope,(MCObject *)entity)&&MCObjectRootScope_pin(&scope,context);
     DataWatcher *watcher=ok?DataWatcher_new(heap,(MCObject *)entity,methods?methods:&inherited_watcher_methods,context):NULL;
-    if (watcher) {entity->dataWatcher=watcher;MCObjectHeap_touch(heap);} else ok=false;
+    if (watcher) {entity->entity.dataWatcher=watcher;MCObjectHeap_touch(heap);} else ok=false;
     /* Original Entity constructor's watcher portion. Allocation calls preserve
        its add order; subclass health/hover/size work has not run here. */
     MCObject *value=ok?DataWatcher_boxByte(heap,0):NULL;
@@ -92,12 +89,12 @@ static EntityItem *allocate(MCObjectHeap *heap,MCObject *world,MCObject *context
         MCObjectHeap_fail(heap);return NULL;
     }
     EntityItem *entity=(EntityItem *)MCObjectHeap_alloc(heap,sizeof(*entity),&klass);
-    if (entity) {entity->worldObj=world;entity->dependencyContext=context;entity->dependencies=d;}
+    if (entity) {entity->dependencyContext=context;entity->dependencies=d;}
     return entity;
 }
 EntityItem *EntityItem_nativeNew(MCObjectHeap *heap,MCObject *world,MCObject *context,const EntityItemDependencies *d) {
     EntityItem *entity=allocate(heap,world,context,d);
-    if (entity) {entity->health=5;MCObjectHeap_touch(heap);}
+    if (entity) {entity->entity.worldObj=world;entity->health=5;MCObjectHeap_touch(heap);}
     return entity;
 }
 static bool constructor_begin(MCObjectRootScope *scope,MCObjectHeap *heap,MCObject *world,MCObject *context,const EntityItemConstructorDependencies *d) {
@@ -109,6 +106,10 @@ static bool constructor_begin(MCObjectRootScope *scope,MCObjectHeap *heap,MCObje
 static EntityItem *constructor_base(MCObjectHeap *heap,MCObject *world,MCObject *context,const EntityItemDependencies *d,const EntityItemConstructorDependencies *construct) {
     EntityItem *entity=allocate(heap,world,context,d); if (!entity) return NULL;
     if (!effect(entity,construct->baseConstructor(context,entity,world))) return NULL;
+    if (!entity->entity.entityDependencies||!AxisAlignedBB_isInstance((MCObject *)entity->entity.boundingBox)||
+        !CommandResultStats_isInstance((MCObject *)entity->entity.cmdResultStats)) {
+        MCObjectHeap_fail(heap);return NULL;
+    }
     DataWatcher *watcher=required_watcher(entity);if (!watcher) return NULL;
     WatchableObject *entry=DataWatcher_nativeGetWatchedObject(watcher,10);
     if (!entry||WatchableObject_getObjectType(entry)!=5) {MCObjectHeap_fail(heap);return NULL;}
@@ -124,14 +125,14 @@ EntityItem *EntityItem_new_position(MCObjectHeap *heap,MCObject *world,MCObject 
     if (entity && !effect(entity,construct->setPosition(context,entity,x,y,z))) entity=NULL;
     if (entity) {
         double random=construct->mathRandom(context);
-        if (!MCObjectHeap_failed(heap)) {entity->rotationYaw=(float)(random*360.0);MCObjectHeap_touch(heap);}
+        if (!MCObjectHeap_failed(heap)) {entity->entity.rotationYaw=(float)(random*360.0);MCObjectHeap_touch(heap);}
         if (!MCObjectHeap_failed(heap)) {
             random=construct->mathRandom(context); volatile double motion=random*0.20000000298023224; motion=motion-0.10000000149011612;
-            if (!MCObjectHeap_failed(heap)) {entity->motionX=(double)(float)motion;entity->motionY=0.20000000298023224;MCObjectHeap_touch(heap);}
+            if (!MCObjectHeap_failed(heap)) {entity->entity.motionX=(double)(float)motion;entity->entity.motionY=0.20000000298023224;MCObjectHeap_touch(heap);}
         }
         if (!MCObjectHeap_failed(heap)) {
             random=construct->mathRandom(context); volatile double motion=random*0.20000000298023224; motion=motion-0.10000000149011612;
-            if (!MCObjectHeap_failed(heap)) {entity->motionZ=(double)(float)motion;MCObjectHeap_touch(heap);}
+            if (!MCObjectHeap_failed(heap)) {entity->entity.motionZ=(double)(float)motion;MCObjectHeap_touch(heap);}
         }
     }
     MCObjectRootScope_end(&scope); return MCObjectHeap_failed(heap)?NULL:entity;
@@ -156,21 +157,21 @@ EntityItem *EntityItem_new_world(MCObjectHeap *heap,MCObject *world,MCObject *co
 }
 ItemStack *EntityItem_getEntityItem(EntityItem *entity) {
     if (!entity) return NULL;
-    MCObjectHeap *heap=entity->object.heap;MCObjectRootScope scope={0};
+    MCObjectHeap *heap=entity->entity.object.heap;MCObjectRootScope scope={0};
     if (!MCObjectRootScope_begin(&scope,heap)) return NULL;
     bool ok=MCObjectRootScope_pin(&scope,(MCObject *)entity);
     DataWatcher *watcher=ok?required_watcher(entity):NULL;
     ItemStack *stack=watcher?DataWatcher_getWatchableObjectItemStack(watcher,10):NULL;
     if (!MCObjectHeap_failed(heap)&&!stack) {
-        ok=!entity->worldObj||effect(entity,entity->dependencies->logMissingItem(entity->dependencyContext,entity->entityId));
+        ok=!entity->entity.worldObj||effect(entity,entity->dependencies->logMissingItem(entity->dependencyContext,entity->entity.entityId));
         if (ok) stack=ItemStack_new_item(heap,ItemStack_registryItem(1));
     }
     ok=ok&&!MCObjectHeap_failed(heap);MCObjectRootScope_end(&scope);return ok?stack:NULL;
 }
 bool EntityItem_setEntityItemStack(EntityItem *entity,ItemStack *stack) {
     if (!entity) return false;
-    if (MCObjectHeap_failed(entity->object.heap)) return false;
-    if (stack&&stack->object.heap!=entity->object.heap) {MCObjectHeap_fail(entity->object.heap);return false;}
+    if (MCObjectHeap_failed(entity->entity.object.heap)) return false;
+    if (stack&&stack->object.heap!=entity->entity.object.heap) {MCObjectHeap_fail(entity->entity.object.heap);return false;}
     DataWatcher *watcher=required_watcher(entity);if (!watcher) return false;
     /* Original order. updateObject retains the exact reference and invokes
        the inherited virtual notification only when it differs. The explicit
@@ -180,7 +181,7 @@ bool EntityItem_setEntityItemStack(EntityItem *entity,ItemStack *stack) {
 static int16_t java_short(int32_t value) {uint16_t bits=(uint16_t)value;int16_t out;memcpy(&out,&bits,sizeof(out));return out;}
 static int8_t java_byte(int32_t value) {uint8_t bits=(uint8_t)value;int8_t out;memcpy(&out,&bits,sizeof(out));return out;}
 bool EntityItem_writeEntityToNBT(EntityItem *entity,NBTTagCompound *tag) {
-    MCObjectHeap *heap=entity?entity->object.heap:NULL;MCObjectRootScope scope={0};
+    MCObjectHeap *heap=entity?entity->entity.object.heap:NULL;MCObjectRootScope scope={0};
     if (!entity||!tag||((MCObject *)tag)->heap!=heap) {MCObjectHeap_fail(heap);return false;}
     if (!MCObjectRootScope_begin(&scope,heap))return false;
     bool ok=NBTTagCompound_setShort_ascii(tag,"Health",(int16_t)java_byte(entity->health))&&
@@ -196,7 +197,7 @@ bool EntityItem_writeEntityToNBT(EntityItem *entity,NBTTagCompound *tag) {
     ok=ok&&!MCObjectHeap_failed(heap);MCObjectRootScope_end(&scope);return ok;
 }
 ItemStackNBTResult EntityItem_readEntityFromNBT(EntityItem *entity,NBTTagCompound *tag) {
-    MCObjectHeap *heap=entity?entity->object.heap:NULL;MCObjectRootScope scope={0};
+    MCObjectHeap *heap=entity?entity->entity.object.heap:NULL;MCObjectRootScope scope={0};
     if (!entity||!tag||((MCObject *)tag)->heap!=heap) {MCObjectHeap_fail(heap);return ITEMSTACK_NBT_FAILURE;}
     if (!MCObjectRootScope_begin(&scope,heap))return ITEMSTACK_NBT_FAILURE;
     entity->health=NBTTagCompound_getShort_ascii(tag,"Health")&255;
@@ -225,9 +226,9 @@ ItemStackNBTResult EntityItem_readEntityFromNBT(EntityItem *entity,NBTTagCompoun
     MCObjectRootScope_end(&scope);return result;
 }
 bool EntityItem_combineItems(EntityItem *entity,EntityItem *other) {
-    MCObjectHeap *heap=entity->object.heap;
-    if (!other||other->object.heap!=heap) {MCObjectHeap_fail(heap);return false;}
-    if (MCObjectHeap_failed(heap)||other==entity||other->isDead||entity->isDead) return false;
+    MCObjectHeap *heap=entity->entity.object.heap;
+    if (!other||other->entity.object.heap!=heap) {MCObjectHeap_fail(heap);return false;}
+    if (MCObjectHeap_failed(heap)||other==entity||other->entity.isDead||entity->entity.isDead) return false;
     ItemStack *stack=EntityItem_getEntityItem(entity),*otherStack=EntityItem_getEntityItem(other);
     if (MCObjectHeap_failed(heap)||!stack||!otherStack) return false;
     if (entity->delayBeforeCanPickup==32767||other->delayBeforeCanPickup==32767||entity->age==-32768||other->age==-32768) return false;
@@ -249,10 +250,10 @@ static bool achievement(EntityItem *entity,MCObject *player,EntityItemAchievemen
     return effect(entity,entity->dependencies->triggerAchievement(entity->dependencyContext,player,value));
 }
 bool EntityItem_onCollideWithPlayer(EntityItem *entity,MCObject *player) {
-    MCObjectHeap *heap=entity->object.heap;const EntityItemDependencies *d=entity->dependencies;MCObject *context=entity->dependencyContext;
+    MCObjectHeap *heap=entity->entity.object.heap;const EntityItemDependencies *d=entity->dependencies;MCObject *context=entity->dependencyContext;
     if (MCObjectHeap_failed(heap)) return false;
-    if (!entity->worldObj||entity->worldObj->heap!=heap) {MCObjectHeap_fail(heap);return false;}
-    bool remote=d->isRemote(context,entity->worldObj);
+    if (!entity->entity.worldObj||entity->entity.worldObj->heap!=heap) {MCObjectHeap_fail(heap);return false;}
+    bool remote=d->isRemote(context,entity->entity.worldObj);
     if (MCObjectHeap_failed(heap)) return false;
     if (remote) return true;
     ItemStack *stack=EntityItem_getEntityItem(entity);
@@ -280,7 +281,7 @@ bool EntityItem_onCollideWithPlayer(EntityItem *entity,MCObject *player) {
     if (ItemStack_getItem(stack)==ItemStack_registryItem(264)&&!achievement(entity,player,ENTITYITEM_ACH_DIAMONDS)) return false;
     if (ItemStack_getItem(stack)==ItemStack_registryItem(369)&&!achievement(entity,player,ENTITYITEM_ACH_BLAZE_ROD)) return false;
     if (ItemStack_getItem(stack)==ItemStack_registryItem(264)&&EntityItem_getThrower(entity)) {
-        MCObject *thrower=d->findPlayer(context,entity->worldObj,EntityItem_getThrower(entity));
+        MCObject *thrower=d->findPlayer(context,entity->entity.worldObj,EntityItem_getThrower(entity));
         if (MCObjectHeap_failed(heap)) return false;
         if (thrower&&thrower->heap!=heap) {MCObjectHeap_fail(heap);return false;}
         if (thrower&&thrower!=player&&!achievement(entity,thrower,ENTITYITEM_ACH_DIAMONDS_TO_YOU)) return false;
@@ -293,7 +294,7 @@ bool EntityItem_onCollideWithPlayer(EntityItem *entity,MCObject *player) {
         float second=d->nextFloat(context,entity);
         if (MCObjectHeap_failed(heap)) return false;
         float pitch=((first-second)*0.7F+1.0F)*2.0F;
-        if (!effect(entity,d->playSoundAtEntity(context,entity->worldObj,player,"random.pop",0.2F,pitch))) return false;
+        if (!effect(entity,d->playSoundAtEntity(context,entity->entity.worldObj,player,"random.pop",0.2F,pitch))) return false;
     }
     if (!effect(entity,d->onItemPickup(context,player,entity,count))) return false;
     if (stack->stackSize<=0&&!effect(entity,d->setDead(context,entity))) return false;
@@ -301,22 +302,22 @@ bool EntityItem_onCollideWithPlayer(EntityItem *entity,MCObject *player) {
 }
 NBTString *EntityItem_getOwner(const EntityItem *entity) {return entity->owner;}
 bool EntityItem_setOwner(EntityItem *entity,NBTString *owner) {
-    if (MCObjectHeap_failed(entity->object.heap)) return false;
-    if (owner&&((MCObject *)owner)->heap!=entity->object.heap) {MCObjectHeap_fail(entity->object.heap);return false;}
-    entity->owner=owner;MCObjectHeap_touch(entity->object.heap);return !MCObjectHeap_failed(entity->object.heap);
+    if (MCObjectHeap_failed(entity->entity.object.heap)) return false;
+    if (owner&&((MCObject *)owner)->heap!=entity->entity.object.heap) {MCObjectHeap_fail(entity->entity.object.heap);return false;}
+    entity->owner=owner;MCObjectHeap_touch(entity->entity.object.heap);return !MCObjectHeap_failed(entity->entity.object.heap);
 }
 NBTString *EntityItem_getThrower(const EntityItem *entity) {return entity->thrower;}
 bool EntityItem_setThrower(EntityItem *entity,NBTString *thrower) {
-    if (MCObjectHeap_failed(entity->object.heap)) return false;
-    if (thrower&&((MCObject *)thrower)->heap!=entity->object.heap) {MCObjectHeap_fail(entity->object.heap);return false;}
-    entity->thrower=thrower;MCObjectHeap_touch(entity->object.heap);return !MCObjectHeap_failed(entity->object.heap);
+    if (MCObjectHeap_failed(entity->entity.object.heap)) return false;
+    if (thrower&&((MCObject *)thrower)->heap!=entity->entity.object.heap) {MCObjectHeap_fail(entity->entity.object.heap);return false;}
+    entity->thrower=thrower;MCObjectHeap_touch(entity->entity.object.heap);return !MCObjectHeap_failed(entity->entity.object.heap);
 }
 int32_t EntityItem_getAge(const EntityItem *entity) {return entity->age;}
-void EntityItem_setAgeToCreativeDespawnTime(EntityItem *entity) {entity->age=4800;MCObjectHeap_touch(entity->object.heap);}
-void EntityItem_setDefaultPickupDelay(EntityItem *entity) {entity->delayBeforeCanPickup=10;MCObjectHeap_touch(entity->object.heap);}
-void EntityItem_setNoPickupDelay(EntityItem *entity) {entity->delayBeforeCanPickup=0;MCObjectHeap_touch(entity->object.heap);}
-void EntityItem_setInfinitePickupDelay(EntityItem *entity) {entity->delayBeforeCanPickup=32767;MCObjectHeap_touch(entity->object.heap);}
-void EntityItem_setPickupDelay(EntityItem *entity,int32_t ticks) {entity->delayBeforeCanPickup=ticks;MCObjectHeap_touch(entity->object.heap);}
+void EntityItem_setAgeToCreativeDespawnTime(EntityItem *entity) {entity->age=4800;MCObjectHeap_touch(entity->entity.object.heap);}
+void EntityItem_setDefaultPickupDelay(EntityItem *entity) {entity->delayBeforeCanPickup=10;MCObjectHeap_touch(entity->entity.object.heap);}
+void EntityItem_setNoPickupDelay(EntityItem *entity) {entity->delayBeforeCanPickup=0;MCObjectHeap_touch(entity->entity.object.heap);}
+void EntityItem_setInfinitePickupDelay(EntityItem *entity) {entity->delayBeforeCanPickup=32767;MCObjectHeap_touch(entity->entity.object.heap);}
+void EntityItem_setPickupDelay(EntityItem *entity,int32_t ticks) {entity->delayBeforeCanPickup=ticks;MCObjectHeap_touch(entity->entity.object.heap);}
 bool EntityItem_cannotPickup(const EntityItem *entity) {return entity->delayBeforeCanPickup>0;}
-void EntityItem_setNoDespawn(EntityItem *entity) {entity->age=-6000;MCObjectHeap_touch(entity->object.heap);}
-void EntityItem_func_174870_v(EntityItem *entity) {EntityItem_setInfinitePickupDelay(entity);entity->age=5999;MCObjectHeap_touch(entity->object.heap);}
+void EntityItem_setNoDespawn(EntityItem *entity) {entity->age=-6000;MCObjectHeap_touch(entity->entity.object.heap);}
+void EntityItem_func_174870_v(EntityItem *entity) {EntityItem_setInfinitePickupDelay(entity);entity->age=5999;MCObjectHeap_touch(entity->entity.object.heap);}

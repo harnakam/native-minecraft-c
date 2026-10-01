@@ -8,6 +8,7 @@
 #include "network/play/client/C0EPacketClickWindow.h"
 #include "network/play/client/C0FPacketConfirmTransaction.h"
 #include "network/play/client/C10PacketCreativeInventoryAction.h"
+#include "network/play/client/C13PacketPlayerAbilities.h"
 
 /* Native NetworkManager queue for the currently translated client packets.
    Retains the exact source packet; any occurrence copies happen in its source

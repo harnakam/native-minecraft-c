@@ -198,7 +198,7 @@ static void vectors(void) {
                         f->creative = c;
                         f->usingItem = busy;
                         /* Manager game type is independent from player capabilities. */
-                        f->player->creative = !c;
+                        f->player->capabilities->isCreativeMode = !c;
                         bool changed = true;
                         CHECK(ItemInWorldManager_tryUseItem(f->player, f->player->worldObj,
                                                             f->input, &deps, (MCObject *)f,
@@ -390,7 +390,7 @@ static void native_map_and_drop_bindings(void) {
                 CHECK(input->stackSize == (whole ? counts[ci] : counts[ci] - 1));
                 int32_t beforeOne = MCGameplayPackets_count(one),
                         beforeTwo = MCGameplayPackets_count(two);
-                CHECK(mc_server_graph_kill_item(e) && e->isDead);
+                CHECK(mc_server_graph_kill_item(e) && e->entity.isDead);
                 CHECK(MCGameplayPackets_count(one) == beforeOne + 1 &&
                       MCGameplayPackets_count(two) == beforeTwo + 1);
                 CHECK(mc_server_graph_kill_item(e) &&
@@ -446,8 +446,8 @@ static void native_eye_height_and_drop_position(void) {
         MCGameplayObjects *owners = MCGameplay_get(&tx.working);
         CHECK(owners && owners->itemCount == 1);
         EntityItem *e = (EntityItem *)owners->items[0];
-        CHECK(double_bits(e->posY) == dropYBits[state]);
-        CHECK(e->posX == 1.25 && e->posZ == -9.75);
+        CHECK(double_bits(e->entity.posY) == dropYBits[state]);
+        CHECK(e->entity.posX == 1.25 && e->entity.posZ == -9.75);
         CHECK(EntityItem_getEntityItem(e) == input && e->delayBeforeCanPickup == 40 &&
               e->thrower == p->name && !InventoryPlayer_getCurrentItem(p->inventory));
         CHECK(MCGameplayPackets_validate(p));

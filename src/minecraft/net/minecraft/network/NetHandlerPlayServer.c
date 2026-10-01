@@ -303,7 +303,7 @@ bool NetHandlerPlayServer_processCreativeInventoryAction(NetHandlerPlayServer *h
         return end(handler, &scope, scheduled == MC_PACKET_THREAD_QUEUED);
     MCObjectHeap *heap = handler->object.heap;
     MCGameplayPlayer *player = handler->playerEntity;
-    if (player->creative) {
+    if (MCGameplayPlayer_isCreativeMode((MCObject *)player)) {
         bool flag = C10PacketCreativeInventoryAction_getSlotId(packet) < 0;
         ItemStack *stack = C10PacketCreativeInventoryAction_getStack(packet);
         if (!same_heap(heap, (MCObject *)stack) || !creative_tile_tag(handler, stack))
@@ -331,6 +331,25 @@ bool NetHandlerPlayServer_processCreativeInventoryAction(NetHandlerPlayServer *h
     }
     return end(handler, &scope, true);
 }
+bool NetHandlerPlayServer_processPlayerAbilities(NetHandlerPlayServer *h,C13PacketPlayerAbilities *packet) {
+    MCObjectRootScope scope={0};MCPacketThreadResult scheduled=begin(h,(MCObject *)packet,&scope);
+    if (scheduled!=MC_PACKET_THREAD_EXECUTE) return end(h,&scope,scheduled==MC_PACKET_THREAD_QUEUED);
+    MCGameplayPlayer *player=h->playerEntity;
+    bool ok=MCGameplayPlayer_isInstance((MCObject *)player) && same_heap(h->object.heap,(MCObject *)player) && MCObjectRootScope_pin(&scope,(MCObject *)player);
+    PlayerCapabilities *target=ok?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+    ok=target && C13PacketPlayerAbilities_isInstance((MCObject *)packet);
+    bool flying=ok && C13PacketPlayerAbilities_isFlying(packet);
+    if (flying) {
+        player=h->playerEntity;
+        PlayerCapabilities *current=MCGameplayPlayer_isInstance((MCObject *)player) && same_heap(h->object.heap,(MCObject *)player)?MCGameplayPlayer_capabilities((MCObject *)player):NULL;
+        if (current) flying=current->allowFlying;else ok=false;
+    }
+    if (ok) {target->isFlying=flying;MCObjectHeap_touch(h->object.heap);}
+    return end(h,&scope,ok);
+}
+static bool abilities_dispatch(MCObject *h,C13PacketPlayerAbilities *p) {
+    return NetHandlerPlayServer_processPlayerAbilities((NetHandlerPlayServer *)h,p);
+}
 static bool close_dispatch(MCObject *h, C0DPacketCloseWindow *p) {
     return NetHandlerPlayServer_processCloseWindow((NetHandlerPlayServer *)h, p);
 }
@@ -348,6 +367,7 @@ INetHandlerPlayServer NetHandlerPlayServer_asHandler(NetHandlerPlayServer *handl
         .processCloseWindow=close_dispatch,
         .processClickWindow=click_dispatch,
         .processConfirmTransaction=confirm_dispatch,
-        .processCreativeInventoryAction=creative_dispatch};
+        .processCreativeInventoryAction=creative_dispatch,
+        .processPlayerAbilities=abilities_dispatch};
     return (INetHandlerPlayServer){(MCObject *)handler, &methods};
 }

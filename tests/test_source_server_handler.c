@@ -349,7 +349,7 @@ static void creative_and_tile(void) {
     CHECK(packet);
     CHECK(NetHandlerPlayServer_processCreativeInventoryAction(f.handler, packet));
     CHECK(strcmp(e->calls, "T") == 0 && InventoryPlayer_getStackInSlot(p->inventory, 0) == NULL);
-    p->creative = true;
+    p->capabilities->isCreativeMode = true;
     reset(e);
     CHECK(NetHandlerPlayServer_processCreativeInventoryAction(f.handler, packet));
     CHECK(strcmp(e->calls, "T") == 0 &&
@@ -453,7 +453,7 @@ static void routed_wire_snapshots(void) {
             init(&f);
             ItemStack *original = stack(&f, 1, 5);
             CHECK(InventoryPlayer_setInventorySlotContents(f.player->inventory, 0, original));
-            f.player->creative = true;
+            f.player->capabilities->isCreativeMode = true;
             if (!op)
                 CHECK(InventoryPlayer_setItemStack(f.player->inventory, original));
             mc_buf payload = {0};

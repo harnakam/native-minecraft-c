@@ -103,17 +103,17 @@ static void constructor_results_and_graph_lifetime(void) {
     EntityItem *entity=EntityItem_new_position(game.heap,(MCObject *)world,(MCObject *)world,
         mc_server_graph_item_dependencies(),mc_server_graph_item_constructors(),1,2,3);
     CHECK(entity&&MCGameplay_addItem(&game,(MCObject *)entity));
-    CHECK(clock.calls==5&&entity->rand!=player->rand&&entity->rand!=world->rand);
-    CHECK(entity->rand->state.seed48==UINT64_C(0x0af0437030ad));
-    CHECK(long_bits(entity->entityUniqueID->mostSignificantBits)==UINT64_C(0x0c72b1e46af14a72));
-    CHECK(long_bits(entity->entityUniqueID->leastSignificantBits)==UINT64_C(0xaccc15550af04370));
-    CHECK(float_bits(entity->hoverStart)==UINT32_C(0x3ec2e24b)&&float_bits(entity->rotationYaw)==UINT32_C(0x41eb8bd0));
-    CHECK(double_bits(entity->motionX)==UINT64_C(0xbfb0a2dc80000000)&&double_bits(entity->motionZ)==UINT64_C(0xbfb3446000000000));
-    CHECK(entity->posX==1&&entity->posY==2&&entity->posZ==3&&entity->dataWatcher&&entity->health==5);
+    CHECK(clock.calls==5&&entity->entity.rand!=player->rand&&entity->entity.rand!=world->rand);
+    CHECK(entity->entity.rand->state.seed48==UINT64_C(0x0af0437030ad));
+    CHECK(long_bits(entity->entity.entityUniqueID->mostSignificantBits)==UINT64_C(0x0c72b1e46af14a72));
+    CHECK(long_bits(entity->entity.entityUniqueID->leastSignificantBits)==UINT64_C(0xaccc15550af04370));
+    CHECK(float_bits(entity->hoverStart)==UINT32_C(0x3ec2e24b)&&float_bits(entity->entity.rotationYaw)==UINT32_C(0x41eb8bd0));
+    CHECK(double_bits(entity->entity.motionX)==UINT64_C(0xbfb0a2dc80000000)&&double_bits(entity->entity.motionZ)==UINT64_C(0xbfb3446000000000));
+    CHECK(entity->entity.posX==1&&entity->entity.posY==2&&entity->entity.posZ==3&&entity->entity.dataWatcher&&entity->health==5);
     CHECK(world->rand->state.seed48==UINT64_C(0x7df268edb03f));
     /* Deliberate Java-reference aliases across owners must remain aliases,
        while the external process service is never cloned or rolled back. */
-    player->rand=entity->rand;player->gameProfileUUID=entity->entityUniqueID;
+    player->rand=entity->entity.rand;player->gameProfileUUID=entity->entity.entityUniqueID;
     player->entityUniqueID=player->gameProfileUUID;MCObjectHeap_touch(game.heap);
     uint64_t parentSeed=player->rand->state.seed48;
     MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));
@@ -122,7 +122,7 @@ static void constructor_results_and_graph_lifetime(void) {
     MCGameplayPlayer *cp=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
     EntityItem *ce=(EntityItem *)MCGameplay_get(&tx.working)->items[0];
     CHECK(copy->randomRuntime==service&&copy->rand!=world->rand);
-    CHECK(cp->rand==ce->rand&&cp->rand!=player->rand&&cp->entityUniqueID==ce->entityUniqueID&&cp->gameProfileUUID==cp->entityUniqueID);
+    CHECK(cp->rand==ce->entity.rand&&cp->rand!=player->rand&&cp->entityUniqueID==ce->entity.entityUniqueID&&cp->gameProfileUUID==cp->entityUniqueID);
     float f;CHECK(NativeJavaRandom_nextFloat(cp->rand,&f));CHECK(player->rand->state.seed48==parentSeed);
     double value;CHECK(NativeJavaRandomRuntime_mathRandom(copy->randomRuntime,&value));CHECK(double_bits(value)==UINT64_C(0x3fe9f5e320818288));
     MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx));
@@ -133,8 +133,8 @@ static void constructor_results_and_graph_lifetime(void) {
     uint64_t adoptedSeed=cp->rand->state.seed48;MCObjectRootScope_end(&scope);char error[160];
     CHECK(MCGameplay_acceptClientFrame(&tx,accept_fixture,NULL,error,sizeof error));CHECK(MCObjectHeap_collect(game.heap));
     player=(MCGameplayPlayer *)MCGameplay_get(&game)->players[0];entity=(EntityItem *)MCGameplay_get(&game)->items[0];
-    CHECK(player->rand==entity->rand&&player->rand->state.seed48==adoptedSeed);
-    CHECK(player->entityUniqueID==player->gameProfileUUID&&player->entityUniqueID==entity->entityUniqueID);
+    CHECK(player->rand==entity->entity.rand&&player->rand->state.seed48==adoptedSeed);
+    CHECK(player->entityUniqueID==player->gameProfileUUID&&player->entityUniqueID==entity->entity.entityUniqueID);
     CHECK(player->worldObj->randomRuntime==service&&clock.calls==5);
     CHECK(MCGameplay_free(&game));CHECK(NativeJavaRandomRuntime_free(service));
 }
@@ -155,7 +155,7 @@ static void actual_server_drop_and_client_spawn(void) {
     CHECK(mc_server_graph_drop(player,false));CHECK(world->rand->state.seed48==before);
     CHECK(player->rand->state.seed48==UINT64_C(0xeac807783498)&&clock.calls==3);
     MCGameplayObjects *owners=MCGameplay_get(&tx.working);CHECK(owners->itemCount==1);
-    EntityItem *entity=(EntityItem *)owners->items[0];CHECK(entity->rand!=world->rand&&entity->rand!=player->rand&&entity->entityUniqueID);
+    EntityItem *entity=(EntityItem *)owners->items[0];CHECK(entity->entity.rand!=world->rand&&entity->entity.rand!=player->rand&&entity->entity.entityUniqueID);
     CHECK(EntityItem_getEntityItem(entity)->stackSize==1&&stack->stackSize==1);
     uint64_t playerBefore=player->rand->state.seed48;
     float value=mc_server_graph_item_dependencies()->nextFloat((MCObject *)world,entity);
@@ -166,26 +166,26 @@ static void actual_server_drop_and_client_spawn(void) {
     player=mc_client_graph_player(&game);CHECK(player->gameProfileUUID&&player->entityUniqueID==player->gameProfileUUID);
     before=world->rand->state.seed48;playerBefore=player->rand->state.seed48;
     CHECK(mc_client_graph_spawn_item(&game,123,8,20,8,0.1,0.2,0.3));entity=mc_client_graph_item(&game,123);
-    CHECK(entity&&entity->rand&&entity->entityUniqueID&&clock.calls==2);
-    CHECK(entity->hoverStart>=0&&entity->hoverStart<6.283186f&&entity->motionX==0.1&&entity->motionY==0.2&&entity->motionZ==0.3);
-    CHECK(entity->entityId==123&&DataWatcher_getWatchableObjectItemStack(entity->dataWatcher,10)==NULL);
+    CHECK(entity&&entity->entity.rand&&entity->entity.entityUniqueID&&clock.calls==2);
+    CHECK(entity->hoverStart>=0&&entity->hoverStart<6.283186f&&entity->entity.motionX==0.1&&entity->entity.motionY==0.2&&entity->entity.motionZ==0.3);
+    CHECK(entity->entity.entityId==123&&DataWatcher_getWatchableObjectItemStack(entity->entity.dataWatcher,10)==NULL);
     CHECK(world->rand->state.seed48==before&&player->rand->state.seed48==playerBefore);
     CHECK(mc_client_graph_spawn_item_packet(&game,124,8,20,8,-128,-1,0,9,10,11));
     entity=mc_client_graph_item(&game,124);CHECK(entity&&clock.calls==3);
-    CHECK(float_bits(entity->rotationPitch)==UINT32_C(0xc3340000)&&float_bits(entity->rotationYaw)==UINT32_C(0xbfb40000));
-    CHECK(entity->motionX>=-0.10000001&&entity->motionX<0.10000001&&entity->motionZ>=-0.10000001&&entity->motionZ<0.10000001);
-    CHECK(entity->motionY==0.20000000298023224&&entity->motionX!=9&&entity->motionZ!=11);
+    CHECK(float_bits(entity->entity.rotationPitch)==UINT32_C(0xc3340000)&&float_bits(entity->entity.rotationYaw)==UINT32_C(0xbfb40000));
+    CHECK(entity->entity.motionX>=-0.10000001&&entity->entity.motionX<0.10000001&&entity->entity.motionZ>=-0.10000001&&entity->entity.motionZ<0.10000001);
+    CHECK(entity->entity.motionY==0.20000000298023224&&entity->entity.motionX!=9&&entity->entity.motionZ!=11);
     CHECK(mc_client_graph_spawn_item_packet(&game,125,8,20,8,127,INT32_MIN,-1,9,10,11));
     entity=mc_client_graph_item(&game,125);CHECK(entity&&clock.calls==4);
-    CHECK(float_bits(entity->rotationPitch)==UINT32_C(0x43329800)&&entity->rotationYaw==0);
-    CHECK(entity->motionY==0.20000000298023224&&entity->motionX!=9&&entity->motionZ!=11);
+    CHECK(float_bits(entity->entity.rotationPitch)==UINT32_C(0x43329800)&&entity->entity.rotationYaw==0);
+    CHECK(entity->entity.motionY==0.20000000298023224&&entity->entity.motionX!=9&&entity->entity.motionZ!=11);
     CHECK(mc_client_graph_spawn_item_packet(&game,126,8,20,8,-1,127,1,0.4,-0.5,0.6));
     entity=mc_client_graph_item(&game,126);CHECK(entity&&clock.calls==5);
-    CHECK(float_bits(entity->rotationPitch)==UINT32_C(0xbfb40000)&&float_bits(entity->rotationYaw)==UINT32_C(0x43329800));
-    CHECK(entity->motionX==0.4&&entity->motionY==-0.5&&entity->motionZ==0.6);
+    CHECK(float_bits(entity->entity.rotationPitch)==UINT32_C(0xbfb40000)&&float_bits(entity->entity.rotationYaw)==UINT32_C(0x43329800));
+    CHECK(entity->entity.motionX==0.4&&entity->entity.motionY==-0.5&&entity->entity.motionZ==0.6);
     CHECK(world->rand->state.seed48==before&&player->rand->state.seed48==playerBefore);
     MCObjectRootScope_end(&scope);CHECK(MCObjectHeap_collect(game.heap));
-    CHECK(mc_client_graph_item(&game,123)->rand&&mc_client_graph_item(&game,123)->entityUniqueID);
+    CHECK(mc_client_graph_item(&game,123)->entity.rand&&mc_client_graph_item(&game,123)->entity.entityUniqueID);
     CHECK(MCGameplay_free(&game));CHECK(NativeJavaRandomRuntime_free(service));mc_world_free(&terrain);
 }
 static void source_pickup_silent_byte(void) {
@@ -201,17 +201,17 @@ static void source_pickup_silent_byte(void) {
         ItemStack *stack=ItemStack_new(tx.working.heap,ItemStack_registryItem(1),1,0);
         EntityItem *entity=EntityItem_new_stack(tx.working.heap,(MCObject *)world,(MCObject *)world,
             mc_server_graph_item_dependencies(),mc_server_graph_item_constructors(),8,20,8,stack);
-        CHECK(entity&&NativeJavaRandom_setSeed(entity->rand,12345));
-        CHECK(DataWatcher_updateObject(entity->dataWatcher,4,DataWatcher_boxByte(tx.working.heap,values[i])));
+        CHECK(entity&&NativeJavaRandom_setSeed(entity->entity.rand,12345));
+        CHECK(DataWatcher_updateObject(entity->entity.dataWatcher,4,DataWatcher_boxByte(tx.working.heap,values[i])));
         int32_t before=MCGameplayPackets_count(player);
         uint64_t worldState=world->rand->state.seed48,playerState=player->rand->state.seed48;
         CHECK(EntityItem_onCollideWithPlayer(entity,(MCObject *)player));
-        CHECK(stack->stackSize==0&&entity->isDead&&player->inventory->mainInventory->items[0]->stackSize==1);
+        CHECK(stack->stackSize==0&&entity->entity.isDead&&player->inventory->mainInventory->items[0]->stackSize==1);
         CHECK(world->rand->state.seed48==worldState&&player->rand->state.seed48==playerState);
         bool isSilent=values[i]==1;
         /* Actual java.util.Random(12345): seed after zero or two nextFloat
            calls. Only watcher byte exactly one suppresses the pop sound. */
-        CHECK(entity->rand->state.seed48==(isSilent?UINT64_C(0x5deecd654):UINT64_C(0x8361b331172e)));
+        CHECK(entity->entity.rand->state.seed48==(isSilent?UINT64_C(0x5deecd654):UINT64_C(0x8361b331172e)));
         CHECK(MCGameplayPackets_count(player)==before+(isSilent?2:3));
         for(int32_t n=0;n<(isSilent?2:3);n++) {
             MCGameplayPacketKind kind;
@@ -232,14 +232,14 @@ static void source_pickup_silent_byte(void) {
     MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,game.heap));
     CHECK(mc_client_graph_spawn_item(&game,42,8,20,8,0,0,0));
     EntityItem *entity=mc_client_graph_item(&game,42);MCGameplayPlayer *player=mc_client_graph_player(&game);
-    uint64_t before=entity->rand->state.seed48;
+    uint64_t before=entity->entity.rand->state.seed48;
     for(size_t i=0;i<sizeof values/sizeof *values;i++) {
-        CHECK(DataWatcher_updateObject(entity->dataWatcher,4,DataWatcher_boxByte(game.heap,values[i])));
+        CHECK(DataWatcher_updateObject(entity->entity.dataWatcher,4,DataWatcher_boxByte(game.heap,values[i])));
         CHECK(entity->dependencies->isSilent(entity->dependencyContext,entity)==(values[i]==1));
         /* The actual Source remote branch returns before stack/audio/pickup
            dependencies; do not manufacture successful local pickup effects. */
         CHECK(EntityItem_onCollideWithPlayer(entity,(MCObject *)player));
-        CHECK(!entity->isDead&&entity->rand->state.seed48==before&&player->inventory->mainInventory->items[0]==NULL);
+        CHECK(!entity->entity.isDead&&entity->entity.rand->state.seed48==before&&player->inventory->mainInventory->items[0]==NULL);
     }
     MCObjectRootScope_end(&scope);CHECK(MCGameplay_free(&game));mc_world_free(&terrain);
 }

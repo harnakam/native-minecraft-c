@@ -334,9 +334,9 @@ static bool player_path(const mc_server *server, const server_peer *peer, char *
     return true;
 }
 static bool item_visible(const server_peer *peer, const EntityItem *item) {
-    if (fabs(item->posX - peer->x) > 64 || fabs(item->posZ - peer->z) > 64)
+    if (fabs(item->entity.posX - peer->x) > 64 || fabs(item->entity.posZ - peer->z) > 64)
         return false;
-    int cx = mc_floor_div16((int)floor(item->posX)), cz = mc_floor_div16((int)floor(item->posZ));
+    int cx = mc_floor_div16((int)floor(item->entity.posX)), cz = mc_floor_div16((int)floor(item->entity.posZ));
     if (cx < -3 || cx > 3 || cz < -3 || cz > 3)
         return false;
     return (peer->chunks_sent & (UINT64_C(1) << ((cz + 3) * 7 + cx + 3))) != 0;
@@ -360,7 +360,7 @@ static void sync_items(mc_server *server, server_peer *peer) {
     size_t count = 0;
     for (size_t i = 0; i < o->itemCount && ok; i++) {
         EntityItem *e = (EntityItem *)o->items[i];
-        if (!e->isDead && item_visible(peer, e) && !item_tracked(peer, e->entityId) &&
+        if (!e->entity.isDead && item_visible(peer, e) && !item_tracked(peer, e->entity.entityId) &&
             peer->tracked_item_count + count < MC_GAMEPLAY_MAX_ITEMS) {
             ok =
                 mc_server_graph_send_item(mc_server_graph_player(&tx.working, peer->ownerIndex), e);
@@ -495,11 +495,10 @@ static void join_game(mc_server *server, server_peer *peer) {
     }
     MCObjectRootScope scope = {0};
     bool ok = MCObjectRootScope_begin(&scope, tx.working.heap);
-    MCGameplayWorld *w = mc_server_graph_world(&tx.working);
-    int32_t id = ok ? mc_server_graph_allocate_entity(w) : 0;
-    ok = id && mc_server_graph_add_player(&tx.working, peer->ownerIndex, uuid, peer->name, id,
-                                          peer->x, peer->y, peer->z, peer->gamemode == 1);
-    MCGameplayPlayer *p = ok ? mc_server_graph_player(&tx.working, peer->ownerIndex) : NULL;
+    ok = ok && mc_server_graph_add_player_auto(&tx.working,peer->ownerIndex,uuid,peer->name,
+        peer->x,peer->y,peer->z,peer->gamemode==1);
+    MCGameplayPlayer *p=ok?mc_server_graph_player(&tx.working,peer->ownerIndex):NULL;
+    int32_t id=p?p->entityId:0;
     char directory[4096], path[4096], error[256] = "Could not load source player";
     struct stat info;
     mc_nbt input = {0};
@@ -520,6 +519,10 @@ static void join_game(mc_server *server, server_peer *peer) {
     mc_nbt_free(&input);
     if (ok && p->openContainer != &p->inventoryContainer->container)
         ok = mc_server_graph_close(p, false);
+    if (ok) {
+        S39PacketPlayerAbilities *abilities=S39PacketPlayerAbilities_new(tx.working.heap,p->capabilities);
+        ok=abilities && MCGameplayPackets_sendAbilities(p,abilities);
+    }
     if (ok)
         ok = Container_onCraftGuiOpened(&p->inventoryContainer->container,
                                         EntityPlayerMPWindows_listener(p));
@@ -548,11 +551,6 @@ static void join_game(mc_server *server, server_peer *peer) {
     mc_put_u8(&packet, (uint8_t)server->max_players);
     mc_put_string(&packet, "flat");
     mc_put_u8(&packet, 0);
-    queue_packet(peer, &packet);
-    packet_start(&packet, 0x39);
-    mc_put_u8(&packet, peer->gamemode == 1 ? 0x0f : 0);
-    mc_put_f32(&packet, 0.05f);
-    mc_put_f32(&packet, 0.1f);
     queue_packet(peer, &packet);
     packet_start(&packet, 5);
     mc_put_position(&packet, (int)floor(peer->x), (int)peer->y, (int)floor(peer->z));
@@ -973,7 +971,7 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
             MCGameplay_abort(&tx);
         return;
     }
-    if (id == 0x10 || id == 0x0d || id == 0x0e || id == 0x0f) {
+    if (id == 0x10 || id == 0x0d || id == 0x0e || id == 0x0f || id == 0x13) {
         if (!table_usable(server, peer))
             invalidate_workbench(server, peer);
         if (apply_source_packet(server, peer, id, packet))
@@ -1008,14 +1006,6 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
                 MCObjectRootScope_end(&scope);
             }
         }
-        return;
-    }
-    if (id == 0x13) {
-        int flags = mc_get_u8(packet);
-        float fly = mc_get_f32(packet), walk = mc_get_f32(packet);
-        if (!complete(packet) || flags > 15 || !isfinite(fly) || !isfinite(walk) || fly < 0 ||
-            walk < 0)
-            disconnect_peer(peer, "Invalid abilities packet.");
         return;
     }
     if (id == 0x15) {
@@ -1291,46 +1281,46 @@ static void tick_items(mc_server *server, uint64_t now) {
         }
         for (size_t i = 0; i < o->itemCount && ok; i++) {
             EntityItem *e = (EntityItem *)o->items[i];
-            if (e->isDead)
+            if (e->entity.isDead)
                 continue;
             if (!NativeItemMotion_validate(e)) {
                 ok = false;
                 break;
             }
-            if (!mc_world_chunk(&server->world, mc_floor_div16((int)floor(e->posX)),
-                                mc_floor_div16((int)floor(e->posZ)), false))
+            if (!mc_world_chunk(&server->world, mc_floor_div16((int)floor(e->entity.posX)),
+                                mc_floor_div16((int)floor(e->entity.posZ)), false))
                 continue;
-            double x = e->posX, y = e->posY, z = e->posZ;
+            double x = e->entity.posX, y = e->entity.posY, z = e->entity.posZ;
             if (!NativeItemMotion_tick(e, &server->world)) {
-                ok = !MCObjectHeap_failed(e->object.heap) && mc_server_graph_kill_item(e);
+                ok = !MCObjectHeap_failed(e->entity.object.heap) && mc_server_graph_kill_item(e);
                 continue;
             }
-            if (floor(x * 32) != floor(e->posX * 32) || floor(y * 32) != floor(e->posY * 32) ||
-                floor(z * 32) != floor(e->posZ * 32) || e->ticksExisted % 60 == 0)
+            if (floor(x * 32) != floor(e->entity.posX * 32) || floor(y * 32) != floor(e->entity.posY * 32) ||
+                floor(z * 32) != floor(e->entity.posZ * 32) || e->entity.ticksExisted % 60 == 0)
                 ok = mc_server_graph_send_motion(e);
-            for (size_t n = 0; n < MC_TRANSFER_MAX_PLAYERS && ok && !e->isDead; n++) {
+            for (size_t n = 0; n < MC_TRANSFER_MAX_PLAYERS && ok && !e->entity.isDead; n++) {
                 MCGameplayPlayer *p = (MCGameplayPlayer *)o->players[n];
                 if (!p || p->isDead)
                     continue;
-                if (e->posX + e->width * 0.5 > p->posX - 1.3 &&
-                    e->posX - e->width * 0.5 < p->posX + 1.3 &&
-                    e->posZ + e->width * 0.5 > p->posZ - 1.3 &&
-                    e->posZ - e->width * 0.5 < p->posZ + 1.3 &&
-                    e->posY + e->height > p->posY - 0.5 && e->posY < p->posY + 2.3)
+                if (e->entity.posX + e->entity.width * 0.5 > p->posX - 1.3 &&
+                    e->entity.posX - e->entity.width * 0.5 < p->posX + 1.3 &&
+                    e->entity.posZ + e->entity.width * 0.5 > p->posZ - 1.3 &&
+                    e->entity.posZ - e->entity.width * 0.5 < p->posZ + 1.3 &&
+                    e->entity.posY + e->entity.height > p->posY - 0.5 && e->entity.posY < p->posY + 2.3)
                     ok = EntityItem_onCollideWithPlayer(e, (MCObject *)p);
             }
         }
         for (size_t a = 0; a < o->itemCount && ok; a++) {
             EntityItem *first = (EntityItem *)o->items[a];
-            if (first->isDead || first->ticksExisted % 25)
+            if (first->entity.isDead || first->entity.ticksExisted % 25)
                 continue;
             for (size_t b = a + 1; b < o->itemCount && ok; b++) {
                 EntityItem *other = (EntityItem *)o->items[b];
-                if (other->isDead)
+                if (other->entity.isDead)
                     continue;
-                if (fabs(first->posX - other->posX) <= 0.75 &&
-                    fabs(first->posY - other->posY) <= 0.25 &&
-                    fabs(first->posZ - other->posZ) <= 0.75) {
+                if (fabs(first->entity.posX - other->entity.posX) <= 0.75 &&
+                    fabs(first->entity.posY - other->entity.posY) <= 0.25 &&
+                    fabs(first->entity.posZ - other->entity.posZ) <= 0.75) {
                     EntityItem_combineItems(first, other);
                     ok = !MCObjectHeap_failed(tx.working.heap);
                 }
@@ -1338,10 +1328,10 @@ static void tick_items(mc_server *server, uint64_t now) {
         }
         for (size_t i = 0; i < o->itemCount && ok; i++) {
             EntityItem *e = (EntityItem *)o->items[i];
-            if (e->isDead || !DataWatcher_hasObjectChanged(e->dataWatcher))
+            if (e->entity.isDead || !DataWatcher_hasObjectChanged(e->entity.dataWatcher))
                 continue;
             S1CPacketEntityMetadata *packet =
-                S1CPacketEntityMetadata_new(e->object.heap, e->entityId, e->dataWatcher, false);
+                S1CPacketEntityMetadata_new(e->entity.object.heap, e->entity.entityId, e->entity.dataWatcher, false);
             ok = packet != NULL;
             for (size_t n = 0; n < MC_TRANSFER_MAX_PLAYERS && ok; n++) {
                 MCGameplayPlayer *p = (MCGameplayPlayer *)o->players[n];
@@ -1472,7 +1462,7 @@ int mc_server_main(int argc, char **argv) {
         if (!stat(file, &snapshotInfo)) {
             loaded = mc_nbt_load_gzip(&data, file, error, sizeof error);
             if (loaded)
-                loaded = i == 0 ? MCGameplayStorage_loadItems(initialWorld, &data,
+                loaded = i == 0 ? MCGameplayStorage_loadItemsWithSourceIDs(initialWorld, &data,
                                                               (MCObject *)initialWorld,
                                                               mc_server_graph_item_dependencies(),
                                                               mc_server_graph_item_constructors())

@@ -743,8 +743,8 @@ static void draw_items(mc_renderer *r,const mc_client *c) {
         const mc_client_item *entry=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,entry->eid);
         if (!entry->active || !entry->metadata_ready || !e) continue;
         ItemStack *stack=EntityItem_getEntityItem(e); if (!stack) continue;
-        double dx=e->posX-c->x,dz=e->posZ-c->z; if (dx*dx+dz*dz>96*96) continue;
-        glPushMatrix(); glTranslated(e->posX,e->posY+0.16+sin(time*2+e->entityId)*0.025,e->posZ); glRotated(time*55+(double)e->entityId*13,0,1,0);
+        double dx=e->entity.posX-c->x,dz=e->entity.posZ-c->z; if (dx*dx+dz*dz>96*96) continue;
+        glPushMatrix(); glTranslated(e->entity.posX,e->entity.posY+0.16+sin(time*2+e->entity.entityId)*0.025,e->entity.posZ); glRotated(time*55+(double)e->entity.entityId*13,0,1,0);
         uint16_t state; unsigned count=stack->stackSize>48 ? 5 : stack->stackSize>32 ? 4 : stack->stackSize>16 ? 3 : stack->stackSize>1 ? 2 : 1;
         if (mc_item_block_state(ItemStack_registryId(stack->item),stack->itemDamage,&state)) {
             float red,green,blue; material_color(state>>4,1,0,&red,&green,&blue);
@@ -757,7 +757,7 @@ static void draw_items(mc_renderer *r,const mc_client *c) {
         if (stack->stackTagCompound) box(-0.025,0.10,-0.025,0.025,0.16,0.025,0.95f,0.73f,0.30f);
         glPopMatrix();
         if (dx*dx+dz*dz<12*12) {
-            const char *name=mc_item_name(ItemStack_registryId(stack->item)); glColor3f(0.97f,0.98f,0.91f); glRasterPos3d(e->posX-0.15,e->posY+0.5,e->posZ);
+            const char *name=mc_item_name(ItemStack_registryId(stack->item)); glColor3f(0.97f,0.98f,0.91f); glRasterPos3d(e->entity.posX-0.15,e->entity.posY+0.5,e->entity.posZ);
             for (unsigned n=0;n<12 && name[n];n++) { glyph_cache *glyph=get_glyph(r,(WCHAR)(unsigned char)name[n]); if (glyph) glCallList(glyph->list); }
         }
     }

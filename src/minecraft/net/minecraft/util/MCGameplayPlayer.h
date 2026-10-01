@@ -4,6 +4,7 @@
 #include "inventory/ContainerPlayer.h"
 #include "nbt/NBTTagCompound.h"
 #include "util/NativeJavaUUID.h"
+#include "entity/player/PlayerCapabilities.h"
 
 typedef struct StatFileWriter StatFileWriter;
 typedef struct EntityPlayerMPWindowsDependencies EntityPlayerMPWindowsDependencies;
@@ -31,13 +32,14 @@ typedef struct MCGameplayPlayer {
     double posX,posY,posZ;
     float rotationYaw,rotationPitch;
     int32_t entityId;
-    bool creative,spectator,silent,isChangingQuantityOnly;
+    bool spectator,silent,isChangingQuantityOnly;
     /* Native inherited Entity state, shared by the translated map dependencies. */
     bool isDead;
     bool sleeping,sneaking;
     int32_t dimension;
     MCObject *handler,*effects,*pendingPackets;
     const EntityPlayerMPWindowsDependencies *windowDependencies;
+    PlayerCapabilities *capabilities;
 } MCGameplayPlayer;
 /* Native actor allocation invokes the actual InventoryPlayer/ContainerPlayer
    constructors under a RootScope. Callbacks must be immutable and outlive the
@@ -47,6 +49,7 @@ MCGameplayPlayer *MCGameplayPlayer_new(MCGameplayWorld *,NBTString *,StatFileWri
 bool MCGameplayPlayer_isInstance(const MCObject *);
 InventoryPlayer *MCGameplayPlayer_inventory(MCObject *);
 MCObject *MCGameplayPlayer_world(MCObject *);
+PlayerCapabilities *MCGameplayPlayer_capabilities(const MCObject *);
 bool MCGameplayPlayer_isCreativeMode(const MCObject *);
 double MCGameplayPlayer_getDistanceSq(const MCObject *,double x,double y,double z);
 #endif

@@ -10,6 +10,7 @@ CODEC(C0DPacketCloseWindow)
 CODEC(C0EPacketClickWindow)
 CODEC(C0FPacketConfirmTransaction)
 CODEC(C10PacketCreativeInventoryAction)
+CODEC(C13PacketPlayerAbilities)
 #undef CODEC
 static const MCPacketCodec codecs[] = {
     {0x07, C07PacketPlayerDigging_isInstance, write_C07PacketPlayerDigging},
@@ -18,7 +19,8 @@ static const MCPacketCodec codecs[] = {
     {0x0d, C0DPacketCloseWindow_isInstance, write_C0DPacketCloseWindow},
     {0x0e, C0EPacketClickWindow_isInstance, write_C0EPacketClickWindow},
     {0x0f, C0FPacketConfirmTransaction_isInstance, write_C0FPacketConfirmTransaction},
-    {0x10, C10PacketCreativeInventoryAction_isInstance, write_C10PacketCreativeInventoryAction}};
+    {0x10, C10PacketCreativeInventoryAction_isInstance, write_C10PacketCreativeInventoryAction},
+    {0x13,C13PacketPlayerAbilities_isInstance,write_C13PacketPlayerAbilities}};
 static const MCPacketQueueProfile profile = {codecs, sizeof codecs / sizeof *codecs, false};
 static MCObject *packets(const MCGameplayPlayer *p) {
     if (!p)

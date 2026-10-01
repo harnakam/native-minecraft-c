@@ -119,13 +119,13 @@ static bool vector_write(NBTTagCompound *root,const char *name,double x,double y
     return NBTTagCompound_setTag_ascii(root,name,(NBTBase *)list);
 }
 static bool entity_write(EntityItem *e,NBTTagList *list) {
-    MCObjectHeap *heap=e->object.heap;NBTTagCompound *root=copy_fields(heap,e->savedFields);
-    if (!NativeItemMotion_positionSupported(e->posX,e->posY,e->posZ))return fail(heap);
+    MCObjectHeap *heap=e->entity.object.heap;NBTTagCompound *root=copy_fields(heap,e->savedFields);
+    if (!NativeItemMotion_positionSupported(e->entity.posX,e->entity.posY,e->entity.posZ))return fail(heap);
     if (!root||!NBTTagCompound_setString_ascii(root,"id",NBTString_literalASCII(heap,"Item"))||
-        !NBTTagCompound_setInteger_ascii(root,"C919EntityId",e->entityId)||
-        !vector_write(root,"Pos",e->posX,e->posY,e->posZ)||
-        !vector_write(root,"Motion",e->motionX,e->motionY,e->motionZ)||
-        !NBTTagCompound_setBoolean_ascii(root,"OnGround",e->onGround)||
+        !NBTTagCompound_setInteger_ascii(root,"C919EntityId",e->entity.entityId)||
+        !vector_write(root,"Pos",e->entity.posX,e->entity.posY,e->entity.posZ)||
+        !vector_write(root,"Motion",e->entity.motionX,e->entity.motionY,e->entity.motionZ)||
+        !NBTTagCompound_setBoolean_ascii(root,"OnGround",e->entity.onGround)||
         !Entity_writeUUIDToNBTSegment((MCObject *)e,root,EntityUUIDNBT_nativeOwnerDispatch()))return false;
     /* Unknown envelope fields survive, while absent source owner/thrower do
        not resurrect stale values from a previous file. */
@@ -141,9 +141,9 @@ bool MCGameplayStorage_encodeItems(const MCGameplayObjects *objects,mc_nbt *outp
     for(size_t i=0;i<(ok?objects->itemCount:0);i++) {
         MCObject *object=objects->items[i];
         if (!object||!same(heap,object)||!EntityItem_isInstance(object)) {ok=fail(heap);break;}
-        EntityItem *e=(EntityItem *)object;if (e->worldObj!=(MCObject *)w) {ok=fail(heap);break;}
-        if (!e->isDead) {
-            for(size_t j=0;j<i;j++)if (!((EntityItem *)objects->items[j])->isDead&&((EntityItem *)objects->items[j])->entityId==e->entityId) {ok=fail(heap);break;}
+        EntityItem *e=(EntityItem *)object;if (e->entity.worldObj!=(MCObject *)w) {ok=fail(heap);break;}
+        if (!e->entity.isDead) {
+            for(size_t j=0;j<i;j++)if (!((EntityItem *)objects->items[j])->entity.isDead&&((EntityItem *)objects->items[j])->entity.entityId==e->entity.entityId) {ok=fail(heap);break;}
             if (!ok||!entity_write(e,list)) {ok=false;break;}
         }
     }
@@ -220,8 +220,9 @@ static bool vector_read(NBTTagCompound *root,const char *name,double out[3]) {
     for(int32_t i=0;i<3;i++) {out[i]=NBTTagList_getDoubleAt(list,i);if (!isfinite(out[i]))return false;}
     return true;
 }
-bool MCGameplayStorage_loadItems(MCGameplayWorld *w,const mc_nbt *input,MCObject *context,
-    const EntityItemDependencies *d,const EntityItemConstructorDependencies *constructors) {
+static bool load_items(MCGameplayWorld *w,const mc_nbt *input,MCObject *context,
+    const EntityItemDependencies *d,const EntityItemConstructorDependencies *constructors,
+    bool preserveSourceIDs) {
     MCObjectHeap *heap=w?w->object.heap:NULL;MCObjectRootScope scope={0};
     if (!w||!MCGameplayWorld_isInstance((MCObject *)w)||!w->owners||!same(heap,(MCObject *)w->owners)||!same(heap,context))return fail(heap);
     if (!MCObjectRootScope_begin(&scope,heap))return false;
@@ -240,14 +241,15 @@ bool MCGameplayStorage_loadItems(MCGameplayWorld *w,const mc_nbt *input,MCObject
         /* Native restoration of these scalar inherited fields precedes the
            translated UUID segment and the first setPosition, as in Entity.
            Complete rotation/fire/commands/etc. remain separate dependencies. */
-        e->entityId=NBTTagCompound_getInteger_ascii(tag,"C919EntityId");e->posX=pos[0];e->posY=pos[1];e->posZ=pos[2];e->motionX=fabs(motion[0])>10?0:motion[0];e->motionY=fabs(motion[1])>10?0:motion[1];e->motionZ=fabs(motion[2])>10?0:motion[2];e->onGround=NBTTagCompound_getBoolean_ascii(tag,"OnGround");MCObjectHeap_touch(heap);
-        for(size_t j=0;j<count;j++)if (loaded[j]->entityId==e->entityId) {ok=false;break;}
+        if (!preserveSourceIDs)e->entity.entityId=NBTTagCompound_getInteger_ascii(tag,"C919EntityId");
+        e->entity.posX=pos[0];e->entity.posY=pos[1];e->entity.posZ=pos[2];e->entity.motionX=fabs(motion[0])>10?0:motion[0];e->entity.motionY=fabs(motion[1])>10?0:motion[1];e->entity.motionZ=fabs(motion[2])>10?0:motion[2];e->entity.onGround=NBTTagCompound_getBoolean_ascii(tag,"OnGround");MCObjectHeap_touch(heap);
+        for(size_t j=0;j<count;j++)if (loaded[j]->entity.entityId==e->entity.entityId) {ok=false;break;}
         if (!ok||!Entity_readUUIDFromNBTSegment((MCObject *)e,tag,EntityUUIDNBT_nativeOwnerDispatch())||
             !constructors->setPosition(context,e,pos[0],pos[1],pos[2])||MCObjectHeap_failed(heap)||
             EntityItem_readEntityFromNBT(e,tag)!=ITEMSTACK_NBT_OK||
-            !constructors->setPosition(context,e,e->posX,e->posY,e->posZ)||MCObjectHeap_failed(heap)) {ok=false;break;}
+            !constructors->setPosition(context,e,e->entity.posX,e->entity.posY,e->entity.posZ)||MCObjectHeap_failed(heap)) {ok=false;break;}
         e->savedFields=tag;MCObjectHeap_touch(heap);loaded[count++]=e;
-        if (e->entityId>=w->nextEntityId&&w->nextEntityId>0) {w->nextEntityId=e->entityId==INT32_MAX?0:e->entityId+1;MCObjectHeap_touch(heap);}
+        if (!preserveSourceIDs&&e->entity.entityId>=w->nextEntityId&&w->nextEntityId>0) {w->nextEntityId=e->entity.entityId==INT32_MAX?0:e->entity.entityId+1;MCObjectHeap_touch(heap);}
     }
     if (ok) {
         for(size_t i=0;i<MC_GAMEPLAY_MAX_ITEMS;i++)w->owners->items[i]=i<count?(MCObject *)loaded[i]:NULL;
@@ -256,6 +258,14 @@ bool MCGameplayStorage_loadItems(MCGameplayWorld *w,const mc_nbt *input,MCObject
     }
     if (!ok)fail(heap);
     MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(heap);
+}
+bool MCGameplayStorage_loadItems(MCGameplayWorld *w,const mc_nbt *input,MCObject *context,
+    const EntityItemDependencies *d,const EntityItemConstructorDependencies *constructors) {
+    return load_items(w,input,context,d,constructors,false);
+}
+bool MCGameplayStorage_loadItemsWithSourceIDs(MCGameplayWorld *w,const mc_nbt *input,MCObject *context,
+    const EntityItemDependencies *d,const EntityItemConstructorDependencies *constructors) {
+    return load_items(w,input,context,d,constructors,true);
 }
 bool MCGameplayStorage_loadMaps(MCGameplayWorld *w,const mc_nbt *input) {
     MCObjectHeap *heap=w?w->object.heap:NULL;MCObjectRootScope scope={0};

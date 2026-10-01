@@ -33,9 +33,29 @@ static float random_float(MCObject *o,MCGameplayPlayer *p) {Fixture *f=(Fixture 
 static double math_random(MCObject *o) {Fixture *f=(Fixture *)o;if(!enter(f))return 0;++f->mathCalls;uint64_t a=next_bits(&f->mathSeed,26),b=next_bits(&f->mathSeed,27);return (double)((a<<27)+b)/9007199254740992.0;}
 static bool mark(MCObject *o,MCObject *owner,int32_t n) {EntityItem *e=(EntityItem *)owner;Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&n==10);++f->marks;return true;}
 static const DataWatcherDependencies watcherMethods={.onDataWatcherUpdate=mark};
-static bool base(MCObject *o,EntityItem *e,MCObject *w) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e->health==0&&e->hoverStart==0&&EntityItem_getDataWatcher(e)==NULL&&e->worldObj==w);e->entityId=1;e->width=0.6f;e->height=1.8f;f->last=e;if(f->omitWatcher)return true;bool ok=EntityItem_nativeInitializeDataWatcher(e,&watcherMethods,o);CHECK(e->health==0&&e->hoverStart==0&&watched(e)==NULL);return ok;}
-static bool size(MCObject *o,EntityItem *e,float width,float height) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&e->health==5);e->width=width;e->height=height;MCObjectHeap_touch(e->object.heap);return true;}
-static bool position(MCObject *o,EntityItem *e,double x,double y,double z) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&e->width==0.25f&&e->height==0.25f);e->posX=x;e->posY=y;e->posZ=z;MCObjectHeap_touch(e->object.heap);return true;}
+static bool inherited_init(MCObject *o,Entity *e) {
+    Fixture *f=(Fixture *)o;CHECK((EntityItem *)e==f->last&&f->last->health==0&&f->last->hoverStart==0);
+    CHECK(e->rand&&e->entityUniqueID&&e->cmdResultStats&&e->boundingBox&&e->dataWatcher);
+    return EntityItem_entityInit((EntityItem *)e);
+}
+static bool inherited_position(MCObject *o,Entity *e,double x,double y,double z) {(void)o;return Entity_setPosition(e,x,y,z);}
+static bool inherited_bounds(MCObject *o,Entity *e,AxisAlignedBB *box) {(void)o;return Entity_setEntityBoundingBox(e,box);}
+static bool inherited_dimension(MCObject *o,MCObject *w,int32_t *out) {(void)o;CHECK(MCGameplayWorld_isInstance(w));*out=((MCGameplayWorld *)w)->dimension;return true;}
+static const EntityDependencies inheritedDependencies={.entityInit=inherited_init,.setPosition=inherited_position,
+    .setEntityBoundingBox=inherited_bounds,.getDimensionId=inherited_dimension,.watcher=&watcherMethods};
+static bool base(MCObject *o,EntityItem *e,MCObject *w) {
+    Fixture *f=(Fixture *)o;if(!enter(f))return false;
+    CHECK(e->health==0&&e->hoverStart==0&&EntityItem_getDataWatcher(e)==NULL&&e->entity.worldObj==NULL);
+    f->last=e;
+    /* Deliberately invalid base dependency only for the existing no-late-repair
+       negative fixture. Normal paths execute the complete actual constructor. */
+    if(f->omitWatcher)return true;
+    bool ok=Entity_construct(&e->entity,w,&inheritedDependencies,o,f->player->worldObj->randomRuntime,NativeEntityIDRuntime_process());
+    if(ok)CHECK(e->health==0&&e->hoverStart==0&&watched(e)==NULL&&e->entity.worldObj==w);
+    return ok;
+}
+static bool size(MCObject *o,EntityItem *e,float width,float height) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&e->health==5);return Entity_setSize(&e->entity,width,height);}
+static bool position(MCObject *o,EntityItem *e,double x,double y,double z) {Fixture *f=(Fixture *)o;if(!enter(f))return false;CHECK(e==f->last&&e->entity.width==0.25f&&e->entity.height==0.25f);return Entity_setPosition(&e->entity,x,y,z);}
 /* Uncalled pickup dependencies fail explicitly if the tested source path
    unexpectedly reaches them. There are no production fallback callbacks. */
 static bool unexpected(MCObject *o) {MCObjectHeap_fail(o->heap);return false;}
@@ -88,10 +108,10 @@ static void constructors(void) {
     for(int type=0;type<3;type++) {
         MCGameplay game={0};Fixture *f=setup(&game,7);ItemStack *s=ItemStack_new(game.heap,ItemStack_registryItem(387),-2,9);CHECK(s);
         EntityItem *e=type==0?EntityItem_new_world(game.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies):type==1?EntityItem_new_position(game.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies,1,2,3):EntityItem_new_stack(game.heap,NULL,(MCObject *)f,&entityDependencies,&constructorDependencies,1,2,3,s);
-        CHECK(e&&e->health==5&&e->width==0.25f&&e->height==0.25f&&e->delayBeforeCanPickup==0&&e->dependencyContext==(MCObject *)f);
+        CHECK(e&&e->health==5&&e->entity.width==0.25f&&e->entity.height==0.25f&&e->delayBeforeCanPickup==0&&e->dependencyContext==(MCObject *)f);
         CHECK(f->mathCalls==(type?4u:1u)&&f->marks==(type==1?0u:1u));
-        if(type==0){CHECK(watched(e)&&watched(e)->item==NULL&&watched(e)->stackSize==0&&e->motionY==0&&e->rotationYaw==0);}
-        else {CHECK(e->posX==1&&e->posY==2&&e->posZ==3&&e->motionY==0.20000000298023224);CHECK(type==1?watched(e)==NULL:watched(e)==s);}
+        if(type==0){CHECK(watched(e)&&watched(e)->item==NULL&&watched(e)->stackSize==0&&e->entity.motionY==0&&e->entity.rotationYaw==0);}
+        else {CHECK(e->entity.posX==1&&e->entity.posY==2&&e->entity.posZ==3&&e->entity.motionY==0.20000000298023224);CHECK(type==1?watched(e)==NULL:watched(e)==s);}
         CHECK(!MCObjectHeap_failed(game.heap)&&!MCObjectHeap_hasBorrowers(game.heap));CHECK(MCGameplay_free(&game));
     }
 }
@@ -116,7 +136,7 @@ static void source_edges(void) {
 }
 static void aliases(void) {
     MCGameplay game={0};Fixture *f=setup(&game,1);ItemStack *s=ItemStack_new(game.heap,ItemStack_registryItem(387),2,9);CHECK(s&&InventoryPlayer_setInventorySlotContents(f->player->inventory,0,s));EntityItem *e=EntityPlayer_dropItem(f->player,s,false,true,&dropDependencies,(MCObject *)f);CHECK(e&&watched(e)==s);CHECK(MCObjectHeap_collect(game.heap));
-    MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));MCGameplayObjects *owners=MCGameplay_get(&tx.working);MCGameplayPlayer *p=(MCGameplayPlayer *)owners->players[0];Fixture *copy=(Fixture *)p->effects;EntityItem *ce=(EntityItem *)owners->items[0];CHECK(copy!=f&&copy->player==p&&copy->last==ce&&ce!=e&&ce->dependencyContext==(MCObject *)copy&&watched(ce)==InventoryPlayer_getStackInSlot(p->inventory,0)&&watched(ce)!=s&&ce->thrower==p->name);CHECK(double_bits(ce->motionX)==double_bits(e->motionX)&&float_bits(ce->hoverStart)==float_bits(e->hoverStart));CHECK(copy->playerSeed==f->playerSeed&&copy->mathSeed==f->mathSeed);watched(ce)->stackSize=0;CHECK(s->stackSize==2);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&game));
+    MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));MCGameplayObjects *owners=MCGameplay_get(&tx.working);MCGameplayPlayer *p=(MCGameplayPlayer *)owners->players[0];Fixture *copy=(Fixture *)p->effects;EntityItem *ce=(EntityItem *)owners->items[0];CHECK(copy!=f&&copy->player==p&&copy->last==ce&&ce!=e&&ce->dependencyContext==(MCObject *)copy&&watched(ce)==InventoryPlayer_getStackInSlot(p->inventory,0)&&watched(ce)!=s&&ce->thrower==p->name);CHECK(double_bits(ce->entity.motionX)==double_bits(e->entity.motionX)&&float_bits(ce->hoverStart)==float_bits(e->hoverStart));CHECK(copy->playerSeed==f->playerSeed&&copy->mathSeed==f->mathSeed);watched(ce)->stackSize=0;CHECK(s->stackSize==2);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&game));
 }
 static void math_edges(void) {
     CHECK(float_bits(MathHelper_sin(0))==0&&MathHelper_cos(0)==1);CHECK(float_bits(MathHelper_sin(-0.0f))==0);CHECK(float_bits(MathHelper_sin(NAN))==0&&float_bits(MathHelper_cos(NAN))==0);CHECK(float_bits(MathHelper_sin(-INFINITY))==0&&float_bits(MathHelper_cos(-INFINITY))==0);CHECK(float_bits(MathHelper_sin(INFINITY))==float_bits(MathHelper_cos(INFINITY)));CHECK(MathHelper_sin(INFINITY)<0);CHECK(float_bits(MathHelper_sin(FLT_MAX))==float_bits(MathHelper_sin(INFINITY)));
@@ -129,7 +149,7 @@ static void differential(bool emit) {
         EntityItem *e=EntityPlayer_dropItem(f->player,s,around!=0,trace!=0,&dropDependencies,(MCObject *)f);
         if(s->stackSize==0)CHECK(!e&&f->calls==0);else{CHECK(e&&watched(e)==s&&e->thrower==(trace?f->player->name:NULL)&&e->delayBeforeCanPickup==40&&f->marks==1&&f->randomCalls==(around?2u:4u)&&f->mathCalls==4);CHECK(StatFileWriter_readStat(f->player->stats,f->dropStat)==trace);}
         CHECK(!MCObjectHeap_failed(game.heap)&&!MCObjectHeap_hasBorrowers(game.heap));
-        if(emit)printf("%d %d %d %d %d %d %08" PRIx32 " %08" PRIx32 " %016" PRIx64 " %016" PRIx64 " %016" PRIx64 " %016" PRIx64 " %u %u\n",seedIndex,yi,pi,around,trace,e?1:0,e?float_bits(e->hoverStart):0,e?float_bits(e->rotationYaw):0,e?double_bits(e->posY):0,e?double_bits(e->motionX):0,e?double_bits(e->motionY):0,e?double_bits(e->motionZ):0,f->randomCalls,f->mathCalls);
+        if(emit)printf("%d %d %d %d %d %d %08" PRIx32 " %08" PRIx32 " %016" PRIx64 " %016" PRIx64 " %016" PRIx64 " %016" PRIx64 " %u %u\n",seedIndex,yi,pi,around,trace,e?1:0,e?float_bits(e->hoverStart):0,e?float_bits(e->entity.rotationYaw):0,e?double_bits(e->entity.posY):0,e?double_bits(e->entity.motionX):0,e?double_bits(e->entity.motionY):0,e?double_bits(e->entity.motionZ):0,f->randomCalls,f->mathCalls);
         CHECK(MCGameplay_free(&game));
     }
 }

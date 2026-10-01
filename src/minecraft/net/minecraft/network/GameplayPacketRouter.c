@@ -25,7 +25,7 @@ static GameplayPacketResult finish(MCGameplay *game, MCObjectRootScope *scope, b
 }
 GameplayPacketResult GameplayPacketRouter_server(MCGameplay *game, size_t index, int32_t id,
                                                  mc_buf *payload) {
-    if (id != 0x0d && id != 0x0e && id != 0x0f && id != 0x10)
+    if (id != 0x0d && id != 0x0e && id != 0x0f && id != 0x10 && id != 0x13)
         return MC_GAMEPLAY_PACKET_NOT_HANDLED;
     MCGameplayPlayer *player = actor(game, index, payload);
     if (!player || !NetHandlerPlayServer_isInstance(player->handler) ||
@@ -69,6 +69,12 @@ GameplayPacketResult GameplayPacketRouter_server(MCGameplay *game, size_t index,
             applied = C0FPacketConfirmTransaction_processPacket(packet, target);
         break;
     }
+    case 0x13: {
+        C13PacketPlayerAbilities *packet=C13PacketPlayerAbilities_new_empty(game->heap);
+        parsed=packet && C13PacketPlayerAbilities_readPacketData(packet,&buffer) && payload->pos==payload->len;
+        if (parsed) applied=C13PacketPlayerAbilities_processPacket(packet,target);
+        break;
+    }
     default: {
         C10PacketCreativeInventoryAction *packet =
             C10PacketCreativeInventoryAction_new_empty(game->heap);
@@ -83,7 +89,7 @@ GameplayPacketResult GameplayPacketRouter_server(MCGameplay *game, size_t index,
 }
 GameplayPacketResult GameplayPacketRouter_client(MCGameplay *game, size_t index, int32_t id,
                                                  mc_buf *payload) {
-    if (id != 0x1c && id != 0x2e && id != 0x2f && id != 0x30 && id != 0x32)
+    if (id != 0x1c && id != 0x2e && id != 0x2f && id != 0x30 && id != 0x32 && id != 0x39)
         return MC_GAMEPLAY_PACKET_NOT_HANDLED;
     MCGameplayPlayer *player = actor(game, index, payload);
     if (!player || !NetHandlerPlayClient_isInstance(player->handler) ||
@@ -131,6 +137,12 @@ GameplayPacketResult GameplayPacketRouter_client(MCGameplay *game, size_t index,
                  payload->pos == payload->len;
         if (parsed)
             applied = S30PacketWindowItems_processPacket(packet, target);
+        break;
+    }
+    case 0x39: {
+        S39PacketPlayerAbilities *packet=S39PacketPlayerAbilities_new_empty(game->heap);
+        parsed=packet && S39PacketPlayerAbilities_readPacketData(packet,&buffer) && payload->pos==payload->len;
+        if (parsed) applied=S39PacketPlayerAbilities_processPacket(packet,target);
         break;
     }
     default: {

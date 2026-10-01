@@ -15,7 +15,7 @@ typedef struct {
 /* Original getUniqueID field body through an explicit native owner adapter
    for MCGameplayPlayer and EntityItem. NULL is the actual nullable field value,
    not a request to synthesize an identity. Full Entity construction is separate. */
-NativeJavaUUID *Entity_getUniqueID(MCObject *entity);
+NativeJavaUUID *EntityUUIDNBT_nativeGetUniqueID(MCObject *entity);
 const EntityUUIDNBTDispatch *EntityUUIDNBT_nativeOwnerDispatch(void);
 
 /* Only the original UUID statements inside Entity.writeToNBT/readFromNBT.

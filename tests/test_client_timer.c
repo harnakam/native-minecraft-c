@@ -117,10 +117,42 @@ static void failed_clock(void) {
     REQUIRE(!strcmp(c->status,"Source client timer update failed") && ticks==-19 && c->partial_ticks==0.25f); REQUIRE(clock->systemCalls==2 && clock->nanoCalls==2 && timer->lastHRTime==0 && timer->lastSyncSysClock==100);
     MCObjectRootScope_end(&scope); destroy(c,&peer);
 }
+static void ability_input_and_source_authority(void) {
+    mc_conn peer;mc_client *c=client(&peer);REQUIRE(apply_game_type(c));
+    MCObjectRootScope scope={0};REQUIRE(MCObjectRootScope_begin(&scope,c->gameplay.heap));
+    PlayerCapabilities *caps=mc_client_graph_player(&c->gameplay)->capabilities;
+    REQUIRE(caps->allowFlying&&caps->isCreativeMode&&!caps->isFlying);
+    caps->flySpeed=0.25f;caps->walkSpeed=-2;MCObjectHeap_touch(c->gameplay.heap);
+    MCObjectRootScope_end(&scope);gui_view(c);
+    mc_input input={0};input.select_slot=-1;input.creative_pick=-1;input.toggle_flight=true;
+    update_player(c,&input,0,0);REQUIRE(!c->failed&&c->flying&&c->can_fly);
+    bool received=false;
+    for (unsigned i=0;i<100&&!received;i++) {
+        REQUIRE(mc_conn_poll(&c->connection)&&mc_conn_poll(&peer));
+        mc_buf wire;mc_buf_init(&wire);int ready=mc_conn_next(&peer,&wire);REQUIRE(ready>=0);
+        if (ready) {
+            int32_t id=mc_get_varint(&wire);
+            if (id==0x13) {REQUIRE(mc_get_u8(&wire)==15);REQUIRE(mc_get_f32(&wire)==0.25f&&mc_get_f32(&wire)==-2&&!wire.failed&&wire.pos==wire.len);received=true;}
+        }
+        mc_buf_free(&wire);if (!received) mc_sleep_ms(1);
+    }
+    REQUIRE(received);REQUIRE(MCObjectRootScope_begin(&scope,c->gameplay.heap));
+    REQUIRE(mc_client_graph_player(&c->gameplay)->capabilities->isFlying);
+    MCObjectRootScope_end(&scope);
+    mc_buf packet;start_packet(&packet,0x39);mc_put_u8(&packet,2);mc_put_f32(&packet,0.5f);mc_put_f32(&packet,0.75f);
+    handle_packet(c,&packet);REQUIRE(!packet.failed&&!c->failed);mc_buf_free(&packet);
+    REQUIRE(c->flying&&!c->can_fly);update_player(c,&input,0,0);REQUIRE(!c->failed&&c->flying&&!c->can_fly);
+    unsigned counts[64];collect_packets(c,&peer,counts);REQUIRE(counts[0x13]==0);
+    REQUIRE(MCObjectRootScope_begin(&scope,c->gameplay.heap));
+    caps=mc_client_graph_player(&c->gameplay)->capabilities;
+    REQUIRE(caps->isFlying&&!caps->isCreativeMode&&!caps->allowFlying&&caps->flySpeed==0.5f&&caps->walkSpeed==0.75f);
+    REQUIRE(mc_client_graph_bindings(&c->gameplay)->controller->currentGameType==&WorldSettingsGameType_CREATIVE);
+    MCObjectRootScope_end(&scope);destroy(c,&peer);
+}
 int main(void) {
     REQUIRE(mc_net_init()); const TimerDependencies *real=mc_client_timer_clocks(); int64_t sys0,sys1,nano0,nano1;
     REQUIRE(real->getSystemTime(NULL,&sys0) && real->nanoTime(NULL,&nano0)); REQUIRE(real->getSystemTime(NULL,&sys1) && real->nanoTime(NULL,&nano1));
     REQUIRE(sys1>=sys0 && nano1>=nano0 && !real->getSystemTime(NULL,NULL) && !real->nanoTime(NULL,NULL));
-    capped_and_discarded(); one_shot(0); one_shot(2); one_shot(10); one_shot(-2); adoption_and_lifetime(); failed_clock(); mc_net_shutdown();
+    capped_and_discarded(); one_shot(0); one_shot(2); one_shot(10); one_shot(-2); adoption_and_lifetime(); ability_input_and_source_authority(); failed_clock(); mc_net_shutdown();
     printf("client source Timer runtime: %u checks GREEN\n",checks); return 0;
 }

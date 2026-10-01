@@ -6,6 +6,7 @@
 #include "network/play/client/C0EPacketClickWindow.h"
 #include "network/play/client/C0FPacketConfirmTransaction.h"
 #include "network/play/client/C10PacketCreativeInventoryAction.h"
+#include "network/play/client/C13PacketPlayerAbilities.h"
 #include "network/native_packet_thread.h"
 
 typedef struct NetHandlerPlayServer NetHandlerPlayServer;
@@ -44,6 +45,7 @@ struct NetHandlerPlayServer {
 NetHandlerPlayServer *NetHandlerPlayServer_nativeNew(MCGameplayPlayer *, MCObject *context,
                                                      const NetHandlerPlayServerDependencies *);
 bool NetHandlerPlayServer_isInstance(const MCObject *);
+bool NetHandlerPlayServer_processPlayerAbilities(NetHandlerPlayServer *,C13PacketPlayerAbilities *);
 INetHandlerPlayServer NetHandlerPlayServer_asHandler(NetHandlerPlayServer *);
 bool NetHandlerPlayServer_processCloseWindow(NetHandlerPlayServer *, C0DPacketCloseWindow *);
 bool NetHandlerPlayServer_processClickWindow(NetHandlerPlayServer *, C0EPacketClickWindow *);
