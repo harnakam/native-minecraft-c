@@ -7,4 +7,5 @@ WorldProviderEnd *WorldProviderEnd_nativeAllocate(MCObjectHeap *,const WorldProv
 bool WorldProviderEnd_construct(WorldProviderEnd *);
 WorldProviderEnd *WorldProviderEnd_new(MCObjectHeap *,const WorldProviderDependencies *,MCObject *);
 bool WorldProviderEnd_registerWorldChunkManager(WorldProviderEnd *);
+float WorldProviderEnd_calculateCelestialAngle(WorldProviderEnd *,int64_t,float);
 #endif

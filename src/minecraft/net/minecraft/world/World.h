@@ -46,6 +46,21 @@ typedef struct WorldDependencies {
     MCObject *(*blockGetMaterial)(MCObject *,MCObject *);
     bool (*materialBlocksMovement)(MCObject *,MCObject *,bool *);
     bool (*materialIsLeaves)(MCObject *,MCObject *,bool *);
+    /* Reached Source virtual sky/weather calls. NULL entries inherit the
+       named base body; callback false is the native exception boundary. */
+    bool (*getCelestialAngle)(MCObject *,World *,float,float *);
+    bool (*getRainStrength)(MCObject *,World *,float,float *);
+    bool (*getThunderStrength)(MCObject *,World *,float,float *);
+    bool (*calculateSkylightSubtracted)(MCObject *,World *,float,int32_t *);
+    bool (*calculateInitialSkylight)(MCObject *,World *);
+    bool (*calculateInitialWeather)(MCObject *,World *);
+    bool (*markTileEntityForRemoval)(MCObject *,World *,MCObject *tile);
+    bool (*unloadEntities)(MCObject *,World *,MCObject *collection);
+    /* Native JDK collection dispatch. Source captures its destination before
+       evaluating Collection.toArray; these callbacks may mutate live fields.
+       NULL inherits the named native dependency, unknown collections fail. */
+    bool (*collectionAddAll)(MCObject *,NativeReferenceList *,MCObject *,bool *changed);
+    NativeObjectArray *(*collectionToArray)(MCObject *,MCObject *collection);
 } WorldDependencies;
 struct World {
     MCObject object;
@@ -101,6 +116,7 @@ void World_traceFields(World *,MCObjectVisitor,void *);
 bool World_construct(World *,MCObject *saveHandler,WorldInfo *,WorldProvider *,MCObject *profiler,bool client);
 World *World_init(World *);
 WorldInfo *World_getWorldInfo(World *);
+WorldType *World_getWorldType(World *);
 WorldBorder *World_getWorldBorder(World *);
 MapStorage *World_getMapStorage(World *);
 Scoreboard *World_getScoreboard(World *);
@@ -118,6 +134,22 @@ BlockPos *World_getSpawnPoint(World *);
 BlockPos *World_getHeight(World *,BlockPos *);
 BlockPos *World_getHeight_base(World *,BlockPos *);
 BlockPos *World_getTopSolidOrLiquidBlock(World *,BlockPos *);
+float World_getCelestialAngle(World *,float partialTicks);
+float World_getCelestialAngle_base(World *,float partialTicks);
+float World_getRainStrength(World *,float delta);
+float World_getRainStrength_base(World *,float delta);
+float World_getThunderStrength(World *,float delta);
+float World_getThunderStrength_base(World *,float delta);
+int32_t World_calculateSkylightSubtracted(World *,float partialTicks);
+int32_t World_calculateSkylightSubtracted_base(World *,float partialTicks);
+bool World_calculateInitialSkylight(World *);
+bool World_calculateInitialSkylight_base(World *);
+bool World_calculateInitialWeather(World *);
+bool World_calculateInitialWeather_base(World *);
+bool World_markTileEntityForRemoval(World *,MCObject *tile);
+bool World_markTileEntityForRemoval_base(World *,MCObject *tile);
+bool World_unloadEntities(World *,MCObject *collection);
+bool World_unloadEntities_base(World *,MCObject *collection);
 /* Remaining World methods, child constructors, chunk/storage/generation,
    ticking/weather/lighting/entity collision and native JDK leaves are pending. */
 #endif

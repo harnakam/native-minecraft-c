@@ -13,4 +13,28 @@ NativeIntArray *NativeIntArray_new(MCObjectHeap *,int32_t length);
 bool NativeIntArray_isInstance(const MCObject *);
 bool NativeIntArray_get(const NativeIntArray *,int32_t index,int32_t *out);
 bool NativeIntArray_set(NativeIntArray *,int32_t index,int32_t value);
+
+/* Explicit native Java-array storage; these are not java.lang class ports.
+   A fixed Object[] is separate from NativeReferenceList's growable array. */
+#define NATIVE_DECLARE_PRIMITIVE_ARRAY(Name, Type) \
+typedef struct Name { MCObject object; int32_t length; Type values[]; } Name; \
+Name *Name##_new(MCObjectHeap *,int32_t length); \
+bool Name##_isInstance(const MCObject *); \
+bool Name##_get(const Name *,int32_t index,Type *out); \
+bool Name##_set(Name *,int32_t index,Type value)
+NATIVE_DECLARE_PRIMITIVE_ARRAY(NativeByteArray,int8_t);
+NATIVE_DECLARE_PRIMITIVE_ARRAY(NativeCharArray,uint16_t);
+NATIVE_DECLARE_PRIMITIVE_ARRAY(NativeShortArray,int16_t);
+NATIVE_DECLARE_PRIMITIVE_ARRAY(NativeBooleanArray,bool);
+#undef NATIVE_DECLARE_PRIMITIVE_ARRAY
+
+typedef struct NativeObjectArray {
+    MCObject object;
+    int32_t length;
+    MCObject *values[];
+} NativeObjectArray;
+NativeObjectArray *NativeObjectArray_new(MCObjectHeap *,int32_t length);
+bool NativeObjectArray_isInstance(const MCObject *);
+bool NativeObjectArray_get(const NativeObjectArray *,int32_t index,MCObject **out);
+bool NativeObjectArray_set(NativeObjectArray *,int32_t index,MCObject *value);
 #endif

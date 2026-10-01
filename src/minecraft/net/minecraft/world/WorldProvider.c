@@ -3,6 +3,8 @@
 #include "world/WorldProviderHell.h"
 #include "world/WorldProviderEnd.h"
 #include "world/WorldType.h"
+#include "util/NativeMathCos.h"
+#include <math.h>
 
 static bool fail(WorldProvider *p) { MCObjectHeap_fail(p?p->object.heap:NULL);return false; }
 void WorldProvider_traceFields(WorldProvider *p,MCObjectVisitor visit,void *context) {
@@ -216,4 +218,39 @@ NBTString *WorldProvider_getInternalNameSuffix(WorldProvider *p) {
     if(!valid(p))return NULL;
     const char *text=WorldProviderHell_isInstance((MCObject *)p)?"_nether":WorldProviderEnd_isInstance((MCObject *)p)?"_end":WorldProviderSurface_isInstance((MCObject *)p)?"":NULL;
     if(!text){fail(p);return NULL;}return NBTString_literalASCII(p->object.heap,text);
+}
+float WorldProvider_calculateCelestialAngle_base(WorldProvider *p,int64_t time,float partial) {
+    MCObjectRootScope scope={0};if(!NativeWorldProvider_begin(p,&scope))return NAN;
+    float result=NAN;bool ok=false;
+    int32_t dayTime=(int32_t)(time%INT64_C(24000));
+    volatile float sum=(float)dayTime+partial;
+    volatile float quotient=sum/24000.0f;
+    float angle=quotient-0.25f;
+    if(angle<0.0f)angle=angle+1.0f;
+    if(angle>1.0f)angle=angle-1.0f;
+    /* The unchanged target bytecode retains this pre-cos local. */
+    float original=angle;
+    volatile double argument=(double)angle*3.141592653589793;
+    double cosine;const WorldProviderDependencies *d=p->dependencies;
+    ok=d&&d->mathCos?d->mathCos(p->dependencyContext,argument,&cosine):NativeMathCos_cos(argument,&cosine);
+    if(!ok||MCObjectHeap_failed(p->object.heap))goto done;
+    volatile double shifted=cosine+1.0;
+    volatile double halved=shifted/2.0;
+    volatile float narrowed=(float)halved;
+    volatile float transformed=1.0f-narrowed;
+    volatile float difference=transformed-original;
+    volatile float smoothed=difference/3.0f;
+    result=original+smoothed;
+done:if(!NativeWorldProvider_end(p,&scope,ok))result=NAN;
+    return result;
+}
+float WorldProvider_calculateCelestialAngle(WorldProvider *p,int64_t time,float partial) {
+    MCObjectRootScope scope={0};if(!NativeWorldProvider_begin(p,&scope))return NAN;
+    const WorldProviderDependencies *d=p->dependencies;float result=NAN;bool ok=true;
+    if(d&&d->calculateCelestialAngle)ok=d->calculateCelestialAngle(p->dependencyContext,p,time,partial,&result);
+    else if(WorldProviderHell_isInstance((MCObject *)p))result=WorldProviderHell_calculateCelestialAngle((WorldProviderHell *)p,time,partial);
+    else if(WorldProviderEnd_isInstance((MCObject *)p))result=WorldProviderEnd_calculateCelestialAngle((WorldProviderEnd *)p,time,partial);
+    else result=WorldProvider_calculateCelestialAngle_base(p,time,partial);
+    if(!NativeWorldProvider_end(p,&scope,ok))result=NAN;
+    return result;
 }

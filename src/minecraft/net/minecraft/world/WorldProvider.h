@@ -28,6 +28,10 @@ typedef struct {
     bool (*registerWorldChunkManager)(MCObject *,WorldProvider *);
     bool (*generateLightBrightnessTable)(MCObject *,WorldProvider *);
     const WorldBorderDependencies *borderDependencies;
+    /* Original virtual celestial method and reached java.lang.Math.cos
+       platform dependency. NULL virtual entry inherits the named body. */
+    bool (*calculateCelestialAngle)(MCObject *,WorldProvider *,int64_t,float,float *);
+    bool (*mathCos)(MCObject *,double,double *);
 } WorldProviderDependencies;
 struct WorldProvider {
     MCObject object;
@@ -61,5 +65,7 @@ int32_t WorldProvider_getDimensionId(WorldProvider *);
 WorldBorder *WorldProvider_getWorldBorder(WorldProvider *);
 NBTString *WorldProvider_getDimensionName(WorldProvider *);
 NBTString *WorldProvider_getInternalNameSuffix(WorldProvider *);
+float WorldProvider_calculateCelestialAngle(WorldProvider *,int64_t worldTime,float partialTicks);
+float WorldProvider_calculateCelestialAngle_base(WorldProvider *,int64_t worldTime,float partialTicks);
 /* Other terrain generation/biome/weather/provider methods remain unported. */
 #endif

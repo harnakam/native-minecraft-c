@@ -42,6 +42,12 @@ bool Entity_setEntityBoundingBox(Entity *entity,AxisAlignedBB *box) {
     entity->boundingBox=box;MCObjectHeap_touch(entity->object.heap);return true;
 }
 int32_t Entity_getEntityId(const Entity *entity) {return valid((Entity *)entity)?entity->entityId:0;}
+bool Entity_equals(Entity *entity,MCObject *other) {
+    if(!valid(entity))return false;
+    if(other&&other->heap!=entity->object.heap)return effect(entity,false);
+    return Entity_isInstance(other)&&((Entity *)other)->entityId==entity->entityId;
+}
+int32_t Entity_hashCode(Entity *entity) {return valid(entity)?entity->entityId:0;}
 void Entity_setEntityId(Entity *entity,int32_t id) {if(valid(entity)){entity->entityId=id;MCObjectHeap_touch(entity->object.heap);}}
 DataWatcher *Entity_getDataWatcher(Entity *entity) {return valid(entity)?entity->dataWatcher:NULL;}
 NativeJavaUUID *Entity_getUniqueID(Entity *entity) {return valid(entity)?entity->entityUniqueID:NULL;}

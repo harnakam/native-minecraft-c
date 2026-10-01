@@ -33,6 +33,13 @@ bool WorldProviderHell_generateLightBrightnessTable(WorldProviderHell *p) {
     if(!WorldProviderHell_isInstance((MCObject *)p)){MCObjectHeap_fail(p?p->provider.object.heap:NULL);return false;}
     return NativeWorldProvider_lightTable((WorldProvider *)p,0.1f);
 }
+float WorldProviderHell_calculateCelestialAngle(WorldProviderHell *p,int64_t time,float partial) {
+    (void)time;(void)partial;
+    if(!WorldProviderHell_isInstance((MCObject *)p)||MCObjectHeap_failed(p->provider.object.heap)) {
+        MCObjectHeap_fail(p?p->provider.object.heap:NULL);return NAN;
+    }
+    return 0.5f;
+}
 static void border_trace(MCObject *object,MCObjectVisitor visit,void *ctx) {
     WorldProviderHellBorder *b=(WorldProviderHellBorder *)object;
     if(MCObjectHeap_objectSize(object)<sizeof(*b)){MCObjectHeap_fail(object->heap);return;}

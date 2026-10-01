@@ -15,3 +15,33 @@ The numerical dependency in `util/NativeStrictMathLog.c` and `util/NativeStrictM
 The C11 adaptation namespaces the entry points, replaces pointer aliasing with independently authored `memcpy` word access, uses defined unsigned word arithmetic for square root, guards its historical shift by 32, and explicitly floors negative exponent halving. Numerical coefficients, floating-point expressions and evaluation order are retained. The unrelated appended square-root paper is omitted. Only the two IEEE cores are included; this repository does not redistribute a complete libm, OpenJDK source, MPFR or GMP.
 
 Java 8's [StrictMath contract](https://docs.oracle.com/javase/8/docs/api/java/lang/StrictMath.html) specifies fdlibm 5.3 IEEE semantics for logarithm and a correctly rounded square root. The independently authored native [Random API adapter](https://docs.oracle.com/javase/8/docs/api/java/util/Random.html) uses these numerical dependencies for Gaussian generation. The supported environment is IEEE binary64 with nearest-even rounding, gradual underflow, no FTZ/DAZ and no excess evaluation precision; numerical code and its callers must disable fast math and FP contraction. Uncached Gaussian validates that environment before drawing, while cached returns only move stored bits. Native heap ownership, snapshot rollback and single-writer execution remain platform boundaries, not complete JDK class, subclass or concurrency translations.
+
+The reached World/WorldProvider cosine dependency additionally adapts Netlib fdlibm's
+[cosine](https://www.netlib.org/fdlibm/s_cos.c),
+[sine kernel](https://www.netlib.org/fdlibm/k_sin.c),
+[cosine kernel](https://www.netlib.org/fdlibm/k_cos.c),
+[argument reduction](https://www.netlib.org/fdlibm/e_rem_pio2.c) and
+[large-argument reduction kernel](https://www.netlib.org/fdlibm/k_rem_pio2.c).
+`NativeMathCos.c`, `NativeMathKernelSin.c`, `NativeMathKernelCos.c`,
+`NativeMathRemPio2.c` and `NativeMathKernelRemPio2.c` each retain the upstream
+Sun Microsystems copyright and permission notice. Entry points are namespaced;
+word access uses `memcpy`, exponent shifts use unsigned words and word-building
+temporaries are initialized. Indentation and trailing whitespace are normalized
+without changing numerical tokens or permission-notice words. This is the small licensed numerical dependency,
+not redistributed Minecraft, MCP or OpenJDK code. The same checked IEEE
+environment and compiler restrictions apply.
+
+| Upstream file | SHA256 before adaptation |
+|---|---|
+| s_cos.c | bdcbea3c83b2d4aa521b9a5341f3e58b8cb9c8d326fcc4abb715f3704cf17799 |
+| k_sin.c | 75d391f3c124806ce14893cd038ae5dd10663e40430ffa174d5fddcb33012167 |
+| k_cos.c | 841086c75288f3f9fef03bae2a9dc24e99c3cdb2035e170c69452013a7b5befc |
+| e_rem_pio2.c | 3a08dd4a38f9f9fc9478a33ca05cb81a6566f1010ab14412e97cae091bede16b |
+| k_rem_pio2.c | 5796209ea3fe1af88e22badeaed0f6a6aa923914e097e227c410527cb5815740 |
+
+`NativeBlockStateFacts.h` contains independently recorded numeric registry,
+metadata and material facts consumed by the native identity/property adapter.
+The canonical state objects are registered in the translated mutable
+`ObjectIntIdentityMap`; the input facts do not implement Block subclasses,
+property transitions, collision or physics. Original registry dumps and their
+Java observers remain private and are not distributed.

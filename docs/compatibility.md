@@ -15,6 +15,22 @@ Minecraft resources, MCP itself, decompiled source, mappings, JARs and private r
 
 ## Evidence ledger
 
+The current Chunk increment translates storage and reached read/receive bodies,
+the actual client provider's map/list/Chunk owners and its Source World unload
+dependency. The unchanged original Chunk witness matches 92 cases and 4,970
+full-state rows on Windows and WSL, including malformed-input prefixes and inherited
+EmptyChunk storage. These modules are not yet the live remote client's terrain
+authority: WorldClient construction, Source S21/S26 handlers and the same-owner
+render/collision/block-change migration remain pending. The existing live dense
+kernel is still explicitly native. Full lighting, Block/state/property classes,
+biomes, tile/entity lifecycle, generation and persistence remain open.
+
+The cosine numerical dependency matches all 28,743 observed Java 8 raw results
+on Windows and WSL. This is distinct from Source rain/thunder arithmetic: its
+private 413-case comparison retains one raw NaN-sign difference in rain strength
+under WSL and Windows O1, despite the Windows O2 match. The difference is not
+normalized away or counted as complete raw-value parity.
+
 The initial implementation proves a restricted offline creative session with nine materials and a 7x7-chunk dedicated world. This evidence is useful but does not satisfy full gameplay, save, resource or online-login compatibility.
 
 The current implementation has 337 canonical item registry identities, including the original lit-furnace item at ID 62. The Creative palette has 336 visible item IDs because lit furnace has no Creative tab. The existing runtime preserves Slot/NBT, window-0 inventory/cursor state and click transactions, has a wired native inventory/creative-selection screen, and saves durable gzip player inventory files. Independent peers exercise full NBT, equipment, splitting, transfers, rejection locks, reconnects and aggregate size rejection. The actual local 1.8.9 game JAR successfully read a C-created player inventory and accepted the Java→C→Java Slot round-trip. This is progress toward requirement 2; it does not complete this objective.

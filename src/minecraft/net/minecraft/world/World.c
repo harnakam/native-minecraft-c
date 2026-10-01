@@ -1,6 +1,9 @@
 #include "world/World.h"
+#include "util/NativeCollection.h"
 #include "world/ChunkCoordIntPair.h"
 #include <string.h>
+#include <math.h>
+#include "util/MathHelper.h"
 
 /* Exact native concrete descriptor lives with its allocation/storage adapter. */
 extern bool MCGameplayWorld_isInstance(const MCObject *);
@@ -157,6 +160,13 @@ int64_t World_getTotalWorldTime(World *world){WorldInfo *info=valid(world)?field
 bool World_setWorldTime(World *world,int64_t time){WorldInfo *info=valid(world)?field_info(world):NULL;return info&&WorldInfo_setWorldTime(info,time);}
 bool World_setTotalWorldTime(World *world,int64_t time){WorldInfo *info=valid(world)?field_info(world):NULL;return info&&WorldInfo_setWorldTotalTime(info,time);}
 GameRules *World_getGameRules(World *world){WorldInfo *info=valid(world)?field_info(world):NULL;return info?WorldInfo_getGameRulesInstance(info):NULL;}
+WorldType *World_getWorldType(World *world){
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return NULL;
+    WorldInfo *info=field_info(world);WorldType *out=NULL;
+    bool ok=info&&pin(world,&scope,(MCObject *)info);
+    if(ok){out=WorldInfo_getTerrainType(info);ok=pin(world,&scope,(MCObject *)out);}
+    return end(world,&scope,ok)?out:NULL;
+}
 Entity *World_getEntityByID(World *world,int32_t id) {
     if(!valid(world))return NULL;
     if(!IntHashMap_isInstance((MCObject *)world->entitiesById)||world->entitiesById->object.heap!=world->object.heap){fail(world);return NULL;}
@@ -267,4 +277,202 @@ BlockPos *World_getTopSolidOrLiquidBlock(World *world,BlockPos *pos) {
     }
     ok=true;
 done:if(!end(world,&scope,ok))result=NULL;return result;
+}
+
+/* Source virtual dispatch is immutable; all transient receivers remain pinned
+   through their argument evaluation and invocation. */
+typedef bool (*WorldFloatMethod)(MCObject *,World *,float,float *);
+static float float_virtual(World *world,float argument,WorldFloatMethod method,float (*base)(World *,float)) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return NAN;
+    float result=NAN;bool ok=true;
+    if(method)ok=method(world->dependencyContext,world,argument,&result);
+    else result=base(world,argument);
+    if(!end(world,&scope,ok))result=NAN;
+    return result;
+}
+float World_getCelestialAngle_base(World *world,float partial) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return NAN;
+    bool ok=false;float result=NAN;
+    WorldProvider *receiver=world->provider;
+    if(!pin(world,&scope,(MCObject *)receiver))goto done;
+    WorldInfo *info=field_info(world);
+    if(!info||!pin(world,&scope,(MCObject *)info))goto done;
+    int64_t time=WorldInfo_getWorldTime(info);
+    if(MCObjectHeap_failed(world->object.heap)||!receiver)goto done;
+    result=WorldProvider_calculateCelestialAngle(receiver,time,partial);ok=true;
+done:if(!end(world,&scope,ok))result=NAN;return result;
+}
+float World_getCelestialAngle(World *world,float partial) {
+    if(!valid(world))return NAN;
+    const WorldDependencies *d=world->dependencies;
+    return float_virtual(world,partial,d?d->getCelestialAngle:NULL,World_getCelestialAngle_base);
+}
+float World_getRainStrength_base(World *world,float delta) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return NAN;
+    float previous=world->prevRainingStrength;
+    volatile float difference=world->rainingStrength-world->prevRainingStrength;
+    volatile float weighted=difference*delta;
+    float result=previous+weighted;
+    if(!end(world,&scope,true))result=NAN;
+    return result;
+}
+float World_getRainStrength(World *world,float delta) {
+    if(!valid(world))return NAN;
+    const WorldDependencies *d=world->dependencies;
+    return float_virtual(world,delta,d?d->getRainStrength:NULL,World_getRainStrength_base);
+}
+float World_getThunderStrength_base(World *world,float delta) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return NAN;
+    float previous=world->prevThunderingStrength;
+    volatile float difference=world->thunderingStrength-world->prevThunderingStrength;
+    volatile float weighted=difference*delta;
+    volatile float interpolated=previous+weighted;
+    float rain=World_getRainStrength(world,delta);
+    volatile float result=interpolated*rain;
+    if(!end(world,&scope,true))result=NAN;
+    return result;
+}
+float World_getThunderStrength(World *world,float delta) {
+    if(!valid(world))return NAN;
+    const WorldDependencies *d=world->dependencies;
+    return float_virtual(world,delta,d?d->getThunderStrength:NULL,World_getThunderStrength_base);
+}
+static int32_t java_float_to_int(float value) {
+    if(isnan(value))return 0;
+    if(value>=2147483648.0f)return INT32_MAX;
+    if(value<=-2147483648.0f)return INT32_MIN;
+    return (int32_t)value;
+}
+int32_t World_calculateSkylightSubtracted_base(World *world,float partial) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return 0;
+    int32_t result=0;bool ok=false;
+    float angle=World_getCelestialAngle(world,partial);
+    if(MCObjectHeap_failed(world->object.heap))goto done;
+    volatile float radians=angle*3.1415927f;
+    volatile float circle=radians*2.0f;
+    float cosine=MathHelper_cos(circle);
+    volatile float twice=cosine*2.0f;
+    volatile float raised=twice+0.5f;
+    float amount=1.0f-raised;
+    amount=MathHelper_clamp_float(amount,0.0f,1.0f);
+    amount=1.0f-amount;
+    float rain=World_getRainStrength(world,partial);
+    if(MCObjectHeap_failed(world->object.heap))goto done;
+    volatile float rainFive=rain*5.0f;
+    volatile double rainDivision=(double)rainFive/16.0;
+    volatile double rainFactor=1.0-rainDivision;
+    volatile double rained=(double)amount*rainFactor;
+    amount=(float)rained;
+    float thunder=World_getThunderStrength(world,partial);
+    if(MCObjectHeap_failed(world->object.heap))goto done;
+    volatile float thunderFive=thunder*5.0f;
+    volatile double thunderDivision=(double)thunderFive/16.0;
+    volatile double thunderFactor=1.0-thunderDivision;
+    volatile double thundered=(double)amount*thunderFactor;
+    amount=(float)thundered;
+    amount=1.0f-amount;
+    volatile float scaled=amount*11.0f;
+    result=java_float_to_int(scaled);ok=true;
+done:if(!end(world,&scope,ok))result=0;
+    return result;
+}
+int32_t World_calculateSkylightSubtracted(World *world,float partial) {
+    if(!valid(world))return 0;
+    const WorldDependencies *d=world->dependencies;
+    if(!d||!d->calculateSkylightSubtracted)return World_calculateSkylightSubtracted_base(world,partial);
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return 0;
+    int32_t result=0;bool ok=d->calculateSkylightSubtracted(world->dependencyContext,world,partial,&result);
+    if(!end(world,&scope,ok))result=0;
+    return result;
+}
+bool World_calculateInitialSkylight_base(World *world) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return false;
+    int32_t amount=World_calculateSkylightSubtracted(world,1.0f);
+    bool ok=!MCObjectHeap_failed(world->object.heap);
+    if(ok&&amount!=world->skylightSubtracted){world->skylightSubtracted=amount;MCObjectHeap_touch(world->object.heap);}
+    return end(world,&scope,ok);
+}
+bool World_calculateInitialSkylight(World *world) {
+    if(!valid(world))return false;
+    const WorldDependencies *d=world->dependencies;
+    if(!d||!d->calculateInitialSkylight)return World_calculateInitialSkylight_base(world);
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return false;
+    bool ok=d->calculateInitialSkylight(world->dependencyContext,world);
+    return end(world,&scope,ok);
+}
+bool World_calculateInitialWeather_base(World *world) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return false;
+    bool ok=false;WorldInfo *info=field_info(world);
+    if(!info||!pin(world,&scope,(MCObject *)info))goto done;
+    bool raining=WorldInfo_isRaining(info);
+    if(MCObjectHeap_failed(world->object.heap))goto done;
+    if(raining) {
+        world->rainingStrength=1.0f;MCObjectHeap_touch(world->object.heap);
+        info=field_info(world);
+        if(!info||!pin(world,&scope,(MCObject *)info))goto done;
+        bool thundering=WorldInfo_isThundering(info);
+        if(MCObjectHeap_failed(world->object.heap))goto done;
+        if(thundering){world->thunderingStrength=1.0f;MCObjectHeap_touch(world->object.heap);}
+    }
+    ok=true;
+done:return end(world,&scope,ok);
+}
+bool World_calculateInitialWeather(World *world) {
+    if(!valid(world))return false;
+    const WorldDependencies *d=world->dependencies;
+    if(!d||!d->calculateInitialWeather)return World_calculateInitialWeather_base(world);
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return false;
+    bool ok=d->calculateInitialWeather(world->dependencyContext,world);
+    return end(world,&scope,ok);
+}
+bool World_markTileEntityForRemoval_base(World *world,MCObject *tile) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return false;
+    NativeReferenceList *destination=world->tileEntitiesToBeRemoved;
+    bool ok=NativeReferenceList_isInstance((MCObject *)destination)&&
+        pin(world,&scope,(MCObject *)destination)&&pin(world,&scope,tile)&&
+        NativeReferenceList_add(destination,tile);
+    return end(world,&scope,ok);
+}
+bool World_markTileEntityForRemoval(World *world,MCObject *tile) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return false;
+    bool ok=false;
+    if(!pin(world,&scope,tile)||!pin(world,&scope,world->dependencyContext))goto done;
+    const WorldDependencies *d=world->dependencies;
+    ok=d&&d->markTileEntityForRemoval?
+        d->markTileEntityForRemoval(world->dependencyContext,world,tile):
+        World_markTileEntityForRemoval_base(world,tile);
+done:return end(world,&scope,ok);
+}
+bool World_unloadEntities_base(World *world,MCObject *collection) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return false;
+    bool ok=false,changed=false;
+    /* Java evaluates the list receiver before the variable argument. A NULL
+       list fails at addAll invocation, before Collection.toArray is reached. */
+    NativeReferenceList *destination=world->unloadedEntityList;
+    if(!NativeReferenceList_isInstance((MCObject *)destination)||
+       !pin(world,&scope,(MCObject *)destination)||
+       !pin(world,&scope,collection)||!pin(world,&scope,world->dependencyContext))goto done;
+    const WorldDependencies *d=world->dependencies;
+    if(d&&d->collectionAddAll) {
+        ok=d->collectionAddAll(world->dependencyContext,destination,collection,&changed);
+    } else {
+        if(!collection)goto done;
+        NativeObjectArray *array=d&&d->collectionToArray?
+            d->collectionToArray(world->dependencyContext,collection):
+            NativeCollection_toArray(collection);
+        if(!NativeObjectArray_isInstance((MCObject *)array)||
+           !pin(world,&scope,(MCObject *)array))goto done;
+        ok=NativeReferenceList_addAllArray(destination,array,&changed);
+    }
+done:return end(world,&scope,ok);
+}
+bool World_unloadEntities(World *world,MCObject *collection) {
+    MCObjectRootScope scope={0};if(!begin(world,&scope))return false;
+    bool ok=false;
+    if(!pin(world,&scope,collection)||!pin(world,&scope,world->dependencyContext))goto done;
+    const WorldDependencies *d=world->dependencies;
+    ok=d&&d->unloadEntities?
+        d->unloadEntities(world->dependencyContext,world,collection):
+        World_unloadEntities_base(world,collection);
+done:return end(world,&scope,ok);
 }

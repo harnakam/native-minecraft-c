@@ -1,5 +1,6 @@
 #include "world/WorldProviderEnd.h"
 #include "world/WorldProviderInternal.h"
+#include <math.h>
 static void trace(MCObject *object,MCObjectVisitor visit,void *ctx) {WorldProvider_traceFields((WorldProvider *)object,visit,ctx);}
 static const MCObjectClass klass={"net.minecraft.world.WorldProviderEnd",MCObjectHeap_plainClone,trace,NULL};
 bool WorldProviderEnd_isInstance(const MCObject *o) {return o&&o->klass==&klass&&MCObjectHeap_objectSize(o)>=sizeof(WorldProviderEnd);}
@@ -26,4 +27,11 @@ bool WorldProviderEnd_registerWorldChunkManager(WorldProviderEnd *self) {
     p->dimensionId=1;
     p->hasNoSky=true;ok=true;
 done:return NativeWorldProvider_end(p,&scope,ok);
+}
+float WorldProviderEnd_calculateCelestialAngle(WorldProviderEnd *p,int64_t time,float partial) {
+    (void)time;(void)partial;
+    if(!WorldProviderEnd_isInstance((MCObject *)p)||MCObjectHeap_failed(p->provider.object.heap)) {
+        MCObjectHeap_fail(p?p->provider.object.heap:NULL);return NAN;
+    }
+    return 0.0f;
 }

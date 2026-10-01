@@ -78,6 +78,8 @@ bool Entity_moveToBlockPosAndAngles(Entity *,DataWatcherBlockPos *,float,float);
 AxisAlignedBB *Entity_getEntityBoundingBox(Entity *);
 bool Entity_setEntityBoundingBox(Entity *,AxisAlignedBB *);
 int32_t Entity_getEntityId(const Entity *);
+bool Entity_equals(Entity *,MCObject *);
+int32_t Entity_hashCode(Entity *);
 void Entity_setEntityId(Entity *,int32_t);
 DataWatcher *Entity_getDataWatcher(Entity *);
 NativeJavaUUID *Entity_getUniqueID(Entity *);

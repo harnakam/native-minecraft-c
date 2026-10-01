@@ -84,6 +84,35 @@ bool NativeReferenceList_add(NativeReferenceList *list,MCObject *value) {
     }
     MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(list->object.heap);
 }
+bool NativeReferenceList_addAllArray(NativeReferenceList *list,NativeObjectArray *array,bool *changed) {
+    MCObjectRootScope scope={0};if(!begin(list,&scope))return false;
+    bool ok=false;
+    if(!changed||!NativeObjectArray_isInstance((MCObject *)array)||
+       array->object.heap!=list->object.heap||!MCObjectRootScope_pin(&scope,(MCObject *)array))goto done;
+    int32_t count=array->length;
+    for(int32_t i=0;i<count;i++)
+        if(!MCObjectRootScope_pin(&scope,array->values[i]))goto done;
+    /* ArrayList.ensureExplicitCapacity increments before any growth, even
+       when numNew is zero. Allocation failure retains this source prefix. */
+    ++list->modCount;MCObjectHeap_touch(list->object.heap);
+    int64_t required=(int64_t)list->size+count;
+    if(required>INT32_MAX)goto done;
+    if(required>list->storage->capacity) {
+        int32_t old=list->storage->capacity;
+        int32_t capacity=old==0?4:old>INT32_MAX/2?INT32_MAX:old*2;
+        if(capacity<required)capacity=(int32_t)required;
+        NativeReferenceArray *storage=array_new(list->object.heap,capacity);
+        if(!storage)goto done;
+        if(list->size)memcpy(storage->items,list->storage->items,(size_t)list->size*sizeof(*storage->items));
+        list->storage=storage;MCObjectHeap_touch(list->object.heap);
+    }
+    if(count)memcpy(list->storage->items+list->size,array->values,(size_t)count*sizeof(*array->values));
+    list->size=(int32_t)required;MCObjectHeap_touch(list->object.heap);
+    *changed=count!=0;ok=true;
+done:
+    if(!ok)failed(list->object.heap);
+    MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(list->object.heap);
+}
 MCObject *NativeReferenceList_set(NativeReferenceList *list,int32_t index,MCObject *value) {
     MCObjectRootScope scope={0};if(!begin(list,&scope))return NULL;
     MCObject *previous=NULL;

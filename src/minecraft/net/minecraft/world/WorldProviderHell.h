@@ -9,6 +9,7 @@ bool WorldProviderHell_construct(WorldProviderHell *);
 WorldProviderHell *WorldProviderHell_new(MCObjectHeap *,const WorldProviderDependencies *,MCObject *);
 bool WorldProviderHell_registerWorldChunkManager(WorldProviderHell *);
 bool WorldProviderHell_generateLightBrightnessTable(WorldProviderHell *);
+float WorldProviderHell_calculateCelestialAngle(WorldProviderHell *,int64_t,float);
 WorldBorder *WorldProviderHell_getWorldBorder(WorldProviderHell *);
 bool WorldProviderHellBorder_isInstance(const MCObject *);
 WorldProviderHellBorder *WorldProviderHellBorder_nativeAllocate(MCObjectHeap *);
