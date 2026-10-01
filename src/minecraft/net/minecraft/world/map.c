@@ -290,9 +290,11 @@ bool mc_maps_decode(const mc_nbt *input,mc_maps *out) {
     mc_nbt_view root,list,v; int64_t version,next;
     if (!mc_nbt_root(input,&root) || !mc_nbt_find(&root,"Version",&v) || v.type!=3 || !integer(&root,"Version",&version) || version!=1 ||
         !mc_nbt_find(&root,"NextId",&v) || v.type!=3 || !integer(&root,"NextId",&next) || next<0 || next>UINT16_MAX ||
-        !mc_nbt_find(&root,"Maps",&list) || list.type!=9 || list.size<5 || list.data[0]!=10) return false;
+        !mc_nbt_find(&root,"Maps",&list) || list.type!=9 || list.size<5 || (list.data[0]!=10 && list.data[0]!=0)) return false;
     mc_buf b={0}; b.data=(uint8_t *)list.data; b.len=list.size; b.pos=1;
-    int32_t count=mc_get_i32(&b); if (count<0 || (unsigned)count>MC_MAX_MAPS) return false;
+    /* Source NBTTagList.write declares an empty list as type0. Native legacy
+       snapshots used type10; both encodings are valid only with count0. */
+    int32_t count=mc_get_i32(&b); if (count<0 || (unsigned)count>MC_MAX_MAPS || (count && list.data[0]!=10)) return false;
     mc_maps copy={0}; copy.next_id=(int32_t)next;
     if (!mc_nbt_copy(&copy.original_nbt,input)) return false;
     for (int32_t i=0;i<count;i++) {

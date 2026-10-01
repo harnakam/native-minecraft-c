@@ -40,6 +40,10 @@ bool mc_client_graph_place(MCGameplay *, int32_t x,int32_t y,int32_t z,int32_t f
 /* Native remote 20Hz adapter invokes source bodies directly, preserving their
    partial mutations on failure; it does not branch or roll back the graph. */
 bool mc_client_graph_tick_inventory(MCGameplay *);
+/* Native key-state adapter; original MovementInputFromOptions/full SP tick
+   remain separate ports. Walking packet selection executes the source body. */
+bool mc_client_graph_set_input(MCGameplay *,float strafe,float forward,bool jump,bool sneak,bool sprint);
+bool mc_client_graph_tick_walking(MCGameplay *);
 /* Once-per-frame source update; only scalar results cross later graph adopts. */
 bool mc_client_graph_timer_frame(MCGameplay *,int32_t *elapsedTicks,float *renderPartialTicks);
 bool mc_client_graph_bind_hotbar(MCGameplay *,const GuiIngameHotbarDependencies *);

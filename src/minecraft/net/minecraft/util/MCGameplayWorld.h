@@ -4,6 +4,7 @@
 #include "item/crafting/CraftingManager.h"
 #include "world/map.h"
 #include "util/NativeJavaRandomRuntime.h"
+#include "world/storage/MapStorage.h"
 
 typedef struct StatBase StatBase;
 typedef struct StatList StatList;
@@ -40,6 +41,9 @@ typedef struct MCGameplayWorld {
     NativeJavaRandomRuntime *randomRuntime;
     int64_t worldTime;
     bool hasNoSky;
+    /* Sole authoritative map-ID state; actual provider selects virtual behavior.
+       mc_maps.next_id is only a legacy standalone/import/export field. */
+    MapStorage *mapStorage;
 } MCGameplayWorld;
 MCGameplayWorld *MCGameplayWorld_new(MCObjectHeap *,MCGameplayObjects *,const mc_world *,CraftingManager *);
 /* Explicit native inherited RNG segment: temporary Random/updateLCG, separate

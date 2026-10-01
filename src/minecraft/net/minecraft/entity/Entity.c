@@ -83,6 +83,8 @@ bool Entity_setFlag(Entity *entity,int32_t flag,bool set) {
 }
 bool Entity_isSneaking(Entity *entity) {return Entity_getFlag(entity,1);}
 bool Entity_setSneaking(Entity *entity,bool sneaking) {return Entity_setFlag(entity,1,sneaking);}
+bool Entity_isSprinting(Entity *entity) {return Entity_getFlag(entity,3);}
+bool Entity_setSprinting(Entity *entity,bool sprinting) {return Entity_setFlag(entity,3,sprinting);}
 bool Entity_setPosition(Entity *entity,double x,double y,double z) {
     MCObjectRootScope scope={0};if(!begin(entity,&scope))return false;
     entity->posX=x;entity->posY=y;entity->posZ=z;MCObjectHeap_touch(entity->object.heap);

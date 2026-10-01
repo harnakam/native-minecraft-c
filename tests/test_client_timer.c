@@ -37,7 +37,7 @@ static mc_client *client(mc_conn *peer) {
     mc_client *c=calloc(1,sizeof *c); REQUIRE(c); mc_conn_init(&c->connection,writer); mc_conn_init(peer,reader);
     mc_world_init(&c->world,0); REQUIRE(mc_world_set(&c->world,8,0,8,16)); REQUIRE(mc_client_graph_init(&c->gameplay,&c->world,"TimerRuntime"));
     c->state=1; c->joined=true; c->positioned=true; c->inventory_ready=true; c->gamemode=1;
-    c->x=8.5; c->y=6; c->z=8.5; c->last_receive_ms=mc_time_ms(); c->last_move_ms=mc_time_ms();
+    c->x=8.5; c->y=6; c->z=8.5; c->last_receive_ms=mc_time_ms();
     MCObjectRootScope scope={0}; REQUIRE(MCObjectRootScope_begin(&scope,c->gameplay.heap)); MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
     Clock *clock=(Clock *)MCObjectHeap_alloc(c->gameplay.heap,sizeof *clock,&clock_class); REQUIRE(clock);
     clock->system=100; clock->nano=INT64_C(2000000000); b->timer=Timer_new(c->gameplay.heap,20,&clocks,(MCObject *)clock); REQUIRE(b->timer);
@@ -149,10 +149,71 @@ static void ability_input_and_source_authority(void) {
     REQUIRE(mc_client_graph_bindings(&c->gameplay)->controller->currentGameType==&WorldSettingsGameType_CREATIVE);
     MCObjectRootScope_end(&scope);destroy(c,&peer);
 }
+static mc_buf walking_wire(mc_client *c,mc_conn *peer,int32_t expected) {
+    for(unsigned i=0;i<1000;i++) {
+        REQUIRE(mc_conn_poll(&c->connection)&&mc_conn_poll(peer));
+        mc_buf wire={0};int ready=mc_conn_next(peer,&wire);REQUIRE(ready>=0);
+        if(ready) {REQUIRE(mc_get_varint(&wire)==expected);return wire;}
+        mc_buf_free(&wire);mc_sleep_ms(1);
+    }
+    REQUIRE(false);return (mc_buf){0};
+}
+static void action_wire(mc_client *c,mc_conn *peer,int32_t action) {
+    mc_buf wire=walking_wire(c,peer,0x0b);
+    REQUIRE(mc_get_varint(&wire)==c->entity_id&&mc_get_varint(&wire)==action&&mc_get_varint(&wire)==0);
+    REQUIRE(!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+}
+static void walking_source_runtime(void) {
+    mc_conn peer;mc_client *c=client(&peer);c->entity_id=91;
+    mc_input input={0};input.select_slot=-1;input.creative_pick=-1;input.paused=true;
+    update_player(c,&input,0,1);REQUIRE(!c->failed);
+    mc_buf wire=walking_wire(c,&peer,4);
+    REQUIRE(mc_get_f64(&wire)==8.5&&mc_get_f64(&wire)==6&&mc_get_f64(&wire)==8.5&&mc_get_u8(&wire)==0);
+    REQUIRE(!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    for(unsigned i=0;i<20;i++) {
+        update_player(c,&input,0,1);REQUIRE(!c->failed);
+        wire=walking_wire(c,&peer,3);REQUIRE(mc_get_u8(&wire)==0&&!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    }
+    update_player(c,&input,0,1);REQUIRE(!c->failed);wire=walking_wire(c,&peer,4);
+    REQUIRE(mc_get_f64(&wire)==8.5&&mc_get_f64(&wire)==6&&mc_get_f64(&wire)==8.5&&mc_get_u8(&wire)==0);
+    REQUIRE(!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    c->yaw=90;c->pitch=-30;update_player(c,&input,0,1);REQUIRE(!c->failed);
+    wire=walking_wire(c,&peer,5);REQUIRE(mc_get_f32(&wire)==90&&mc_get_f32(&wire)==-30&&mc_get_u8(&wire)==0);
+    REQUIRE(!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    c->x=9.5;c->yaw=45;update_player(c,&input,0,1);REQUIRE(!c->failed);
+    wire=walking_wire(c,&peer,6);
+    REQUIRE(mc_get_f64(&wire)==9.5&&mc_get_f64(&wire)==6&&mc_get_f64(&wire)==8.5);
+    REQUIRE(mc_get_f32(&wire)==45&&mc_get_f32(&wire)==-30&&mc_get_u8(&wire)==0);
+    REQUIRE(!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    input.paused=false;input.sprint=true;input.down=true;update_player(c,&input,0,1);REQUIRE(!c->failed);
+    action_wire(c,&peer,C0B_START_SPRINTING);action_wire(c,&peer,C0B_START_SNEAKING);
+    wire=walking_wire(c,&peer,3);REQUIRE(mc_get_u8(&wire)==0&&!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    MCObjectRootScope scope={0};REQUIRE(MCObjectRootScope_begin(&scope,c->gameplay.heap));
+    MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
+    REQUIRE(b->sp->serverSprintState&&b->sp->serverSneakState&&b->sp->movementInput->sneak);
+    REQUIRE(Entity_isSprinting(&b->player->living.entity)&&!Entity_isSneaking(&b->player->living.entity));
+    b->player->sleeping=true;MCObjectHeap_touch(c->gameplay.heap);MCObjectRootScope_end(&scope);
+    update_player(c,&input,0,1);REQUIRE(!c->failed);action_wire(c,&peer,C0B_STOP_SNEAKING);
+    wire=walking_wire(c,&peer,3);REQUIRE(mc_get_u8(&wire)==0&&!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    input.sprint=false;input.down=false;update_player(c,&input,0,1);REQUIRE(!c->failed);
+    action_wire(c,&peer,C0B_STOP_SPRINTING);wire=walking_wire(c,&peer,3);
+    REQUIRE(mc_get_u8(&wire)==0&&!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    /* The S08 native adapter must always ACK with C06 and onGround=false,
+       independent of Source normal walking's movement/rotation history. */
+    mc_buf correction;start_packet(&correction,8);
+    mc_put_f64(&correction,10.5);mc_put_f64(&correction,6);mc_put_f64(&correction,8.5);
+    mc_put_f32(&correction,45);mc_put_f32(&correction,-30);mc_put_u8(&correction,0);
+    handle_packet(c,&correction);REQUIRE(!c->failed&&!correction.failed);mc_buf_free(&correction);
+    wire=walking_wire(c,&peer,6);
+    REQUIRE(mc_get_f64(&wire)==10.5&&mc_get_f64(&wire)==6&&mc_get_f64(&wire)==8.5);
+    REQUIRE(mc_get_f32(&wire)==45&&mc_get_f32(&wire)==-30&&mc_get_u8(&wire)==0);
+    REQUIRE(!wire.failed&&wire.pos==wire.len);mc_buf_free(&wire);
+    destroy(c,&peer);
+}
 int main(void) {
     REQUIRE(mc_net_init()); const TimerDependencies *real=mc_client_timer_clocks(); int64_t sys0,sys1,nano0,nano1;
     REQUIRE(real->getSystemTime(NULL,&sys0) && real->nanoTime(NULL,&nano0)); REQUIRE(real->getSystemTime(NULL,&sys1) && real->nanoTime(NULL,&nano1));
     REQUIRE(sys1>=sys0 && nano1>=nano0 && !real->getSystemTime(NULL,NULL) && !real->nanoTime(NULL,NULL));
-    capped_and_discarded(); one_shot(0); one_shot(2); one_shot(10); one_shot(-2); adoption_and_lifetime(); ability_input_and_source_authority(); failed_clock(); mc_net_shutdown();
+    walking_source_runtime();capped_and_discarded(); one_shot(0); one_shot(2); one_shot(10); one_shot(-2); adoption_and_lifetime(); ability_input_and_source_authority(); failed_clock(); mc_net_shutdown();
     printf("client source Timer runtime: %u checks GREEN\n",checks); return 0;
 }

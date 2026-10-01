@@ -3,6 +3,11 @@
     static bool write_##type(MCObject *o, PacketBuffer *b) {                                       \
         return type##_writePacketData((type *)o, b);                                               \
     }
+CODEC(C03PacketPlayer)
+CODEC(C04PacketPlayerPosition)
+CODEC(C05PacketPlayerLook)
+CODEC(C06PacketPlayerPosLook)
+CODEC(C0BPacketEntityAction)
 CODEC(C08PacketPlayerBlockPlacement)
 CODEC(C07PacketPlayerDigging)
 CODEC(C09PacketHeldItemChange)
@@ -13,6 +18,11 @@ CODEC(C10PacketCreativeInventoryAction)
 CODEC(C13PacketPlayerAbilities)
 #undef CODEC
 static const MCPacketCodec codecs[] = {
+    {0x03, C03PacketPlayer_nativeBaseIsInstance, write_C03PacketPlayer},
+    {0x04, C04PacketPlayerPosition_isInstance, write_C04PacketPlayerPosition},
+    {0x05, C05PacketPlayerLook_isInstance, write_C05PacketPlayerLook},
+    {0x06, C06PacketPlayerPosLook_isInstance, write_C06PacketPlayerPosLook},
+    {0x0b, C0BPacketEntityAction_isInstance, write_C0BPacketEntityAction},
     {0x07, C07PacketPlayerDigging_isInstance, write_C07PacketPlayerDigging},
     {0x08, C08PacketPlayerBlockPlacement_isInstance, write_C08PacketPlayerBlockPlacement},
     {0x09, C09PacketHeldItemChange_isInstance, write_C09PacketHeldItemChange},

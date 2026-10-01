@@ -5,6 +5,7 @@
 #include "network/play/client/C07PacketPlayerDigging.h"
 #include "network/play/client/C0DPacketCloseWindow.h"
 #include "stats/StatBase.h"
+#include "util/MovementInput.h"
 
 typedef struct EntityPlayerSP EntityPlayerSP;
 typedef struct {
@@ -14,12 +15,28 @@ typedef struct {
        retains its old Container, which is closed after openContainer resets. */
     bool (*displayGuiScreenNull)(MCObject *context, MCObject *mc);
 } EntityPlayerSPDependencies;
+/* Actual source virtual calls. Boolean completion is the native exception
+   boundary, separate from the returned boolean. GUI/render-view/full SP tick
+   implementations are required native dependencies, not invented defaults. */
+typedef struct {
+    bool (*isSprinting)(MCObject *context,EntityPlayerSP *,bool *out);
+    bool (*isSneaking)(MCObject *context,EntityPlayerSP *,bool *out);
+    bool (*isCurrentViewEntity)(MCObject *context,EntityPlayerSP *,bool *out);
+    AxisAlignedBB *(*getEntityBoundingBox)(MCObject *context,EntityPlayerSP *);
+} EntityPlayerSPWalkingDependencies;
 struct EntityPlayerSP {
     MCObject object;
     MCGameplayPlayer *nativeActor;
     NetHandlerPlayClient *sendQueue;
     MCObject *mc, *dependencyContext;
     const EntityPlayerSPDependencies *dependencies;
+    double lastReportedPosX,lastReportedPosY,lastReportedPosZ;
+    float lastReportedYaw,lastReportedPitch;
+    bool serverSprintState,serverSneakState;
+    int32_t positionUpdateTicks;
+    MovementInput *movementInput;
+    MCObject *walkingContext;
+    const EntityPlayerSPWalkingDependencies *walkingDependencies;
 };
 /* Native storage for this source-method subset; not the complete SP/base Entity
    constructor. Context/controller/actor refs are traced and never value mirrors. */
@@ -35,4 +52,7 @@ bool EntityPlayerSP_closeScreenAndDropStack(EntityPlayerSP *);
 bool EntityPlayerSP_joinEntityItemWithWorld(EntityPlayerSP *, EntityItem *);
 bool EntityPlayerSP_addStat(EntityPlayerSP *, StatBase *, int32_t amount);
 bool EntityPlayerSP_triggerAchievement(EntityPlayerSP *, StatBase *);
+bool EntityPlayerSP_bindWalking(EntityPlayerSP *,MCObject *context,const EntityPlayerSPWalkingDependencies *);
+bool EntityPlayerSP_onUpdateWalkingPlayer(EntityPlayerSP *);
+bool EntityPlayerSP_isSneaking(EntityPlayerSP *);
 #endif

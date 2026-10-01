@@ -1,5 +1,6 @@
 #include "client/native_runtime.h"
 #include "entity/player/EntityPlayer.h"
+#include "world/storage/SaveDataMemoryStorage.h"
 #include "client/native_timer_clock.h"
 #include "util/MCGameplayCrafting.h"
 #include "item/ItemStackCrafting.h"
@@ -160,6 +161,45 @@ static const PlayerControllerMPActionsDependencies action_deps={.getPlayer=get_p
     .addHeldItemToSendQueue=queue_held,.addCreativeItemToSendQueue=queue_creative,
     .addPlacementToSendQueue=queue_place,.itemUse=&item_use};
 static const EntityPlayerSPDependencies sp_deps={.addToSendQueue=queue_any,.blockPosOrigin=origin,.displayGuiScreenNull=display_null};
+static bool walking_actor(MCObject *c,EntityPlayerSP *sp) {
+    MCClientBindings *b=binding(c);
+    return b && b->sp==sp && sp->nativeActor==b->player;
+}
+static bool walking_sprint(MCObject *c,EntityPlayerSP *sp,bool *out) {
+    if(!walking_actor(c,sp)||!out)return false;
+    *out=Entity_isSprinting(&sp->nativeActor->living.entity);return !MCObjectHeap_failed(c->heap);
+}
+static bool walking_sneak(MCObject *c,EntityPlayerSP *sp,bool *out) {
+    if(!walking_actor(c,sp)||!out)return false;
+    *out=EntityPlayerSP_isSneaking(sp);return !MCObjectHeap_failed(c->heap);
+}
+static bool walking_view(MCObject *c,EntityPlayerSP *sp,bool *out) {
+    if(!walking_actor(c,sp)||!out)return false;
+    /* Native renderer currently owns this exact local SP view. */
+    *out=true;return true;
+}
+static AxisAlignedBB *walking_box(MCObject *c,EntityPlayerSP *sp) {
+    return walking_actor(c,sp)?Entity_getEntityBoundingBox(&sp->nativeActor->living.entity):NULL;
+}
+static const EntityPlayerSPWalkingDependencies walking_deps={walking_sprint,walking_sneak,walking_view,walking_box};
+bool mc_client_graph_set_input(MCGameplay *g,float strafe,float forward,bool jump,bool sneak,bool sprint) {
+    MCObjectRootScope scope={0};if(!g||!MCObjectRootScope_begin(&scope,g->heap))return false;
+    MCClientBindings *b=mc_client_graph_bindings(g);
+    bool ok=b && MovementInput_isInstance((MCObject *)b->sp->movementInput);
+    if(ok) {
+        MovementInput *input=b->sp->movementInput;
+        input->moveStrafe=strafe;input->moveForward=forward;input->jump=jump;input->sneak=sneak;
+        MCObjectHeap_touch(g->heap);
+        if(Entity_isSprinting(&b->player->living.entity)!=sprint)
+            ok=EntityLivingBase_setSprinting(&b->player->living,sprint);
+    }
+    if(!ok)MCObjectHeap_fail(g->heap);
+    MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(g->heap);
+}
+bool mc_client_graph_tick_walking(MCGameplay *g) {
+    MCClientBindings *b=mc_client_graph_bindings(g);
+    return b && EntityPlayerSP_onUpdateWalkingPlayer(b->sp);
+}
 
 static NBTString *display_name(MCObject *c,const ItemStack *s) {
     if (!c || !s || s->object.heap!=c->heap) return NULL;
@@ -298,7 +338,27 @@ static float random_float(MCObject *c,MCGameplayPlayer *p) {
 static bool size_entity(MCObject *c,EntityItem *e,float w,float h) { return binding(c) && Entity_setSize(&e->entity,w,h); }
 static bool position_entity(MCObject *c,EntityItem *e,double x,double y,double z) { return binding(c) && Entity_setPosition(&e->entity,x,y,z); }
 static const EntityItemConstructorDependencies constructors={base_constructor,random_double,size_entity,position_entity};
-static float eye(MCObject *c,MCGameplayPlayer *p) { (void)c; return EntityPlayer_getEyeHeight(p); }
+static MCClientBindings *eye_binding(MCObject *c,MCGameplayPlayer *p) {
+    MCClientBindings *b=binding(c);
+    if(!b||MCObjectHeap_objectSize(c)<sizeof(*b)||b->player!=p||
+        !MCGameplayPlayer_isInstance((MCObject *)p)||p->living.entity.object.heap!=c->heap||
+        !EntityPlayerSP_isInstance((MCObject *)b->sp)||b->sp->object.heap!=c->heap||
+        b->sp->nativeActor!=p)return NULL;
+    return b;
+}
+static bool eye_sleeping(MCObject *c,MCGameplayPlayer *p,bool *out) {
+    if(!out||!eye_binding(c,p))return false;
+    /* EntityPlayer.isPlayerSleeping's original direct field getter. */
+    *out=p->sleeping;return true;
+}
+static bool eye_sneaking(MCObject *c,MCGameplayPlayer *p,bool *out) {
+    MCClientBindings *b=eye_binding(c,p);if(!b||!out)return false;
+    *out=EntityPlayerSP_isSneaking(b->sp);return !MCObjectHeap_failed(c->heap);
+}
+static float eye(MCObject *c,MCGameplayPlayer *p) {
+    static const EntityPlayerEyeHeightDependencies d={eye_sleeping,eye_sneaking};
+    return EntityPlayer_getEyeHeightWithDispatch(p,c,&d);
+}
 static NBTString *player_name(MCObject *c,MCGameplayPlayer *p) { return binding(c) ? EntityPlayer_getName(p) : NULL; }
 static bool join_entity(MCObject *c,MCGameplayPlayer *p,EntityItem *e) {
     MCClientBindings *b=binding(c); return b && b->player==p && EntityPlayerSP_joinEntityItemWithWorld(b->sp,e);
@@ -348,7 +408,12 @@ bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name
     if (!g || !terrain || !name || !MCGameplay_init(g,64u*1024u*1024u)) return false;
     MCObjectRootScope scope={0}; bool ok=MCObjectRootScope_begin(&scope,g->heap);
     MCGameplayWorld *w=ok ? MCGameplayWorld_new(g->heap,MCGameplay_get(g),terrain,NULL) : NULL;
-    if (w) { w->remote=true; ok=MCGameplay_setWorld(g,(MCObject *)w); }
+    if (w) {
+        w->remote=true;
+        SaveDataMemoryStorage *memory=SaveDataMemoryStorage_nativeNewCounterProvider(g->heap);
+        if(memory)w->mapStorage=&memory->base;
+        ok=memory&&MCGameplay_setWorld(g,(MCObject *)w);
+    }
     MCClientBindings *b=ok ? (MCClientBindings *)MCObjectHeap_alloc(g->heap,sizeof(*b),&klass) : NULL;
     if (b) b->timer=Timer_new(g->heap,20.0f,mc_client_timer_clocks(),NULL);
     ok=ok && b && b->timer;
@@ -366,7 +431,9 @@ bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name
         NetHandlerPlayClient *h=NetHandlerPlayClient_nativeNew(p,(MCObject *)b,(MCObject *)b,&handler_deps);
         b->controller=h ? PlayerControllerMP_nativeNew(g->heap,h,(MCObject *)b,&controller_deps) : NULL;
         b->sp=h ? EntityPlayerSP_nativeNew(p,h,(MCObject *)b,(MCObject *)b,&sp_deps) : NULL;
-        ok=p->gameProfile->id && b->origin && b->controller && b->sp && MCGameplay_setPlayer(g,0,text,(MCObject *)p) && MCGameplayClientPackets_bind(p) &&
+        if(b->sp)b->sp->movementInput=MovementInput_new(g->heap);
+        ok=p->gameProfile->id && b->origin && b->controller && b->sp && b->sp->movementInput &&
+            EntityPlayerSP_bindWalking(b->sp,(MCObject *)b,&walking_deps) && MCGameplay_setPlayer(g,0,text,(MCObject *)p) && MCGameplayClientPackets_bind(p) &&
             PlayerControllerMP_bindActions(b->controller,(MCObject *)b,(MCObject *)b,&action_deps);
     } else ok=false;
     MCObjectRootScope_end(&scope);

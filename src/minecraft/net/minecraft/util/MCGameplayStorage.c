@@ -1,5 +1,6 @@
 #include "util/MCGameplayStorage.h"
 #include "util/MCGameplayPackets.h"
+#include "world/WorldDataStorage.h"
 #include "inventory/ContainerWorkbench.h"
 #include "inventory/inventory_dispatch.h"
 #include "nbt/NBTTagString.h"
@@ -154,7 +155,18 @@ bool MCGameplayStorage_encodeItems(const MCGameplayObjects *objects,mc_nbt *outp
 bool MCGameplayStorage_encodeMaps(const MCGameplayObjects *objects,mc_nbt *output,void *context) {
     (void)context;MCObjectHeap *heap=objects?objects->object.heap:NULL;MCObjectRootScope scope={0};
     if (!MCObjectRootScope_begin(&scope,heap))return false;
-    MCGameplayWorld *w=world(objects);bool ok=w&&output&&mc_maps_encode(&w->maps,output);
+    MCGameplayWorld *w=world(objects);int32_t next=0;
+    mc_nbt encoded={0};NBTTagCompound *root=NULL;NBTString *name=NULL;
+    bool ok=w&&output&&World_nativeMapNextProjection(w,&next);
+    if(ok) {
+        /* Temporary legacy projection, never a second authoritative counter. */
+        mc_maps projected=w->maps;projected.next_id=next;
+        ok=mc_maps_encode(&projected,&encoded)&&decode_named(heap,&encoded,&root,&name);
+    }
+    NBTTagCompound *counts=ok?MapStorage_nativeSnapshotIdCounts(w->mapStorage):NULL;
+    ok=ok&&counts&&NBTTagCompound_setTag_ascii(root,"C919MapIdCounts",(NBTBase *)counts)&&
+       encode_named(heap,root,name,output);
+    mc_nbt_free(&encoded);
     if (!ok)fail(heap);
     MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(heap);
 }
@@ -271,7 +283,21 @@ bool MCGameplayStorage_loadMaps(MCGameplayWorld *w,const mc_nbt *input) {
     MCObjectHeap *heap=w?w->object.heap:NULL;MCObjectRootScope scope={0};
     if (!w||!MCGameplayWorld_isInstance((MCObject *)w))return fail(heap);
     if (!MCObjectRootScope_begin(&scope,heap))return false;
-    bool ok=input&&mc_maps_decode(input,&w->maps);if (ok)MCObjectHeap_touch(heap);else fail(heap);
+    NBTTagCompound *root=NULL;NBTString *name=NULL;
+    bool ok=input&&mc_maps_decode(input,&w->maps)&&decode_named(heap,input,&root,&name)&&
+        MapStorage_nativeClearIdCounts(w->mapStorage);
+    if(ok&&NBTTagCompound_hasKey_ascii(root,"C919MapIdCounts")) {
+        if(!NBTTagCompound_hasKeyType_ascii(root,"C919MapIdCounts",10))ok=false;
+        NBTTagCompound *counts=ok?NBTTagCompound_getCompoundTag_ascii(root,"C919MapIdCounts"):NULL;
+        ok=counts&&MapStorage_nativeImportIdCounts(w->mapStorage,counts,false);
+        int32_t projection=0;
+        ok=ok&&World_nativeMapNextProjection(w,&projection)&&projection==w->maps.next_id;
+    } else if(ok) {
+        /* Previous C919 snapshots retained NEXT bits only. Import one LAST
+           map namespace value; the legacy field ceases to own runtime state. */
+        ok=World_nativeImportMapNextProjection(w,w->maps.next_id);
+    }
+    if(ok){w->maps.next_id=0;MCObjectHeap_touch(heap);}else fail(heap);
     MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(heap);
 }
 static const MCGameplayEncoders encoders={MCGameplayStorage_encodePlayer,MCGameplayStorage_encodeItems,MCGameplayStorage_encodeMaps};

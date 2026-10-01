@@ -88,6 +88,8 @@ bool Entity_getFlag(Entity *,int32_t);
 bool Entity_setFlag(Entity *,int32_t,bool);
 bool Entity_isSneaking(Entity *);
 bool Entity_setSneaking(Entity *,bool);
+bool Entity_isSprinting(Entity *);
+bool Entity_setSprinting(Entity *,bool);
 
 /* Original inherited Entity method. EntityItem has no override. This body is
    intentionally empty in Entity.java; it supplies no native success hook.

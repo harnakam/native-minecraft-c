@@ -247,6 +247,28 @@ class MultiplayerTests(unittest.TestCase):
             self.assertNotEqual(newcomer.spawn[::2][:2], (8.5, 8.5))
             self.assertEqual(newcomer.block(int(newcomer.spawn[0]), int(newcomer.spawn[1]), int(newcomer.spawn[2])), 0)
 
+    def test_source_action_authority_and_movement_packet_decoders(self):
+        with tempfile.TemporaryDirectory() as folder, running_server(Path(folder) / "world.c919") as port:
+            peer = Peer(port)
+            try:
+                peer.login("WalkingSource")
+                x, y, z, yaw, pitch = peer.spawn[:5]
+                # Original processEntityAction uses the handler's bound player,
+                # ignores packet entityID, and accepts signed auxData.
+                for action in (0, 3, 4, 1, 5, 6):
+                    peer.send(0x0b, vint(-12345) + vint(action) + vint(-1))
+                # Source readUnsignedByte != 0 permits all ground byte values;
+                # the separate native server policy validates coordinates.
+                peer.send(3, b"\xff")
+                peer.send(4, struct.pack(">dddB", x, y, z, 255))
+                peer.send(5, struct.pack(">ffB", yaw, pitch, 255))
+                peer.send(6, struct.pack(">dddffB", x, y, z, yaw, pitch, 255))
+                peer.send(1, string("source movement decoded"))
+                message = read_string(peer.wait(2))[0]
+                self.assertIn("source movement decoded", message)
+            finally:
+                peer.close()
+
     def test_two_players_movement_chat_edit_and_visibility(self):
         with running_server(self.world) as port:
             alice = self.peer(port).login("Alice", fragmented=True)

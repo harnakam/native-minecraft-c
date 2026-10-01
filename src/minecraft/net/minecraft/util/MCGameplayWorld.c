@@ -9,6 +9,7 @@ static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
     world->statList=(StatList *)visitor((MCObject *)world->statList,context);
     world->itemDisplayContext=visitor(world->itemDisplayContext,context);
     world->nativeContext=visitor(world->nativeContext,context);
+    world->mapStorage=(MapStorage *)visitor((MCObject *)world->mapStorage,context);
     world->rand=(NativeJavaRandom *)visitor((MCObject *)world->rand,context);
     world->emptyMapUseStat=(StatBase *)visitor((MCObject *)world->emptyMapUseStat,context);
     world->savedItemFields=(NBTTagCompound *)visitor((MCObject *)world->savedItemFields,context);
@@ -56,6 +57,12 @@ MCGameplayWorld *MCGameplayWorld_newWithRandomRuntime(MCObjectHeap *heap,MCGamep
         if (ok) world->rand=NativeJavaRandomRuntime_newRandom(runtime,heap);
         ok=ok&&world->rand&&NativeJavaRandom_nextIntBound(world->rand,12000,&world->ambientTickCountdown);
         MCObjectHeap_touch(heap);
+    }
+    if(ok) {
+        /* Native partial World factory: base counter's original no-save-handler
+           branch. Journal persistence is the surrounding native environment. */
+        world->mapStorage=MapStorage_nativeNewCounterProvider(heap,NULL,NULL,NULL);
+        ok=world->mapStorage!=NULL;
     }
     if (!ok) MCObjectHeap_fail(heap);
     MCObjectRootScope_end(&scope);

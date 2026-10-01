@@ -1,9 +1,73 @@
 #include "entity/EntityLivingBase.h"
 #include "entity/SharedMonsterAttributes.h"
 #include "entity/ai/attributes/ServersideAttributeMap.h"
+#include "entity/ai/attributes/AttributeModifier.h"
 #include "util/CombatTracker.h"
 #include "util/MCGameplayPlayer.h"
 #include "util/MathHelper.h"
+
+static void statics_trace(MCObject *object, MCObjectVisitor visitor,
+                          void *context) {
+  EntityLivingBaseStaticFields *fields = (EntityLivingBaseStaticFields *)object;
+  fields->sprintingSpeedBoostModifierUUID = (NativeJavaUUID *)visitor(
+      (MCObject *)fields->sprintingSpeedBoostModifierUUID, context);
+  fields->sprintingSpeedBoostModifier = (AttributeModifier *)visitor(
+      (MCObject *)fields->sprintingSpeedBoostModifier, context);
+}
+static const MCObjectClass statics_class = {"native.EntityLivingBaseStatics",
+                                            MCObjectHeap_plainClone,
+                                            statics_trace, NULL};
+static bool statics_size(const MCObject *object, void *context) {
+  (void)context;
+  return MCObjectHeap_objectSize(object) >=
+         sizeof(EntityLivingBaseStaticFields);
+}
+const EntityLivingBaseStaticFields *
+EntityLivingBase_getStaticFields(MCObjectHeap *heap) {
+  if (!heap || MCObjectHeap_failed(heap))
+    return NULL;
+  EntityLivingBaseStaticFields *fields =
+      (EntityLivingBaseStaticFields *)MCObjectHeap_findObject(
+          heap, &statics_class, statics_size, NULL);
+  if (fields)
+    return fields;
+  MCObjectRootScope scope = {0};
+  if (!MCObjectRootScope_begin(&scope, heap))
+    return NULL;
+  fields = (EntityLivingBaseStaticFields *)MCObjectHeap_alloc(
+      heap, sizeof *fields, &statics_class);
+  if (!fields)
+    goto fail;
+  NBTString *id =
+      NBTString_literalASCII(heap, "662A6B8D-DA3E-4C1C-8813-96EA6097278D");
+  fields->sprintingSpeedBoostModifierUUID =
+      id ? NativeJavaUUID_fromString(heap, id) : NULL;
+  if (!fields->sprintingSpeedBoostModifierUUID)
+    goto fail;
+  NBTString *name = NBTString_literalASCII(heap, "Sprinting speed boost");
+  AttributeModifier *modifier =
+      name
+          ? AttributeModifier_new(heap, fields->sprintingSpeedBoostModifierUUID,
+                                  name, 0.30000001192092896, 2)
+          : NULL;
+  if (!modifier)
+    goto fail;
+  fields->sprintingSpeedBoostModifier =
+      AttributeModifier_setSaved(modifier, false);
+  if (!fields->sprintingSpeedBoostModifier)
+    goto fail;
+  /* Permanent native root models this initialized Java class's static refs.
+     The complete native heap snapshot preserves both edges and aliases. */
+  MCObjectRoot root = {0};
+  if (!MCObjectRoot_init(&root, heap, (MCObject *)fields))
+    goto fail;
+  MCObjectRootScope_end(&scope);
+  return fields;
+fail:
+  MCObjectHeap_fail(heap);
+  MCObjectRootScope_end(&scope);
+  return NULL;
+}
 
 bool EntityLivingBase_isInstance(const MCObject *object) {
     return MCGameplayPlayer_isInstance(object)&&MCObjectHeap_objectSize(object)>=sizeof(EntityLivingBase);
@@ -63,6 +127,7 @@ bool EntityLivingBase_construct(EntityLivingBase *self,MCObject *world,
     NativeJavaRandomRuntime *random,NativeEntityIDRuntime *ids) {
     MCObjectRootScope scope={0};if(!begin(self,&scope))return false;
     MCObjectHeap *heap=self->entity.object.heap;bool ok=false;double draw;
+    if(!EntityLivingBase_getStaticFields(heap))goto done;
     /* Native virtual dispatch must already be available when Entity invokes
        entityInit. These adapter fields are not Java declaration initializers. */
     if(!living||(livingContext&&livingContext->heap!=heap)||
@@ -98,6 +163,45 @@ bool EntityLivingBase_construct(EntityLivingBase *self,MCObject *world,
 done:
     if(!ok)MCObjectHeap_fail(heap);
     MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(heap);
+}
+
+bool EntityLivingBase_setSprinting(EntityLivingBase *self, bool sprinting) {
+  MCObjectRootScope scope = {0};
+  if (!begin(self, &scope))
+    return false;
+  MCObjectHeap *heap = self->entity.object.heap;
+  bool ok = false;
+  const EntityLivingBaseStaticFields *fields =
+      EntityLivingBase_getStaticFields(heap);
+  if (!fields || !Entity_setSprinting(&self->entity, sprinting))
+    goto done;
+  const EntityLivingBaseDependencies *d = self->livingDependencies;
+  SharedMonsterAttributes *attributes = SharedMonsterAttributes_get(heap);
+  if (!attributes || !d || !d->getEntityAttribute)
+    goto done;
+  IAttributeInstance *instance = d->getEntityAttribute(
+      self->livingContext, self, attributes->movementSpeed);
+  if (MCObjectHeap_failed(heap) || !valid_attribute(self, instance) ||
+      !MCObjectRootScope_pin(&scope, (MCObject *)instance))
+    goto done;
+  AttributeModifier *existing = IAttributeInstance_getModifier(
+      instance, fields->sprintingSpeedBoostModifierUUID);
+  if (MCObjectHeap_failed(heap))
+    goto done;
+  if (existing &&
+      !effect(self, IAttributeInstance_removeModifier(
+                        instance, fields->sprintingSpeedBoostModifier)))
+    goto done;
+  if (sprinting &&
+      !effect(self, IAttributeInstance_applyModifier(
+                        instance, fields->sprintingSpeedBoostModifier)))
+    goto done;
+  ok = true;
+done:
+  if (!ok)
+    MCObjectHeap_fail(heap);
+  MCObjectRootScope_end(&scope);
+  return ok && !MCObjectHeap_failed(heap);
 }
 
 bool EntityLivingBase_entityInit(EntityLivingBase *self) {

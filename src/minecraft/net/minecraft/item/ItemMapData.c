@@ -1,4 +1,5 @@
 #include "item/ItemMapData.h"
+#include "world/WorldDataStorage.h"
 #include <limits.h>
 #include <math.h>
 #include <stdlib.h>
@@ -14,11 +15,12 @@ void ItemMapData_calculateMapCenter(mc_map_info *map,double x,double z,int32_t s
     map->center_z=bits((uint32_t)b*(uint32_t)size+(uint32_t)(size/2)-64u);
 }
 int32_t ItemMapData_getUniqueDataId(MCGameplayWorld *world) {
-    MCObjectHeap *h=world?world->object.heap:NULL;
-    if(!MCGameplayWorld_isInstance((MCObject *)world)){MCObjectHeap_fail(h);return 0;}
-    if(world->maps.next_id<0||world->maps.next_id>UINT16_MAX){MCObjectHeap_fail(h);return 0;}
-    uint16_t value=(uint16_t)world->maps.next_id;int16_t source;memcpy(&source,&value,sizeof(source));
-    world->maps.next_id=(int32_t)((value+1u)&UINT16_MAX);MCObjectHeap_touch(h);return source;
+    MCObjectHeap *heap=world?world->object.heap:NULL;MCObjectRootScope scope={0};
+    if(!MCObjectRootScope_begin(&scope,heap))return 0;
+    NBTString *key=NBTString_fromASCII(heap,"map");int32_t value=0;
+    bool ok=key&&World_getUniqueDataId(world,key,&value);
+    if(!ok)MCObjectHeap_fail(heap);
+    MCObjectRootScope_end(&scope);return value;
 }
 mc_map_info *ItemMapData_nativeSetItemData(MCGameplayWorld *world,const mc_map_info *source) {
     MCObjectHeap *h=world?world->object.heap:NULL;

@@ -1,5 +1,6 @@
 #include "item/ItemEmptyMap.h"
 #include "item/ItemMapData.h"
+#include "world/WorldDataStorage.h"
 #include "entity/player/EntityPlayerDrops.h"
 #include "entity/player/EntityPlayerMPStats.h"
 #include "stats/StatFileWriter.h"
@@ -11,6 +12,11 @@
 #include <string.h>
 static unsigned checks;
 #define CHECK(x) do { ++checks; if(!(x)) {fprintf(stderr,"%s:%d: %s\n",__FILE__,__LINE__,#x);exit(1);} } while(0)
+static int32_t map_next(const MCGameplayWorld *w) {
+    int32_t value=-1;CHECK(w->maps.next_id==0);
+    CHECK(MCObjectHeap_failed(w->object.heap)?MapStorage_nativeGetMapNextProjectionDiagnostic(w->mapStorage,&value):World_nativeMapNextProjection(w,&value));
+    return value;
+}
 typedef struct {
     MCObject object;
     MCGameplayPlayer *player;
@@ -111,7 +117,7 @@ static Fixture *setup(MCGameplay *g,int32_t count,bool full,bool creative,bool r
     MCGameplayPlayer *p=MCGameplayPlayer_new(world,n,stats,&crafting);CHECK(p&&MCGameplay_setPlayer(g,0,"11111111-1111-1111-1111-111111111111",(MCObject *)p));
     Fixture *f=(Fixture *)MCObjectHeap_alloc(g->heap,sizeof(*f),&fixtureClass);CHECK(f);f->player=p;p->effects=(MCObject *)f;
     f->stat=StatBase_newIdentity(g->heap,NBTString_fromASCII(g->heap,"stat.useItem.minecraft.map"),STAT_BASE_KIND_BASE);CHECK(f->stat);
-    p->capabilities->isCreativeMode=creative;world->remote=remote;world->dimension=dimension;world->maps.next_id=next;p->living.entity.posX=x;p->living.entity.posZ=z;p->living.entity.posY=64;
+    p->capabilities->isCreativeMode=creative;world->remote=remote;world->dimension=dimension;CHECK(World_nativeImportMapNextProjection(world,next));p->living.entity.posX=x;p->living.entity.posZ=z;p->living.entity.posY=64;
     if(full)for(int i=1;i<36;i++)CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,i,ItemStack_new(g->heap,ItemStack_registryItem(1),64,0)));
     f->input=ItemStack_new(g->heap,ItemStack_registryItem(395),count,0);CHECK(f->input&&InventoryPlayer_setInventorySlotContents(p->inventory,0,f->input));
     CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,38,f->input)); /* Cross-owner source alias. */
@@ -126,7 +132,7 @@ static void cases(bool facts) {
         ItemStack *out=ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),f->input,((MCGameplayWorld *)(f->player->living.entity.worldObj)),f->player,&deps,(MCObject *)f);
         MCGameplayWorld *w=((MCGameplayWorld *)(f->player->living.entity.worldObj));int32_t remainingCount=decr(counts[ci]);int32_t mapId=ids[ii]<32768?ids[ii]:0;
         CHECK(out&&!MCObjectHeap_failed(g.heap)&&!MCObjectHeap_hasBorrowers(g.heap));CHECK(f->input->stackSize==remainingCount&&InventoryPlayer_getStackInSlot(f->player->inventory,38)==f->input);
-        CHECK(w->maps.count==1&&w->maps.next_id==((ids[ii]+1)&65535));mc_map_info *map=&w->maps.entries[0];CHECK(map->id==mapId&&map->scale==0&&map->dimension==1&&map->dirty&&map->metadata_known);
+        CHECK(w->maps.count==1&&map_next(w)==((ids[ii]+1)&65535));mc_map_info *map=&w->maps.entries[0];CHECK(map->id==mapId&&map->scale==0&&map->dimension==1&&map->dirty&&map->metadata_known);
         int inserted=0;ItemStack *stored=NULL;for(int i=1;i<36;i++){ItemStack *s=InventoryPlayer_getStackInSlot(f->player->inventory,i);if(s&&s->item==ItemStack_registryItem(358)){++inserted;stored=s;}}
         if(remainingCount<=0) {CHECK(out!=f->input&&out->stackSize==1&&out->itemDamage==mapId&&f->callbacks==0&&inserted==0&&w->owners->itemCount==0);}
         else {CHECK(out==f->input&&f->lookups==1&&f->triggers==1&&StatFileWriter_readStat(f->player->stats,f->stat)==1);CHECK(f->drops==(unsigned)(full&&!creative));CHECK(inserted==!full);if(stored)CHECK(stored->stackSize==1&&stored->itemDamage==mapId&&stored!=out);if(f->entity)CHECK(EntityItem_getEntityItem(f->entity)==f->dropped&&f->entity->thrower==NULL&&w->owners->itemCount==1);}
@@ -140,7 +146,7 @@ static void failures(void) {
         MCGameplayPlayer *p=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];Fixture *c=(Fixture *)p->effects;c->failAt=at;
         CHECK(c!=f&&c->input==InventoryPlayer_getStackInSlot(p->inventory,0)&&c->input==InventoryPlayer_getStackInSlot(p->inventory,38));
         CHECK(!ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),c->input,((MCGameplayWorld *)(p->living.entity.worldObj)),p,&deps,(MCObject *)c));CHECK(MCObjectHeap_failed(tx.working.heap)&&c->callbacks==at&&!MCObjectHeap_hasBorrowers(tx.working.heap));
-        CHECK(f->input->stackSize==2&&((MCGameplayWorld *)(f->player->living.entity.worldObj))->maps.count==0&&((MCGameplayWorld *)(f->player->living.entity.worldObj))->maps.next_id==0&&StatFileWriter_readStat(f->player->stats,f->stat)==0);
+        CHECK(f->input->stackSize==2&&((MCGameplayWorld *)(f->player->living.entity.worldObj))->maps.count==0&&map_next((MCGameplayWorld *)f->player->living.entity.worldObj)==0&&StatFileWriter_readStat(f->player->stats,f->stat)==0);
         CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&g));
     }
     for(int which=0;which<3;which++) {
@@ -162,23 +168,24 @@ static void failures(void) {
 static void maps_and_aliases(void) {
     MCGameplay g={0};Fixture *f=setup(&g,1,false,false,false,32768,1024,-2048,-129);MCGameplayWorld *w=((MCGameplayWorld *)(f->player->living.entity.worldObj));
     mc_map_info old={0};old.id=0;old.scale=3;old.center_x=128;old.colors[0]=42;old.metadata_known=true;CHECK(ItemMapData_nativeSetItemData(w,&old));
-    ItemStack *out=ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),f->input,w,f->player,NULL,NULL);CHECK(out&&out->itemDamage==0&&w->maps.count==1&&w->maps.next_id==32769);CHECK(w->maps.entries[0].scale==0&&w->maps.entries[0].center_x==1024&&w->maps.entries[0].center_z==-2048&&w->maps.entries[0].dimension==127&&w->maps.entries[0].colors[0]==0);CHECK(MCGameplay_free(&g));
+    ItemStack *out=ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),f->input,w,f->player,NULL,NULL);CHECK(out&&out->itemDamage==0&&w->maps.count==1&&map_next(w)==32769);CHECK(w->maps.entries[0].scale==0&&w->maps.entries[0].center_x==1024&&w->maps.entries[0].center_z==-2048&&w->maps.entries[0].dimension==127&&w->maps.entries[0].colors[0]==0);CHECK(MCGameplay_free(&g));
     f=setup(&g,2,false,false,false,96,0,0,0);w=((MCGameplayWorld *)(f->player->living.entity.worldObj));for(int i=0;i<96;i++){old.id=i;CHECK(ItemMapData_nativeSetItemData(w,&old));}
     MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx));MCGameplayPlayer *p=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];Fixture *c=(Fixture *)p->effects;
-    CHECK(!ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),c->input,((MCGameplayWorld *)(p->living.entity.worldObj)),p,&deps,(MCObject *)c)&&MCObjectHeap_failed(tx.working.heap));CHECK(c->input->stackSize==2&&((MCGameplayWorld *)(p->living.entity.worldObj))->maps.next_id==97&&((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count==96);CHECK(f->input->stackSize==2&&w->maps.next_id==96&&w->maps.count==96);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&g));
+    CHECK(!ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),c->input,((MCGameplayWorld *)(p->living.entity.worldObj)),p,&deps,(MCObject *)c)&&MCObjectHeap_failed(tx.working.heap));CHECK(c->input->stackSize==2&&map_next((MCGameplayWorld *)p->living.entity.worldObj)==97&&((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count==96);CHECK(f->input->stackSize==2&&map_next(w)==96&&w->maps.count==96);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&g));
     f=setup(&g,2,true,false,false,0,0,0,0);w=((MCGameplayWorld *)(f->player->living.entity.worldObj));CHECK(MCGameplay_begin(&g,&tx));p=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];c=(Fixture *)p->effects;
     CHECK(ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),c->input,((MCGameplayWorld *)(p->living.entity.worldObj)),p,&deps,(MCObject *)c)==c->input);CHECK(c->entity&&EntityItem_getEntityItem(c->entity)==c->dropped&&MCGameplay_get(&tx.working)->items[0]==(MCObject *)c->entity);
     CHECK(InventoryPlayer_getStackInSlot(p->inventory,0)==InventoryPlayer_getStackInSlot(p->inventory,38)&&c->input!=f->input&&f->input->stackSize==2&&w!=((MCGameplayWorld *)(p->living.entity.worldObj)));CHECK(((MCGameplayWorld *)(f->player->living.entity.worldObj))->maps.count==0&&((MCGameplayWorld *)(f->player->living.entity.worldObj))->owners->itemCount==0&&StatFileWriter_readStat(f->player->stats,f->stat)==0);
     CHECK(MCGameplay_abort(&tx));CHECK(MCObjectHeap_collect(g.heap)&&InventoryPlayer_getStackInSlot(f->player->inventory,0)==f->input&&f->input->stackSize==2);CHECK(MCGameplay_free(&g));
-    /* Exhaust the tracked native heap at each original stack allocation point.
-       Native map buffers have a separate bounded-store dependency. */
+    /* Exhaust the tracked native heap at the native map-key allocation, then
+       the original filled/copy stack allocations. The map key now precedes
+       the Source counter call; native map buffers have a separate budget. */
     for(int allocation=0;allocation<3;allocation++) {
         f=setup(&g,2,false,false,false,0,0,0,0);CHECK(MCGameplay_begin(&g,&tx));p=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];c=(Fixture *)p->effects;
         size_t used=MCObjectHeap_liveBytes(tx.working.heap),spare=(size_t)allocation*sizeof(ItemStack);CHECK(used+spare<4u*1024u*1024u);
         CHECK(MCObjectHeap_alloc(tx.working.heap,4u*1024u*1024u-used-spare,&fillerClass));
         CHECK(!ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),c->input,((MCGameplayWorld *)(p->living.entity.worldObj)),p,&deps,(MCObject *)c)&&MCObjectHeap_failed(tx.working.heap));
-        CHECK(((MCGameplayWorld *)(p->living.entity.worldObj))->maps.next_id==1&&((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count==(size_t)(allocation!=0)&&c->input->stackSize==(allocation?1:2)&&c->callbacks==0);
-        CHECK(f->input->stackSize==2&&((MCGameplayWorld *)(f->player->living.entity.worldObj))->maps.count==0&&((MCGameplayWorld *)(f->player->living.entity.worldObj))->maps.next_id==0&&StatFileWriter_readStat(f->player->stats,f->stat)==0);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&g));
+        CHECK(map_next((MCGameplayWorld *)p->living.entity.worldObj)==(allocation?1:0)&&((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count==(size_t)(allocation==2)&&c->input->stackSize==(allocation==2?1:2)&&c->callbacks==0);
+        CHECK(f->input->stackSize==2&&((MCGameplayWorld *)(f->player->living.entity.worldObj))->maps.count==0&&map_next((MCGameplayWorld *)f->player->living.entity.worldObj)==0&&StatFileWriter_readStat(f->player->stats,f->stat)==0);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&g));
     }
 }
 int main(int argc,char **argv) {bool facts=argc==2&&!strcmp(argv[1],"--facts");cases(facts);if(!facts){failures();maps_and_aliases();}if(!facts)printf("source empty map: %u checks passed\n",checks);return 0;}

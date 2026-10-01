@@ -1,6 +1,8 @@
+#include "world/WorldDataStorage.h"
 #include "server/management/ItemInWorldManagerUse.h"
 #include "util/MCGameplayPackets.h"
 #include "server/native_gameplay.h"
+#include "client/native_runtime.h"
 #include "entity/player/EntityPlayerDrops.h"
 #include "nbt/NBTTagByte.h"
 #include "nbt/NBTTagCompound.h"
@@ -17,6 +19,11 @@ static unsigned checks;
             exit(1);                                                                               \
         }                                                                                          \
     } while (0)
+static int32_t map_next(const MCGameplayWorld *world) {
+    int32_t value=-1;CHECK(World_nativeMapNextProjection(world,&value));
+    CHECK(world->maps.next_id==0);return value;
+}
+
 typedef struct {
     MCObject object;
     MCGameplayPlayer *player;
@@ -338,7 +345,7 @@ static void native_map_and_drop_bindings(void) {
             CHECK(InventoryPlayer_setInventorySlotContents(one->inventory, 0, input));
             CHECK(InventoryPlayer_setInventorySlotContents(two->inventory, 0, input));
             CHECK(mc_server_graph_use_item(one));
-            CHECK(((MCGameplayWorld *)(one->living.entity.worldObj))->maps.count == 1 && ((MCGameplayWorld *)(one->living.entity.worldObj))->maps.next_id == 1);
+            CHECK(((MCGameplayWorld *)(one->living.entity.worldObj))->maps.count == 1 && map_next((MCGameplayWorld *)one->living.entity.worldObj) == 1);
             ItemStack *held = InventoryPlayer_getCurrentItem(one->inventory);
             CHECK(count == 0 && creativeMode ? held == NULL : held != NULL);
             if (held)
@@ -457,12 +464,159 @@ static void native_eye_height_and_drop_position(void) {
     }
     mc_world_free(&terrain);
 }
+static bool any_entity(const MCObject *object,void *context) {
+    (void)object;(void)context;return true;
+}
+static void native_client_virtual_eye_and_drop_position(void) {
+    /* SP.isSneaking reads MovementInput rather than Entity's watcher, and
+       suppresses sneak while sleeping. These binary64 literals come from the
+       original float eye-height calculation promoted in dropItem's position. */
+    static const uint64_t dropYBits[] = {UINT64_C(0x4050747ae1400000),
+                                         UINT64_C(0x40506f5c28c00000),
+                                         UINT64_C(0x4050199999900000),
+                                         UINT64_C(0x4050199999900000)};
+    mc_world terrain;
+    mc_world_init(&terrain,919);
+    for(unsigned state=0;state<4;state++) {
+        MCGameplay parent={0};CHECK(mc_client_graph_init(&parent,&terrain,"Eye"));
+        MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&parent,&tx));
+        MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
+        MCClientBindings *b=mc_client_graph_bindings(&tx.working);
+        MCGameplayPlayer *p=mc_client_graph_player(&tx.working);
+        CHECK(b&&p&&b->player==p&&b->sp->nativeActor==p&&p->effects==(MCObject *)b);
+        CHECK(b!=mc_client_graph_bindings(&parent));
+        CHECK(Entity_setPosition(&p->living.entity,1.25,64.5,-9.75));
+        p->sleeping=(state&2)!=0;
+        CHECK(mc_client_graph_set_input(&tx.working,0,0,false,(state&1)!=0,false));
+        CHECK(EntityPlayerSP_isSneaking(b->sp)==(state==1));
+        CHECK(!Entity_isSneaking(&p->living.entity));
+        /* Source SP.joinEntityItemWithWorld is empty: retain a real spawned
+           class witness, then observe the transient constructed drop while
+           this borrow scope prevents collection. It is not a world mirror. */
+        CHECK(mc_client_graph_spawn_item(&tx.working,99,8,64,8,0,0,0));
+        EntityItem *reference=mc_client_graph_item(&tx.working,99);CHECK(reference);
+        ItemStack *input=ItemStack_new(tx.working.heap,ItemStack_registryItem(1),1,0);
+        CHECK(input&&mc_client_graph_crafting()->drop((MCObject *)p,input,false));
+        EntityItem *created=(EntityItem *)MCObjectHeap_findObject(tx.working.heap,
+            reference->entity.object.klass,any_entity,NULL);
+        CHECK(created&&created!=reference);
+        CHECK(double_bits(created->entity.posY)==dropYBits[state]);
+        CHECK(created->entity.posX==1.25&&created->entity.posZ==-9.75);
+        CHECK(EntityItem_getEntityItem(created)==input&&created->delayBeforeCanPickup==40);
+        CHECK(!Entity_isSneaking(&p->living.entity));
+        CHECK(MCGameplay_get(&tx.working)->itemCount==1&&MCGameplay_get(&parent)->itemCount==0);
+        CHECK(!MCObjectHeap_failed(tx.working.heap));
+        MCObjectRootScope_end(&scope);
+        CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&parent));
+    }
+    mc_world_free(&terrain);
+}
+typedef struct {
+    MCObject object;
+    MCGameplayPlayer *captured,*owner,*replacement;
+    char events[4],failEvent;
+    unsigned eventCount;
+    bool sneak,mutateSleeping,failViaHeap;
+} EyeFixture;
+static void trace_eye(MCObject *object,MCObjectVisitor visitor,void *context) {
+    EyeFixture *f=(EyeFixture *)object;
+    f->captured=(MCGameplayPlayer *)visitor((MCObject *)f->captured,context);
+    f->owner=(MCGameplayPlayer *)visitor((MCObject *)f->owner,context);
+    f->replacement=(MCGameplayPlayer *)visitor((MCObject *)f->replacement,context);
+}
+static const MCObjectClass eyeFixtureClass={"fixture.source.virtual.eye",
+    MCObjectHeap_plainClone,trace_eye,NULL};
+static bool enter_eye(EyeFixture *f,MCGameplayPlayer *p,char event) {
+    CHECK(p==f->captured&&p->living.entity.object.heap==f->object.heap);
+    CHECK(f->eventCount+1<sizeof f->events);
+    f->events[f->eventCount++]=event;f->events[f->eventCount]=0;
+    CHECK(MCObjectHeap_hasBorrowers(f->object.heap)&&!MCObjectHeap_collect(f->object.heap));
+    if(f->failEvent==event&&f->failViaHeap)MCObjectHeap_fail(f->object.heap);
+    return f->failEvent!=event||f->failViaHeap;
+}
+static bool virtual_sleeping(MCObject *context,MCGameplayPlayer *p,bool *out) {
+    EyeFixture *f=(EyeFixture *)context;
+    bool ok=enter_eye(f,p,'S');*out=p->sleeping;
+    if(f->mutateSleeping) {
+        p->sleeping=!p->sleeping;f->owner=f->replacement;
+        MCObjectHeap_touch(f->object.heap);
+    }
+    return ok;
+}
+static bool virtual_sneaking(MCObject *context,MCGameplayPlayer *p,bool *out) {
+    EyeFixture *f=(EyeFixture *)context;
+    bool ok=enter_eye(f,p,'N');*out=f->sneak;return ok;
+}
+static const EntityPlayerEyeHeightDependencies virtual_eye={virtual_sleeping,virtual_sneaking};
+static void virtual_eye_order_mutation_and_failure(void) {
+    /* Virtual predicates are observable dependencies: reversing their order,
+       rereading the first result or owner edge, skipping the sleeping branch's
+       second call, or undoing a thrown getter mutation must fail these cases. */
+    static const uint32_t expected[]={UINT32_C(0x3fcf5c29),UINT32_C(0x3fc51eb8),
+        UINT32_C(0x3e4ccccd),UINT32_C(0x3df5c290)};
+    for(unsigned mode=0;mode<13;mode++) {
+        MCObjectHeap *h=MCObjectHeap_new(1024u*1024u);CHECK(h);
+        EyeFixture *f=(EyeFixture *)MCObjectHeap_alloc(h,sizeof(*f),&eyeFixtureClass);CHECK(f);
+        f->captured=MCGameplayPlayer_nativeAllocate(h);
+        f->replacement=MCGameplayPlayer_nativeAllocate(h);
+        CHECK(f->captured&&f->replacement);f->owner=f->captured;
+        MCObjectRoot root={0};CHECK(MCObjectRoot_init(&root,h,(MCObject *)f));
+        f->captured->sleeping=mode<4?(mode&2)!=0:mode==5;
+        f->sneak=mode<4?(mode&1)!=0:true;
+        f->mutateSleeping=mode>=4;
+        if(mode>=6&&mode<=9) {
+            f->failEvent=(mode&1)?'N':'S';f->failViaHeap=mode>=8;
+        }
+        EntityPlayerEyeHeightDependencies deps=virtual_eye;
+        if(mode==10)deps.isSneaking=NULL;
+        if(mode==11)deps.isPlayerSleeping=NULL;
+        float value=EntityPlayer_getEyeHeightWithDispatch(f->captured,(MCObject *)f,
+            mode==12?NULL:&deps);
+        const char *events=mode>=11?"":mode==6||mode==8||mode==10?"S":"SN";
+        CHECK(!strcmp(f->events,events));
+        CHECK(MCObjectHeap_failed(h)==(mode>=6));
+        CHECK(!MCObjectHeap_hasBorrowers(h));
+        if(mode<6)CHECK(float_bits(value)==expected[mode<4?mode:mode==4?1:3]);
+        else CHECK(float_bits(value)==0);
+        if(mode>=4&&mode<11) {
+            CHECK(f->owner==f->replacement&&f->owner!=f->captured);
+            CHECK(f->captured->sleeping==(mode!=5));
+        }
+        if(mode<6) {
+            /* The dependency graph retains exact actors across clone/collect;
+               callbacks receive cloned references, not original-heap pointers. */
+            MCObjectHeap *copy=MCObjectHeap_clone(h);CHECK(copy);
+            MCObjectRoot copiedRoot={0};CHECK(MCObjectRoot_rebind(&copiedRoot,copy,&root));
+            EyeFixture *cloned=(EyeFixture *)MCObjectRoot_get(&copiedRoot);
+            CHECK(cloned&&cloned!=f&&cloned->captured!=f->captured);
+            CHECK(cloned->captured->living.entity.object.heap==copy);
+            CHECK(MCObjectHeap_collect(copy));
+            cloned->eventCount=0;cloned->events[0]=0;cloned->mutateSleeping=false;
+            CHECK(float_bits(EntityPlayer_getEyeHeightWithDispatch(cloned->captured,
+                (MCObject *)cloned,&virtual_eye))==expected[mode<4?mode:mode==4?3:1]);
+            CHECK(!strcmp(cloned->events,"SN")&&!MCObjectHeap_failed(copy));
+            MCObjectRoot_drop(&copiedRoot);MCObjectHeap_free(copy);
+        }
+        MCObjectRoot_drop(&root);MCObjectHeap_free(h);
+    }
+    /* A foreign managed callback context cannot run or mutate either graph. */
+    MCObjectHeap *h=MCObjectHeap_new(1024u*1024u),*foreign=MCObjectHeap_new(1024u*1024u);
+    CHECK(h&&foreign);
+    MCGameplayPlayer *p=MCGameplayPlayer_nativeAllocate(h);CHECK(p);
+    EyeFixture *f=(EyeFixture *)MCObjectHeap_alloc(foreign,sizeof(*f),&eyeFixtureClass);CHECK(f);
+    CHECK(EntityPlayer_getEyeHeightWithDispatch(p,(MCObject *)f,&virtual_eye)==0);
+    CHECK(MCObjectHeap_failed(h)&&!MCObjectHeap_failed(foreign)&&!f->eventCount);
+    CHECK(!MCObjectHeap_hasBorrowers(h));
+    MCObjectHeap_free(h);MCObjectHeap_free(foreign);
+}
 int main(void) {
     vectors();
     short_circuit_and_failures();
     callback_failure_stops_source_flow();
     native_map_and_drop_bindings();
     native_eye_height_and_drop_position();
+    native_client_virtual_eye_and_drop_position();
+    virtual_eye_order_mutation_and_failure();
     printf("source server use: %u checks passed\n", checks);
     return 0;
 }

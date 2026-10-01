@@ -7,7 +7,7 @@
    that MapStorage/WorldSavedData/MapData object identity is fully translated. */
 mc_map_info *ItemMap_getMapData(ItemStack *,MCGameplayWorld *);
 /* Reusable native dependencies for MapStorage.getUniqueDataId("map") and
-   World.setItemData. Counter bits model the source Short wrap; collisions are
+   World.setItemData. Counter state belongs to the actual Source storage provider; collisions are
    replaced rather than skipped. No ItemStack/slot value conversion occurs.
    Call these borrowed native dependencies under the actor's RootScope. */
 int32_t ItemMapData_getUniqueDataId(MCGameplayWorld *);

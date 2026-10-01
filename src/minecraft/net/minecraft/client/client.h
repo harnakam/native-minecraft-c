@@ -56,7 +56,7 @@ typedef struct {
     char inventory_status[160];
     double x, y, z, velocity_y;
     float yaw, pitch;
-    uint64_t last_receive_ms, last_move_ms;
+    uint64_t last_receive_ms;
     unsigned chunks_received, block_updates, packets_received;
 } mc_client;
 

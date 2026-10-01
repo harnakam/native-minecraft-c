@@ -9,6 +9,8 @@ typedef struct C08PacketPlayerBlockPlacement C08PacketPlayerBlockPlacement;
 typedef struct C07PacketPlayerDigging C07PacketPlayerDigging;
 typedef struct C09PacketHeldItemChange C09PacketHeldItemChange;
 typedef struct C13PacketPlayerAbilities C13PacketPlayerAbilities;
+typedef struct C0BPacketEntityAction C0BPacketEntityAction;
+struct C03PacketPlayer;
 /* Native virtual dispatch for these original interface methods. Other
    packet handlers await their source ports. Required callback failure represents
    an exception and marks the current heap; it is never an empty success. */
@@ -21,6 +23,8 @@ typedef struct {
     bool (*processPlayerDigging)(MCObject *,C07PacketPlayerDigging *);
     bool (*processHeldItemChange)(MCObject *,C09PacketHeldItemChange *);
     bool (*processPlayerAbilities)(MCObject *,C13PacketPlayerAbilities *);
+    bool (*processEntityAction)(MCObject *,C0BPacketEntityAction *);
+    bool (*processPlayer)(MCObject *,struct C03PacketPlayer *);
 } INetHandlerPlayServerMethods;
 typedef struct { MCObject *instance; const INetHandlerPlayServerMethods *methods; } INetHandlerPlayServer;
 #endif

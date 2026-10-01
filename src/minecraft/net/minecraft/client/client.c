@@ -345,14 +345,26 @@ static bool receive_chunk(mc_client *c, int x, int z, uint16_t mask, bool full,
     return true;
 }
 
-static void send_movement(mc_client *c) {
-    mc_buf packet;
-    start_packet(&packet, 0x06);
-    mc_put_f64(&packet, c->x); mc_put_f64(&packet, c->y); mc_put_f64(&packet, c->z);
-    mc_put_f32(&packet, c->yaw); mc_put_f32(&packet, c->pitch);
-    mc_put_u8(&packet, c->on_ground ? 1 : 0);
-    send_packet(c, &packet);
-    c->last_move_ms = mc_time_ms();
+static bool begin_frame(mc_client *,MCGameplayTransaction *,MCObjectRootScope *);
+static bool finish_frame(mc_client *,MCGameplayTransaction *,bool);
+static void send_position_ack(mc_client *c) {
+    MCGameplayTransaction tx={0};MCObjectRootScope scope={0};
+    if(!begin_frame(c,&tx,&scope))return;
+    MCGameplayPlayer *p=mc_client_graph_player(&tx.working);
+    AxisAlignedBB *box=p?Entity_getEntityBoundingBox(&p->living.entity):NULL;
+    C06PacketPlayerPosLook *packet=box?C06PacketPlayerPosLook_new(tx.working.heap,
+        p->living.entity.posX,box->minY,p->living.entity.posZ,p->living.entity.rotationYaw,
+        p->living.entity.rotationPitch,false):NULL;
+    bool ok=packet && MCGameplayClientPackets_addToSendQueue(p,(MCObject *)packet);
+    MCObjectRootScope_end(&scope);(void)finish_frame(c,&tx,ok);
+}
+static void send_walking(mc_client *c,int32_t ticks) {
+    if(ticks<=0)return;
+    MCGameplayTransaction tx={0};MCObjectRootScope scope={0};
+    if(!begin_frame(c,&tx,&scope))return;
+    bool ok=true;
+    for(int32_t step=0;step<ticks && ok;step++)ok=mc_client_graph_tick_walking(&tx.working);
+    MCObjectRootScope_end(&scope);(void)finish_frame(c,&tx,ok);
 }
 
 static bool correct_position(mc_client *c, double x, double y, double z, float yaw, float pitch, uint8_t flags) {
@@ -435,6 +447,7 @@ static void actor_native_state(mc_client *c) {
     if (b) {
         if(!Entity_setPosition(&b->player->living.entity,c->x,c->y,c->z)) {MCObjectRootScope_end(&scope);return;}
         b->player->living.entity.rotationYaw=c->yaw; b->player->living.entity.rotationPitch=c->pitch;
+        b->player->living.entity.onGround=c->on_ground;
         b->player->living.entity.entityId=c->entity_id; b->player->spectator=c->gamemode==3;
         b->player->living.entity.dimension=c->dimension;
         ((MCGameplayWorld *)(b->player->living.entity.worldObj))->dimension=c->dimension;
@@ -634,7 +647,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             double x = mc_get_f64(b), y = mc_get_f64(b), z = mc_get_f64(b);
             float yaw = mc_get_f32(b), pitch = mc_get_f32(b); uint8_t flags = mc_get_u8(b);
             if (!b->failed && !correct_position(c, x, y, z, yaw, pitch, flags)) b->failed = true;
-            if (!b->failed) { actor_native_state(c); send_movement(c); }
+            if (!b->failed) { actor_native_state(c); send_position_ack(c); }
             break;
         }
         case 0x09: {
@@ -966,10 +979,17 @@ static void update_player(mc_client *c, const mc_input *input, double dt,int32_t
     if (MCObjectHeap_failed(c->gameplay.heap)) {
         client_error(c,"Unsupported native item motion state"); return;
     }
+    bool motionControls=controls_active && !c->inventory_open;
+    if(!mc_client_graph_set_input(&c->gameplay,
+        motionControls?((input->left?1.0f:0.0f)-(input->right?1.0f:0.0f)):0.0f,
+        motionControls?((input->forward?1.0f:0.0f)-(input->backward?1.0f:0.0f)):0.0f,
+        motionControls&&input->up,motionControls&&input->down,motionControls&&input->sprint)) {
+        client_error(c,"Source movement input or sprint dependency failed");return;
+    }
     if (!body_loaded(c, c->x, c->z)) {
         c->velocity_y = 0;
         snprintf(c->status, sizeof(c->status), "Waiting for terrain at player position");
-        if (mc_time_ms() - c->last_move_ms >= 50) send_movement(c);
+        send_walking(c,ticks);
         return;
     }
     if (!input->paused && !input->chat_open && !c->inventory_open) {
@@ -1000,7 +1020,7 @@ static void update_player(mc_client *c, const mc_input *input, double dt,int32_t
         if (input->place_block) edit_block(c, true);
     }
     actor_native_state(c);
-    if (mc_time_ms() - c->last_move_ms >= 50) send_movement(c);
+    send_walking(c,ticks);
 }
 
 static bool connect_client(mc_client *c) {
@@ -1072,7 +1092,7 @@ static int self_test(void) {
     char short_name[32]; mc_client_slot_name(named,short_name,sizeof short_name);
     CHECK(strlen(short_name)==30 && !memcmp(short_name,"\xe6\x97\xa5",3),"custom name truncates only at UTF8 boundaries");
     MCObjectRootScope_end(&scope);
-    c->joined=true; c->last_move_ms=mc_time_ms();
+    c->joined=true;
     MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
     CHECK(MCObjectRootScope_begin(&scope,c->gameplay.heap),"paused source GUI scope");
     CHECK(mc_client_graph_open(&c->gameplay,0,false),"source player GUI open");

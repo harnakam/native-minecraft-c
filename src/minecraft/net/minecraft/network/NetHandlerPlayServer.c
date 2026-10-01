@@ -31,6 +31,7 @@ static void handler_trace(MCObject *o, MCObjectVisitor v, void *c) {
     h->playerEntity = (MCGameplayPlayer *)v((MCObject *)h->playerEntity, c);
     h->field_147372_n = (NativeRejectedTransactions *)v((MCObject *)h->field_147372_n, c);
     h->dependencyContext = v(h->dependencyContext, c);
+    h->entityActionContext = v(h->entityActionContext, c);
 }
 static const MCObjectClass handlerClass = {"net.minecraft.network.NetHandlerPlayServer",
                                            MCObjectHeap_plainClone, handler_trace, NULL};
@@ -109,6 +110,8 @@ NetHandlerPlayServer_nativeNew(MCGameplayPlayer *player, MCObject *context,
         handler->playerEntity = player;
         handler->dependencyContext = context;
         handler->dependencies = dependencies;
+        /* Original declaration initializer, before the unported full ctor. */
+        handler->hasMoved = true;
         handler->field_147372_n = (NativeRejectedTransactions *)MCObjectHeap_alloc(
             heap, sizeof(NativeRejectedTransactions), &mapClass);
         if (handler->field_147372_n) {
@@ -120,6 +123,27 @@ NetHandlerPlayServer_nativeNew(MCGameplayPlayer *player, MCObject *context,
     MCObjectRootScope_end(&scope);
     return handler;
 }
+bool NetHandlerPlayServer_nativeBindEntityActions(
+    NetHandlerPlayServer *h, const NetHandlerPlayServerEntityActionDependencies *d,
+    MCObject *context) {
+    if (!NetHandlerPlayServer_isInstance((MCObject *)h) ||
+        MCObjectHeap_objectSize((MCObject *)h) < sizeof(*h) ||
+        !same_heap(h ? h->object.heap : NULL, context))
+        return failed(h ? h->object.heap : NULL);
+    MCObjectRootScope scope = {0};
+    if (!MCObjectRootScope_begin(&scope, h->object.heap))
+        return false;
+    bool ok =
+        MCObjectRootScope_pin(&scope, (MCObject *)h) && MCObjectRootScope_pin(&scope, context);
+    if (ok) {
+        h->entityActionDependencies = d;
+        h->entityActionContext = context;
+        MCObjectHeap_touch(h->object.heap);
+    }
+    MCObjectRootScope_end(&scope);
+    return ok;
+}
+
 static MCPacketThreadResult begin(NetHandlerPlayServer *handler, MCObject *packet,
                                   MCObjectRootScope *scope) {
     MCObjectHeap *heap = handler ? handler->object.heap : NULL;
@@ -147,6 +171,116 @@ static bool end(NetHandlerPlayServer *handler, MCObjectRootScope *scope, bool re
     MCObjectRootScope_end(scope);
     return result;
 }
+static MCGameplayPlayer *action_player(NetHandlerPlayServer *h, MCObjectRootScope *scope) {
+    MCGameplayPlayer *p = h->playerEntity;
+    if (!MCGameplayPlayer_isInstance((MCObject *)p) || !same_heap(h->object.heap, (MCObject *)p) ||
+        !MCObjectRootScope_pin(scope, (MCObject *)p)) {
+        failed(h->object.heap);
+        return NULL;
+    }
+    return p;
+}
+static MCObject *action_riding(NetHandlerPlayServer *h, MCObjectRootScope *scope) {
+    MCGameplayPlayer *p = action_player(h, scope);
+    if (!p)
+        return NULL;
+    MCObject *entity = (MCObject *)p->living.entity.ridingEntity;
+    if (entity &&
+        (!same_heap(h->object.heap, entity) || MCObjectHeap_objectSize(entity) < sizeof(Entity) ||
+         !MCObjectRootScope_pin(scope, entity))) {
+        failed(h->object.heap);
+        return NULL;
+    }
+    return entity;
+}
+static bool action_context(NetHandlerPlayServer *h, MCObjectRootScope *scope) {
+    return same_heap(h->object.heap, h->entityActionContext) &&
+           MCObjectRootScope_pin(scope, h->entityActionContext);
+}
+bool NetHandlerPlayServer_processEntityAction(NetHandlerPlayServer *h,
+                                              C0BPacketEntityAction *packet) {
+    MCObjectHeap *heap = h ? h->object.heap : NULL;
+    if (!NetHandlerPlayServer_isInstance((MCObject *)h) ||
+        MCObjectHeap_objectSize((MCObject *)h) < sizeof(*h) ||
+        !C0BPacketEntityAction_isInstance((MCObject *)packet))
+        return failed(heap);
+    MCObjectRootScope scope = {0};
+    MCPacketThreadResult scheduled = begin(h, (MCObject *)packet, &scope);
+    if (scheduled != MC_PACKET_THREAD_EXECUTE)
+        return end(h, &scope, scheduled == MC_PACKET_THREAD_QUEUED);
+    MCGameplayPlayer *p = action_player(h, &scope);
+    if (!p || !dependencies_ready(h->dependencies) ||
+        !completed(heap, h->dependencies->markPlayerActive(h->dependencyContext, p)))
+        return end(h, &scope, false);
+    int32_t ordinal;
+    if (!C0BPacketEntityAction_nativeOrdinal(C0BPacketEntityAction_getAction(packet), &ordinal))
+        return end(h, &scope, false);
+    bool ok = false;
+    switch (ordinal) {
+    case C0B_START_SNEAKING:
+    case C0B_STOP_SNEAKING:
+        p = action_player(h, &scope);
+        ok = p && Entity_setSneaking(&p->living.entity, ordinal == C0B_START_SNEAKING);
+        break;
+    case C0B_START_SPRINTING:
+    case C0B_STOP_SPRINTING:
+        p = action_player(h, &scope);
+        ok = p && EntityLivingBase_setSprinting(&p->living, ordinal == C0B_START_SPRINTING);
+        break;
+    case C0B_STOP_SLEEPING:
+        p = action_player(h, &scope);
+        ok = p && h->entityActionDependencies && h->entityActionDependencies->wakeUpPlayer &&
+             action_context(h, &scope);
+        if (ok)
+            ok = completed(heap, h->entityActionDependencies->wakeUpPlayer(h->entityActionContext,
+                                                                           p, false, true, true));
+        if (ok) {
+            h->hasMoved = false;
+            MCObjectHeap_touch(heap);
+        }
+        break;
+    case C0B_RIDING_JUMP:
+    case C0B_OPEN_INVENTORY: {
+        MCObject *riding = action_riding(h, &scope);
+        bool horse = false;
+        ok = !MCObjectHeap_failed(heap);
+        if (ok && riding) {
+            ok = h->entityActionDependencies && h->entityActionDependencies->isEntityHorse &&
+                 action_context(h, &scope);
+            if (ok)
+                ok = completed(heap, h->entityActionDependencies->isEntityHorse(
+                                         h->entityActionContext, riding, &horse));
+        }
+        if (ok && horse) {
+            /* The source reads ridingEntity again after instanceof, and saves
+               the invocation receiver before evaluating the argument. */
+            riding = action_riding(h, &scope);
+            ok = riding && !MCObjectHeap_failed(heap);
+            if (ok && ordinal == C0B_RIDING_JUMP) {
+                ok = h->entityActionDependencies && h->entityActionDependencies->setJumpPower &&
+                     action_context(h, &scope);
+                if (ok)
+                    ok = completed(heap, h->entityActionDependencies->setJumpPower(
+                                             h->entityActionContext, riding,
+                                             C0BPacketEntityAction_getAuxData(packet)));
+            } else if (ok) {
+                p = action_player(h, &scope);
+                ok = p && h->entityActionDependencies &&
+                     h->entityActionDependencies->openHorseGUI && action_context(h, &scope);
+                if (ok)
+                    ok = completed(heap, h->entityActionDependencies->openHorseGUI(
+                                             h->entityActionContext, riding, p));
+            }
+        }
+        break;
+    }
+    default:
+        ok = false;
+        break;
+    }
+    return end(h, &scope, ok);
+}
+
 static Container *open_container(NetHandlerPlayServer *handler) {
     Container *container = handler->playerEntity->openContainer;
     if (!container || !same_heap(handler->object.heap, (MCObject *)container) ||
@@ -350,6 +484,9 @@ bool NetHandlerPlayServer_processPlayerAbilities(NetHandlerPlayServer *h,C13Pack
 static bool abilities_dispatch(MCObject *h,C13PacketPlayerAbilities *p) {
     return NetHandlerPlayServer_processPlayerAbilities((NetHandlerPlayServer *)h,p);
 }
+static bool entity_action_dispatch(MCObject *h,C0BPacketEntityAction *p) {
+    return NetHandlerPlayServer_processEntityAction((NetHandlerPlayServer *)h,p);
+}
 static bool close_dispatch(MCObject *h, C0DPacketCloseWindow *p) {
     return NetHandlerPlayServer_processCloseWindow((NetHandlerPlayServer *)h, p);
 }
@@ -368,6 +505,7 @@ INetHandlerPlayServer NetHandlerPlayServer_asHandler(NetHandlerPlayServer *handl
         .processClickWindow=click_dispatch,
         .processConfirmTransaction=confirm_dispatch,
         .processCreativeInventoryAction=creative_dispatch,
-        .processPlayerAbilities=abilities_dispatch};
+        .processPlayerAbilities=abilities_dispatch,
+        .processEntityAction=entity_action_dispatch};
     return (INetHandlerPlayServer){(MCObject *)handler, &methods};
 }

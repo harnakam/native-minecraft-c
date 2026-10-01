@@ -155,7 +155,7 @@ class ClientTests(unittest.TestCase):
             result, output = self.run_client(port)
             self.assertEqual(result.returncode, 0, output)
             self.assertRegex(output, r"position=8\.500,18\.000,8\.500")
-        movements = [struct.unpack_from(">ddd", data) for kind, data in observed if kind == 6]
+        movements = [struct.unpack_from(">ddd", data) for kind, data in observed if kind in (4, 6)]
         self.assertTrue(movements)
         self.assertTrue(all(y == 18 for _, y, _ in movements), movements)
 
@@ -163,7 +163,7 @@ class ClientTests(unittest.TestCase):
         with independent_server(above_world=True) as (port, observed):
             result, output = self.run_client(port)
             self.assertEqual(result.returncode, 0, output)
-        movements = [struct.unpack_from(">ddd", data) for kind, data in observed if kind == 6]
+        movements = [struct.unpack_from(">ddd", data) for kind, data in observed if kind in (4, 6)]
         self.assertTrue(any(y < 300 for _, y, _ in movements), movements)
 
     def test_malformed_chunk_is_rejected(self):

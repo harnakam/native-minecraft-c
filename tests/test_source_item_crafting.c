@@ -1,5 +1,6 @@
 #include "item/ItemStackCrafting.h"
 #include "item/ItemMapCreated.h"
+#include "world/WorldDataStorage.h"
 #include "nbt/NBTTagCompound.h"
 #include <limits.h>
 #include <math.h>
@@ -17,6 +18,11 @@ static unsigned checks;
         }                                                                                          \
     } while (0)
 typedef MCGameplayWorld World;
+static int32_t map_next(const World *w) {
+    int32_t value=-1;CHECK(w->maps.next_id==0);
+    CHECK(MCObjectHeap_failed(w->object.heap)?MapStorage_nativeGetMapNextProjectionDiagnostic(w->mapStorage,&value):World_nativeMapNextProjection(w,&value));
+    return value;
+}
 typedef struct {
     MCObject object;
     ItemStack *stack;
@@ -94,7 +100,7 @@ static void add_map(World *world, int32_t id, uint8_t scale, int32_t x, int32_t 
     map.dimension = dimension;
     map.metadata_known = true;
     map.colors[19] = 73;
-    CHECK(mc_maps_add(&world->maps, &map));
+    CHECK(ItemMapData_nativeSetItemData(world, &map));
 }
 static NBTTagCompound *mark(ItemStack *stack) {
     NBTTagCompound *tag = NBTTagCompound_new(stack->object.heap);
@@ -166,7 +172,7 @@ static void scaling_aliases(void) {
     MCObjectHeap *h = MCObjectHeap_new(8 * 1024 * 1024);
     World *w = make_world(h);
     Player *p = make_player(h, 0);
-    w->maps.next_id = 10;
+    CHECK(World_nativeImportMapNextProjection(w, 10));
     add_map(w, 4, 1, 100, -50, -1);
     NBTTagCompound *tag = mark(p->stack);
     ItemStack *alias = p->stack;
@@ -182,12 +188,12 @@ static void scaling_aliases(void) {
     const mc_map_info *map = mc_maps_find_const(&w->maps, 10);
     CHECK(map && map->scale == 2 && map->center_x == 192 && map->center_z == 192 &&
           map->dimension == -1);
-    CHECK(w->maps.next_id == 11 && w->maps.count == 2);
+    CHECK(map_next(w) == 11 && w->maps.count == 2);
     for (size_t i = 0; i < MC_MAP_PIXELS; i++)
         CHECK(map->colors[i] == 0);
     CHECK(mc_maps_find_const(&w->maps, 4)->colors[19] == 73);
     CHECK(ItemMap_onCreated(alias, w, (MCObject *)p));
-    CHECK(alias->itemDamage == 11 && w->maps.next_id == 12);
+    CHECK(alias->itemDamage == 11 && map_next(w) == 12);
     CHECK(mc_maps_find_const(&w->maps, 11)->scale == 3 && alias->stackTagCompound == tag);
     CHECK(!MCObjectHeap_failed(h));
     MCObjectHeap_free(h);
@@ -199,12 +205,12 @@ static void missing_remote_and_limits(void) {
     w->spawnX = -65;
     w->spawnZ = 1024;
     w->dimension = -1;
-    w->maps.next_id = 10;
+    CHECK(World_nativeImportMapNextProjection(w, 10));
     p->stack->itemDamage = 100000;
     NBTTagCompound *tag = mark(p->stack);
     CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(p->stack->itemDamage == 11 && p->stack->stackTagCompound == tag && w->maps.count == 2 &&
-          w->maps.next_id == 12);
+          map_next(w) == 12);
     const mc_map_info *old = mc_maps_find_const(&w->maps, 10),
                       *scaled = mc_maps_find_const(&w->maps, 11);
     CHECK(old && old->scale == 3 && old->center_x == -576 && old->center_z == 1472 &&
@@ -222,13 +228,14 @@ static void missing_remote_and_limits(void) {
     CHECK(!ItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(MCObjectHeap_failed(h));
     CHECK(p->stack->itemDamage == 0 && p->stack->stackTagCompound == tag && !w->maps.count &&
-          w->maps.next_id == 1);
+          map_next(w) == 1);
     MCObjectHeap_free(h);
     h = MCObjectHeap_new(8 * 1024 * 1024);
     w = make_world(h);
     p = make_player(h, 1);
     w->remote = true;
     add_map(w, 4, 4, 192, 192, 0);
+    CHECK(World_nativeImportMapNextProjection(w,5));
     tag = mark(p->stack);
     CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(p->stack->itemDamage == 5 && w->maps.count == 2);
@@ -238,12 +245,12 @@ static void missing_remote_and_limits(void) {
     w = make_world(h);
     p = make_player(h, 1);
     add_map(w, 4, 1, 100, -50, 0);
-    w->maps.next_id = INT16_MAX + 1;
+    CHECK(World_nativeImportMapNextProjection(w, INT16_MAX + 1));
     tag = mark(p->stack);
     CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(!MCObjectHeap_failed(h));
     CHECK(p->stack->itemDamage == 0 && p->stack->stackTagCompound == tag && w->maps.count == 2);
-    CHECK(w->maps.next_id == INT16_MAX + 2 && mc_maps_find_const(&w->maps, 0)->scale == 2);
+    CHECK(map_next(w) == INT16_MAX + 2 && mc_maps_find_const(&w->maps, 0)->scale == 2);
     MCObjectHeap_free(h);
 }
 static void numeric_markers(void) {
@@ -252,7 +259,7 @@ static void numeric_markers(void) {
         World *w = make_world(h);
         Player *p = make_player(h, 1);
         add_map(w, 4, 1, 100, -50, 0);
-        w->maps.next_id = 10;
+        CHECK(World_nativeImportMapNextProjection(w, 10));
         NBTTagCompound *tag = mark(p->stack);
         bool scaling = i == 0 || i == 2 || i == 3 || i == 6;
         if (i < 4)
@@ -282,14 +289,14 @@ static void counter_replacement(void) {
         Player *p = make_player(h, 0);
         add_map(w, 0, 1, 100, -50, -1);
         add_map(w, 4, 1, 100, -50, -1);
-        w->maps.next_id = next[n];
+        CHECK(World_nativeImportMapNextProjection(w, next[n]));
         NBTTagCompound *tag = mark(p->stack);
         const mc_map_info *old = mc_maps_find_const(&w->maps, 4);
         CHECK(old);
         /* Native S34 metadata presence does not add a source ItemMap guard. */
         mc_maps_find(&w->maps, 4)->metadata_known = false;
         CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
-        CHECK(p->stack->itemDamage == damage[n] && w->maps.next_id == after[n]);
+        CHECK(p->stack->itemDamage == damage[n] && map_next(w) == after[n]);
         CHECK(p->stack->stackSize == 0 && p->stack->stackTagCompound == tag);
         CHECK(w->maps.count == (damage[n] == 0 || damage[n] == 4 ? 2u : 3u));
         const mc_map_info *scaled = mc_maps_find_const(&w->maps, damage[n]);
@@ -307,7 +314,9 @@ static void counter_replacement(void) {
                the original ItemMap body above. Supply it at that boundary. */
             mc_maps_find(&w->maps, 4)->metadata_known = true;
         }
-        CHECK(mc_maps_encode(&w->maps, &encoded));
+        mc_maps exportView={0};CHECK(mc_maps_copy(&exportView,&w->maps));
+        exportView.next_id=map_next(w); /* Ephemeral native export, not owning state. */
+        CHECK(mc_maps_encode(&exportView, &encoded));mc_maps_free(&exportView);
         CHECK(mc_maps_decode(&encoded, &decoded));
         CHECK(decoded.next_id == after[n] && decoded.count == w->maps.count);
         CHECK(mc_maps_find_const(&decoded, damage[n])->scale == 2 &&
@@ -322,7 +331,7 @@ static void transaction_graph(void) {
     World *w = make_world(h);
     Player *p = make_player(h, 0);
     add_map(w, 4, 1, 100, -50, 0);
-    w->maps.next_id = 10;
+    CHECK(World_nativeImportMapNextProjection(w, 10));
     NBTTagCompound *tag = mark(p->stack);
     MCObjectRoot rw, rp;
     CHECK(MCObjectRoot_init(&rw, h, (MCObject *)w));
@@ -339,7 +348,7 @@ static void transaction_graph(void) {
        allowed into the live graph. */
     for (int i = 5; i < 99; i++)
         add_map(ww, i, 1, 100, -50, 0);
-    ww->maps.next_id = 100;
+    CHECK(World_nativeImportMapNextProjection(ww, 100));
     pp->stack->itemDamage = 100000;
     CHECK(!ItemStack_onCrafting(pp->stack, (MCObject *)ww, (MCObject *)pp, 2, &dispatch));
     CHECK(MCObjectHeap_failed(working) && pp->count == 2 && pp->stack->itemDamage == 101 &&
@@ -347,7 +356,7 @@ static void transaction_graph(void) {
     CHECK(!MCObjectHeap_canAdopt(h, working));
     CHECK(!MCObjectHeap_adopt(h, working));
     CHECK(p->count == 0 && p->stack->itemDamage == 4 && w->maps.count == 1 &&
-          w->maps.next_id == 10);
+          map_next(w) == 10);
     MCObjectHeap_free(working);
     working = MCObjectHeap_clone(h);
     CHECK(working);
@@ -359,13 +368,13 @@ static void transaction_graph(void) {
           pp->stack->stackTagCompound != tag);
     CHECK(ItemStack_onCrafting(pp->stack, (MCObject *)ww, (MCObject *)pp, 2, &dispatch));
     CHECK(p->count == 0 && p->stack->itemDamage == 4 && w->maps.count == 1 &&
-          w->maps.next_id == 10);
+          map_next(w) == 10);
     CHECK(MCObjectHeap_adopt(h, working));
     MCObjectHeap_free(working);
     w = (World *)MCObjectRoot_get(&rw);
     p = (Player *)MCObjectRoot_get(&rp);
     CHECK(p->count == 2 && p->stack->itemDamage == 10 && w->maps.count == 2 &&
-          w->maps.next_id == 11);
+          map_next(w) == 11);
     CHECK(NBTTagCompound_getBoolean_ascii(p->stack->stackTagCompound, "map_is_scaling"));
     CHECK(MCObjectHeap_collect(h));
     CHECK(p->stack->itemDamage == 10);

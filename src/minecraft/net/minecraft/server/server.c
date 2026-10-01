@@ -1,3 +1,4 @@
+#include "network/play/client/C03PacketPlayer.h"
 #include "server.h"
 #include "../network/protocol.h"
 #include "../world/world.h"
@@ -48,7 +49,7 @@ typedef struct {
     char name[17];
     double x, y, z; /* Native transport/camera position, synchronized into actor on movement. */
     float yaw, pitch;
-    bool grounded, sneaking;
+    bool grounded;
     MCGameplay *game;
     size_t ownerIndex;
     int gamemode;
@@ -729,17 +730,28 @@ static void change_block(mc_server *server, server_peer *peer, int x, int y, int
 static void handle_movement(mc_server *server, server_peer *peer, mc_buf *packet, int id) {
     double x = peer->x, y = peer->y, z = peer->z;
     float yaw = peer->yaw, pitch = peer->pitch;
-    if (id == 4 || id == 6) {
-        x = mc_get_f64(packet);
-        y = mc_get_f64(packet);
-        z = mc_get_f64(packet);
+    /* Faithful source packet read precedes the native movement policy.
+       Complete NetHandlerPlayServer.processPlayer remains a separate port. */
+    MCObjectHeap *heap=MCObjectHeap_new(64u*1024u);
+    MCObjectRootScope decodeScope={0};
+    bool decoded=MCObjectRootScope_begin(&decodeScope,heap);
+    C03PacketPlayer *source=!decoded?NULL:id==4?C04PacketPlayerPosition_new_empty(heap):
+        id==5?C05PacketPlayerLook_new_empty(heap):id==6?C06PacketPlayerPosLook_new_empty(heap):
+        C03PacketPlayer_new_empty(heap);
+    PacketBuffer buffer;
+    decoded=source && PacketBuffer_init(&buffer,heap,packet) && C03PacketPlayer_readPacketData(source,&buffer);
+    bool grounded=false;
+    if(decoded) {
+        if(C03PacketPlayer_isMoving(source)) {
+            x=C03PacketPlayer_getPositionX(source);y=C03PacketPlayer_getPositionY(source);z=C03PacketPlayer_getPositionZ(source);
+        }
+        if(C03PacketPlayer_getRotating(source)) {
+            yaw=C03PacketPlayer_getYaw(source);pitch=C03PacketPlayer_getPitch(source);
+        }
+        grounded=C03PacketPlayer_isOnGround(source);
     }
-    if (id == 5 || id == 6) {
-        yaw = mc_get_f32(packet);
-        pitch = mc_get_f32(packet);
-    }
-    bool grounded = get_boolean(packet);
-    if (!complete(packet) || !isfinite(x) || !isfinite(y) || !isfinite(z) || !isfinite(yaw) ||
+    MCObjectRootScope_end(&decodeScope);MCObjectHeap_free(heap);
+    if (!decoded || !complete(packet) || !isfinite(x) || !isfinite(y) || !isfinite(z) || !isfinite(yaw) ||
         !isfinite(pitch) || pitch < -90 || pitch > 90) {
         disconnect_peer(peer, "Invalid movement packet.");
         return;
@@ -825,7 +837,7 @@ static void server_processPlayerBlockPlacement(void *opaque,
                                                  (int16_t)held->itemDamage, &placed);
     MCObjectRootScope_end(&read_scope);
     if (world_coordinate(x, y, z) && table_reachable(peer, x, y, z) &&
-        (mc_world_get(&server->world, x, y, z) >> 4) == 58 && (!peer->sneaking || !has_held)) {
+        (mc_world_get(&server->world, x, y, z) >> 4) == 58 && (!Entity_isSneaking(&actor(peer)->living.entity) || !has_held)) {
         (void)open_workbench(server, peer, x, y, z);
         return;
     }
@@ -991,19 +1003,7 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
         return;
     }
     if (id == 0x0b) {
-        int entity = mc_get_varint(packet), action = mc_get_varint(packet),
-            parameter = mc_get_varint(packet);
-        if (!complete(packet) || entity != peer->entity || action < 0 || action > 6 ||
-            parameter < 0)
-            disconnect_peer(peer, "Invalid entity action packet.");
-        else if (action == 0 || action == 1) {
-            peer->sneaking = action == 0;
-            MCObjectRootScope scope = {0};
-            if (MCObjectRootScope_begin(&scope, server->gameplay.heap)) {
-                if (!Entity_setSneaking(&actor(peer)->living.entity,peer->sneaking)) peer->closing = true;
-                MCObjectRootScope_end(&scope);
-            }
-        }
+        (void)apply_source_packet(server,peer,id,packet);
         return;
     }
     if (id == 0x15) {

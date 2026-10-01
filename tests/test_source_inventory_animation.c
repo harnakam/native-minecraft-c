@@ -1,3 +1,4 @@
+#include "world/WorldDataStorage.h"
 #include "entity/player/InventoryPlayerAnimations.h"
 #include "item/ItemAnimation.h"
 #include "item/ItemMap.h"
@@ -13,6 +14,11 @@
 static unsigned checks;
 #define CHECK(x) do { ++checks; if (!(x)) { \
     fprintf(stderr, "line %d: %s\n", __LINE__, #x); exit(1); } } while (0)
+
+static int32_t map_next(const MCGameplayWorld *world) {
+    int32_t value=-1;CHECK(World_nativeMapNextProjection(world,&value));
+    CHECK(world->maps.next_id==0);return value;
+}
 
 typedef struct { MCObject object; MCObject *world; } Actor;
 typedef struct {
@@ -309,7 +315,7 @@ static void actual_remote_map_does_not_create(void) {
     CHECK(world && MCGameplay_setWorld(&game, (MCObject *)world));
     world->remote = true;
     world->worldTime = 4321;
-    world->maps.next_id = 42;
+    CHECK(World_nativeImportMapNextProjection(world,42));
     Fixture *f = fixture(h);
     f->first->world = (MCObject *)world;
     ItemStack *map = make(h, 358, -1, 5);
@@ -326,7 +332,7 @@ static void actual_remote_map_does_not_create(void) {
     CHECK(InventoryPlayer_decrementAnimations(f->inventory, &d, (MCObject *)f));
     CHECK(map->animationsToGo == 3 && map->stackSize == -1 && map->itemDamage == 999);
     CHECK(NBTTagCompound_getInteger_ascii(map->stackTagCompound, "foreign") == 17);
-    CHECK(world->maps.next_id == 42 && !world->maps.count && world->worldTime == 4321);
+    CHECK(map_next(world) == 42 && !world->maps.count && world->worldTime == 4321);
     CHECK(MCObjectHeap_liveObjects(h) == objects && MCObjectHeap_liveBytes(h) == bytes);
     CHECK(f->inventory->mainInventory->items[35]->animationsToGo == 1);
     CHECK(!MCObjectHeap_failed(h));
@@ -413,7 +419,7 @@ static void actual_server_binding_updates_shared_source_refs(void) {
     CHECK(InventoryPlayer_setInventorySlotContents(first->inventory, 35, tool));
     size_t objects = MCObjectHeap_liveObjects(game->heap), bytes = MCObjectHeap_liveBytes(game->heap);
     int32_t packets = MCGameplayPackets_count(first) + MCGameplayPackets_count(second);
-    int32_t mapId = world->maps.next_id;
+    int32_t mapId = map_next(world);
     int64_t time = world->worldTime;
     CHECK(mc_server_graph_tick_inventory(first));
     CHECK(shared->animationsToGo == 3 && tool->animationsToGo == 1);
@@ -421,7 +427,7 @@ static void actual_server_binding_updates_shared_source_refs(void) {
     CHECK(shared->animationsToGo == 2 && shared->stackSize == 0 && tool->stackSize == -1);
     CHECK(armor->animationsToGo == 8 && cursor->animationsToGo == 9);
     CHECK(first->inventory->mainInventory->items[0] == second->inventory->mainInventory->items[7]);
-    CHECK(world->maps.next_id == mapId && world->worldTime == time && !world->maps.count);
+    CHECK(map_next(world) == mapId && world->worldTime == time && !world->maps.count);
     CHECK(MCGameplayPackets_count(first) + MCGameplayPackets_count(second) == packets);
     CHECK(MCObjectHeap_liveObjects(game->heap) == objects && MCObjectHeap_liveBytes(game->heap) == bytes);
     CHECK(!MCObjectHeap_failed(game->heap));

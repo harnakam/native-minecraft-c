@@ -7,6 +7,7 @@
 #include "network/play/client/C0FPacketConfirmTransaction.h"
 #include "network/play/client/C10PacketCreativeInventoryAction.h"
 #include "network/play/client/C13PacketPlayerAbilities.h"
+#include "network/play/client/C0BPacketEntityAction.h"
 #include "network/native_packet_thread.h"
 
 typedef struct NetHandlerPlayServer NetHandlerPlayServer;
@@ -31,6 +32,16 @@ typedef struct {
     EntityItem *(*dropPlayerItemWithRandomChoice)(MCObject *context, MCGameplayPlayer *,
                                                   ItemStack *, bool unused);
 } NetHandlerPlayServerDependencies;
+/* Required original wake/horse methods remain separately bound dependencies.
+   instanceof(NULL) is false without invoking the native classifier. A reached
+   non-null horse check must classify the real Entity identity; callbacks never
+   substitute empty success for wake, jump or GUI effects. */
+typedef struct {
+    bool (*wakeUpPlayer)(MCObject *context,MCGameplayPlayer *,bool immediately,bool updateWorld,bool setSpawn);
+    bool (*isEntityHorse)(MCObject *context,MCObject *entity,bool *out);
+    bool (*setJumpPower)(MCObject *context,MCObject *horse,int32_t power);
+    bool (*openHorseGUI)(MCObject *context,MCObject *horse,MCGameplayPlayer *);
+} NetHandlerPlayServerEntityActionDependencies;
 struct NetHandlerPlayServer {
     MCObject object;
     MCGameplayPlayer *playerEntity;
@@ -38,6 +49,9 @@ struct NetHandlerPlayServer {
     NativeRejectedTransactions *field_147372_n;
     MCObject *dependencyContext;
     const NetHandlerPlayServerDependencies *dependencies;
+    bool hasMoved;
+    MCObject *entityActionContext;
+    const NetHandlerPlayServerEntityActionDependencies *entityActionDependencies;
 };
 /* Explicit native allocation for this translated method subset. MinecraftServer,
    NetworkManager, thread scheduling and the full original constructor are
@@ -45,6 +59,8 @@ struct NetHandlerPlayServer {
 NetHandlerPlayServer *NetHandlerPlayServer_nativeNew(MCGameplayPlayer *, MCObject *context,
                                                      const NetHandlerPlayServerDependencies *);
 bool NetHandlerPlayServer_isInstance(const MCObject *);
+bool NetHandlerPlayServer_nativeBindEntityActions(NetHandlerPlayServer *,const NetHandlerPlayServerEntityActionDependencies *,MCObject *context);
+bool NetHandlerPlayServer_processEntityAction(NetHandlerPlayServer *,C0BPacketEntityAction *);
 bool NetHandlerPlayServer_processPlayerAbilities(NetHandlerPlayServer *,C13PacketPlayerAbilities *);
 INetHandlerPlayServer NetHandlerPlayServer_asHandler(NetHandlerPlayServer *);
 bool NetHandlerPlayServer_processCloseWindow(NetHandlerPlayServer *, C0DPacketCloseWindow *);

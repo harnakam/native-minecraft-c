@@ -1,3 +1,6 @@
+#include "world/WorldDataStorage.h"
+#include "item/ItemMapData.h"
+#include "world/storage/SaveDataMemoryStorage.h"
 #include "util/MCGameplayStorage.h"
 #include "util/MCGameplayPackets.h"
 #include "inventory/ContainerWorkbench.h"
@@ -26,6 +29,11 @@
 #endif
 static unsigned checks;
 #define CHECK(x) do {++checks;if (!(x)) {fprintf(stderr,"gameplay storage check %u at %d: %s\n",checks,__LINE__,#x);exit(1);}} while (0)
+static int32_t map_next(const MCGameplayWorld *world) {
+    int32_t value=-1;CHECK(World_nativeMapNextProjection(world,&value));
+    CHECK(world->maps.next_id==0);return value;
+}
+
 typedef struct {MCObject object;unsigned watched,logged,dead,drops;ItemStack *dropped[16];unsigned positions,failPosition;unsigned watchedAtPosition[2];EntityItem *constructed;} Effects;
 static ItemStack *watched(EntityItem *e) {return DataWatcher_getWatchableObjectItemStack(EntityItem_getDataWatcher(e),10);}
 static void effects_trace(MCObject *o,MCObjectVisitor v,void *ctx) {Effects *e=(Effects *)o;for(unsigned i=0;i<e->drops;i++)e->dropped[i]=(ItemStack *)v((MCObject *)e->dropped[i],ctx);e->constructed=(EntityItem *)v((MCObject *)e->constructed,ctx);}
@@ -115,8 +123,8 @@ static void workbench_recovery_and_item_envelope(void) {
     mc_nbt_free(&itemData);mc_nbt_free(&playerData);finish(&copy,&copiedScope);finish(&g,&scope);
 }
 static void maps_and_snapshot_metadata(void) {
-    MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);mc_map_info map;mc_map_info_init(&map);map.id=1;map.metadata_known=true;map.center_x=128;map.center_z=-64;map.scale=2;map.colors[0]=17;CHECK(mc_maps_add(&((MCGameplayWorld *)(p->living.entity.worldObj))->maps,&map));mc_map_info_free(&map);((MCGameplayWorld *)(p->living.entity.worldObj))->maps.next_id=2;
-    mc_nbt data={0};CHECK(MCGameplayStorage_encodeMaps(MCGameplay_get(&g),&data,NULL));MCGameplay copy={0};MCObjectRootScope copiedScope={0};MCGameplayPlayer *q=setup(&copy,&copiedScope);CHECK(MCGameplayStorage_loadMaps(((MCGameplayWorld *)(q->living.entity.worldObj)),&data)&&((MCGameplayWorld *)(q->living.entity.worldObj))->maps.count==1&&((MCGameplayWorld *)(q->living.entity.worldObj))->maps.entries[0].colors[0]==17&&((MCGameplayWorld *)(q->living.entity.worldObj))->maps.next_id==2);mc_nbt_free(&data);finish(&copy,&copiedScope);
+    MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);mc_map_info map;mc_map_info_init(&map);map.id=1;map.metadata_known=true;map.center_x=128;map.center_z=-64;map.scale=2;map.colors[0]=17;CHECK(ItemMapData_nativeSetItemData((MCGameplayWorld *)p->living.entity.worldObj,&map));mc_map_info_free(&map);CHECK(World_nativeImportMapNextProjection((MCGameplayWorld *)p->living.entity.worldObj,2));
+    mc_nbt data={0};CHECK(MCGameplayStorage_encodeMaps(MCGameplay_get(&g),&data,NULL));MCGameplay copy={0};MCObjectRootScope copiedScope={0};MCGameplayPlayer *q=setup(&copy,&copiedScope);CHECK(MCGameplayStorage_loadMaps(((MCGameplayWorld *)(q->living.entity.worldObj)),&data)&&((MCGameplayWorld *)(q->living.entity.worldObj))->maps.count==1&&((MCGameplayWorld *)(q->living.entity.worldObj))->maps.entries[0].colors[0]==17&&map_next((MCGameplayWorld *)q->living.entity.worldObj)==2);mc_nbt_free(&data);finish(&copy,&copiedScope);
     p->savedRootName=NBTString_fromUTF8(g.heap,"保存名");((MCGameplayWorld *)(p->living.entity.worldObj))->savedItemRootName=p->savedRootName;((MCGameplayWorld *)(p->living.entity.worldObj))->savedItemFields=p->savedFields;EntityItem *e=EntityItem_new_stack(g.heap,(MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)),p->effects,&entity_dependencies,&constructors,0,20,0,book(p,0));CHECK(e&&MCGameplay_addItem(&g,(MCObject *)e));e->savedFields=p->savedFields;MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx));CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));MCGameplayPlayer *cp=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];EntityItem *ce=(EntityItem *)MCGameplay_get(&tx.working)->items[0];CHECK(cp->savedRootName==((MCGameplayWorld *)(cp->living.entity.worldObj))->savedItemRootName&&cp->savedRootName!=p->savedRootName&&cp->savedFields==((MCGameplayWorld *)(cp->living.entity.worldObj))->savedItemFields&&cp->savedFields==ce->savedFields&&ce->savedFields!=e->savedFields);MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx));CHECK(MCObjectRootScope_begin(&scope,g.heap));finish(&g,&scope);
 }
 static bool sink(const mc_buf *packet,void *ctx) {unsigned *count=ctx;CHECK(packet&&packet->len);++*count;return true;}
@@ -271,4 +279,53 @@ static void source_constructor_ids_survive_native_load(void) {
     loaded=(EntityItem *)MCGameplay_get(&g)->items[0];CHECK(loaded->entity.entityId==INT32_MIN);
     mc_nbt_free(&data);finish(&g,&scope);
 }
-int main(void) {source_constructor_ids_survive_native_load();uuid_authority_profile_order_and_random_nonpersistence();malformed_item_uuid_preserves_prefix_and_abort_preserves_parent();missing_profile_fails_after_base_uuid_before_inventory();roundtrip_sources_foreign_and_names();workbench_recovery_and_item_envelope();maps_and_snapshot_metadata();durable_group_and_packet_preflight();source_inventory_last_wins_and_partial_rollback();malformed_extensions_and_profile_dependency();storage_byte_cap_and_persistence_tracker();item_list_boundaries_and_invalid_adoption();native_position_restore_and_failure();printf("gameplay storage: %u checks passed\n",checks);return 0;}
+static void map_provider_namespaces_and_journal(void) {
+    MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);
+    MCGameplayWorld *w=(MCGameplayWorld *)p->living.entity.worldObj;
+    MapStorage *base=w->mapStorage;int32_t id=-1;
+    NBTString *map=NBTString_fromASCII(g.heap,"map"),*other=NBTString_fromUTF8(g.heap,"別の保存ID");
+    CHECK(map&&other&&World_getUniqueDataId(w,map,&id)&&id==0);
+    CHECK(World_getUniqueDataId(w,other,&id)&&id==0);
+    w->remote=true;CHECK(World_getUniqueDataId(w,map,&id)&&id==1&&map_next(w)==2);
+    CHECK(MapStorage_nativeImportExactShort(base,other,INT16_MAX));
+    CHECK(World_getUniqueDataId(w,other,&id)&&id==INT16_MIN);
+    SaveDataMemoryStorage *memory=SaveDataMemoryStorage_nativeNewCounterProvider(g.heap);
+    CHECK(memory);w->mapStorage=&memory->base;w->remote=false;
+    CHECK(World_getUniqueDataId(w,map,&id)&&id==0&&World_getUniqueDataId(w,other,&id)&&id==0);
+    CHECK(MapStorage_nativeIdCountSize(w->mapStorage)==0&&map_next(w)==0);
+    w->mapStorage=base;w->remote=false;MCObjectHeap_touch(g.heap);
+    mc_nbt data={0};CHECK(MCGameplayStorage_encodeMaps(MCGameplay_get(&g),&data,NULL));
+    CHECK(map_next(w)==2&&MapStorage_nativeIdCountSize(base)==2);
+    MCGameplay copy={0};MCObjectRootScope copiedScope={0};MCGameplayPlayer *q=setup(&copy,&copiedScope);
+    MCGameplayWorld *cw=(MCGameplayWorld *)q->living.entity.worldObj;
+    CHECK(MCGameplayStorage_loadMaps(cw,&data)&&map_next(cw)==2);
+    NBTString *copiedOther=NBTString_fromUTF8(copy.heap,"別の保存ID");
+    CHECK(copiedOther&&World_getUniqueDataId(cw,copiedOther,&id)&&id==INT16_MIN+1);
+    CHECK(World_getUniqueDataId(cw,NBTString_fromASCII(copy.heap,"map"),&id)&&id==2);
+    CHECK(map_next(w)==2);finish(&copy,&copiedScope);
+    NBTTagCompound *root=storage_tag(g.heap,&data);CHECK(root);
+    CHECK(NBTTagCompound_removeTag_ascii(root,"C919MapIdCounts"));
+    mc_nbt legacy={0};snapshot(root,&legacy);
+    q=setup(&copy,&copiedScope);cw=(MCGameplayWorld *)q->living.entity.worldObj;
+    CHECK(MCGameplayStorage_loadMaps(cw,&legacy)&&map_next(cw)==2&&MapStorage_nativeIdCountSize(cw->mapStorage)==1);
+    finish(&copy,&copiedScope);mc_nbt_free(&legacy);
+    /* Native load failures retain source prefixes in a disposable graph;
+       the authoritative parent's namespace counters are never adopted. */
+    MCObjectRootScope_end(&scope);
+    for(unsigned which=0;which<2;which++) {
+        MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx));
+        CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
+        MCGameplayWorld *tw=(MCGameplayWorld *)MCGameplay_get(&tx.working)->world;
+        NBTTagCompound *bad=storage_tag(tx.working.heap,&data);CHECK(bad);
+        if(which==0)CHECK(NBTTagCompound_setInteger_ascii(bad,"C919MapIdCounts",7));
+        else CHECK(NBTTagCompound_setInteger_ascii(bad,"NextId",31));
+        mc_nbt broken={0};snapshot(bad,&broken);
+        CHECK(!MCGameplayStorage_loadMaps(tw,&broken)&&MCObjectHeap_failed(tx.working.heap));
+        mc_nbt_free(&broken);MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx));
+        CHECK(MCObjectRootScope_begin(&scope,g.heap));
+        CHECK(map_next((MCGameplayWorld *)MCGameplay_get(&g)->world)==2);
+        MCObjectRootScope_end(&scope);
+    }
+    mc_nbt_free(&data);CHECK(MCGameplay_free(&g));
+}
+int main(void) {map_provider_namespaces_and_journal();source_constructor_ids_survive_native_load();uuid_authority_profile_order_and_random_nonpersistence();malformed_item_uuid_preserves_prefix_and_abort_preserves_parent();missing_profile_fails_after_base_uuid_before_inventory();roundtrip_sources_foreign_and_names();workbench_recovery_and_item_envelope();maps_and_snapshot_metadata();durable_group_and_packet_preflight();source_inventory_last_wins_and_partial_rollback();malformed_extensions_and_profile_dependency();storage_byte_cap_and_persistence_tracker();item_list_boundaries_and_invalid_adoption();native_position_restore_and_failure();printf("gameplay storage: %u checks passed\n",checks);return 0;}

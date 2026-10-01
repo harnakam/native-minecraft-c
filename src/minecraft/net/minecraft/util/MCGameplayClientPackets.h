@@ -1,6 +1,8 @@
 #ifndef C919_NATIVE_CLIENT_GAMEPLAY_PACKETS_H
 #define C919_NATIVE_CLIENT_GAMEPLAY_PACKETS_H
 #include "util/MCPacketQueue.h"
+#include "network/play/client/C03PacketPlayer.h"
+#include "network/play/client/C0BPacketEntityAction.h"
 #include "network/play/client/C07PacketPlayerDigging.h"
 #include "network/play/client/C09PacketHeldItemChange.h"
 #include "network/play/client/C08PacketPlayerBlockPlacement.h"

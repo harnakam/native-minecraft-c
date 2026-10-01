@@ -25,7 +25,7 @@ static GameplayPacketResult finish(MCGameplay *game, MCObjectRootScope *scope, b
 }
 GameplayPacketResult GameplayPacketRouter_server(MCGameplay *game, size_t index, int32_t id,
                                                  mc_buf *payload) {
-    if (id != 0x0d && id != 0x0e && id != 0x0f && id != 0x10 && id != 0x13)
+    if (id != 0x0b && id != 0x0d && id != 0x0e && id != 0x0f && id != 0x10 && id != 0x13)
         return MC_GAMEPLAY_PACKET_NOT_HANDLED;
     MCGameplayPlayer *player = actor(game, index, payload);
     if (!player || !NetHandlerPlayServer_isInstance(player->handler) ||
@@ -45,6 +45,12 @@ GameplayPacketResult GameplayPacketRouter_server(MCGameplay *game, size_t index,
     INetHandlerPlayServer target = NetHandlerPlayServer_asHandler(handler);
     bool parsed = false, applied = false;
     switch (id) {
+    case 0x0b: {
+        C0BPacketEntityAction *packet=C0BPacketEntityAction_new_empty(game->heap);
+        parsed=packet && C0BPacketEntityAction_readPacketData(packet,&buffer) && payload->pos==payload->len;
+        if(parsed)applied=C0BPacketEntityAction_processPacket(packet,target);
+        break;
+    }
     case 0x0d: {
         C0DPacketCloseWindow *packet = C0DPacketCloseWindow_new_empty(game->heap);
         parsed = packet && C0DPacketCloseWindow_readPacketData(packet, &buffer) &&

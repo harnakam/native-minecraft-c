@@ -25,8 +25,19 @@ EntityItem *EntityPlayer_dropItem(MCGameplayPlayer *,ItemStack *,bool dropAround
     const EntityPlayerDropsDependencies *,MCObject *context);
 EntityItem *EntityPlayer_dropOneItem(MCGameplayPlayer *,bool dropAll,
     const EntityPlayerDropsDependencies *,MCObject *context);
-/* Original body; sleeping and the inherited sneaking flag are native field
-   bindings until the complete EntityPlayer/DataWatcher hierarchy is ported. */
+/* Original getEyeHeight body invokes these virtual predicates in source order.
+   False callback completion models an exception; the bool output is the actual
+   predicate result. Context is a traced caller-owned same-heap reference (or
+   NULL for stateless dependencies), borrowed with the exact captured receiver. */
+typedef struct {
+    bool (*isPlayerSleeping)(MCObject *context,MCGameplayPlayer *,bool *out);
+    bool (*isSneaking)(MCObject *context,MCGameplayPlayer *,bool *out);
+} EntityPlayerEyeHeightDependencies;
+float EntityPlayer_getEyeHeightWithDispatch(MCGameplayPlayer *,MCObject *context,
+    const EntityPlayerEyeHeightDependencies *);
+/* Native concrete-base receiver adapter: Player.sleeping getter and inherited
+   Entity.isSneaking. A subtype such as SP must supply its actual override to
+   WithDispatch; this convenience function does not perform generic dispatch. */
 float EntityPlayer_getEyeHeight(const MCGameplayPlayer *);
-/* The rest of EntityPlayer and inherited Entity remain separate ports. */
+/* Other EntityPlayer methods remain separate ports. */
 #endif

@@ -6,6 +6,7 @@
 typedef struct BaseAttributeMap BaseAttributeMap;
 typedef struct IAttribute IAttribute;
 typedef struct IAttributeInstance IAttributeInstance;
+typedef struct AttributeModifier AttributeModifier;
 typedef struct CombatTracker CombatTracker;
 typedef struct MCGameplayPlayer MCGameplayPlayer;
 typedef struct EntityLivingBase EntityLivingBase;
@@ -83,4 +84,16 @@ IAttributeInstance *EntityLivingBase_getEntityAttribute(EntityLivingBase *,IAttr
 float EntityLivingBase_getMaxHealth(EntityLivingBase *);
 float EntityLivingBase_getHealth(EntityLivingBase *);
 bool EntityLivingBase_setHealth(EntityLivingBase *,float);
+/* Native per-heap class-static lifetime boundary. The two initialized source
+   fields retain shared identities through snapshots and collection. Java class
+   initialization precedes allocation; this provider runs before the translated
+   constructor body, after the native subtype allocation. */
+typedef struct EntityLivingBaseStaticFields {
+  MCObject object;
+  NativeJavaUUID *sprintingSpeedBoostModifierUUID;
+  AttributeModifier *sprintingSpeedBoostModifier;
+} EntityLivingBaseStaticFields;
+const EntityLivingBaseStaticFields *
+EntityLivingBase_getStaticFields(MCObjectHeap *);
+bool EntityLivingBase_setSprinting(EntityLivingBase *, bool);
 #endif

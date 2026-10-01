@@ -9,19 +9,42 @@ static bool dependencies_ready(const EntityPlayerDropsDependencies *d) {
     return d&&d->entity&&d->constructor&&d->getEyeHeight&&d->nextFloat&&d->getName&&
         d->joinEntityItemWithWorld&&d->triggerDropStat&&d->mathSin&&d->mathCos;
 }
-float EntityPlayer_getEyeHeight(const MCGameplayPlayer *p) {
+float EntityPlayer_getEyeHeightWithDispatch(MCGameplayPlayer *p,MCObject *context,
+    const EntityPlayerEyeHeightDependencies *d) {
     if (!p || !MCGameplayPlayer_isInstance((const MCObject *)p)) {
         MCObjectHeap_fail(p ? p->living.entity.object.heap : NULL);
         return 0;
     }
+    MCObjectHeap *h=p->living.entity.object.heap;
+    MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,h))return 0;
+    /* No collection/adoption can invalidate this captured receiver or context,
+       including when a virtual getter mutates another retained actor edge. */
+    bool ok=MCObjectRootScope_pin(&scope,(MCObject *)p)&&
+        MCObjectRootScope_pin(&scope,context);
     float height = 1.62F;
-    if (p->sleeping)
+    bool sleeping=false,sneaking=false;
+    if(ok)ok=completed(h,d&&d->isPlayerSleeping&&d->isPlayerSleeping(context,p,&sleeping));
+    if(ok&&sleeping)
         height = 0.2F;
-    if (Entity_isSneaking((Entity *)&p->living.entity)) {
+    /* Source always evaluates the second virtual getter after the first. Its
+       dependency is checked here, preserving the first getter's failure prefix. */
+    if(ok)ok=completed(h,d&&d->isSneaking&&d->isSneaking(context,p,&sneaking));
+    if(ok&&sneaking) {
         volatile float lowered = height - 0.08F;
         height = lowered;
     }
-    return height;
+    MCObjectRootScope_end(&scope);return ok?height:0;
+}
+static bool concrete_sleeping(MCObject *context,MCGameplayPlayer *p,bool *out) {
+    (void)context;*out=p->sleeping;return true;
+}
+static bool concrete_sneaking(MCObject *context,MCGameplayPlayer *p,bool *out) {
+    (void)context;*out=Entity_isSneaking(&p->living.entity);
+    return !MCObjectHeap_failed(p->living.entity.object.heap);
+}
+float EntityPlayer_getEyeHeight(const MCGameplayPlayer *p) {
+    static const EntityPlayerEyeHeightDependencies d={concrete_sleeping,concrete_sneaking};
+    return EntityPlayer_getEyeHeightWithDispatch((MCGameplayPlayer *)p,NULL,&d);
 }
 EntityItem *EntityPlayer_dropOneItem(MCGameplayPlayer *p,bool all,
     const EntityPlayerDropsDependencies *d,MCObject *context) {
