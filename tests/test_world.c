@@ -1,4 +1,4 @@
-#include "world/world.h"
+#include "world/NativeWorld.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

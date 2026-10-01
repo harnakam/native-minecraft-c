@@ -1,5 +1,8 @@
 #include "client/network/NetHandlerPlayClient.h"
 #include "client/entity/EntityPlayerSP.h"
+#include "client/native_runtime.h"
+#include "world/WorldProviderHell.h"
+#include "world/WorldProviderEnd.h"
 #include "util/MCGameplay.h"
 #include "item/crafting/CraftingManager.h"
 #include "util/MCGameplayCrafting.h"
@@ -33,7 +36,7 @@ static void descriptor_safety_existing_boundary(void) {
     MCGameplay game={0};CHECK(MCGameplay_init(&game,8*1024*1024));
     CraftingManager *manager=CraftingManager_newEmpty(game.heap);CHECK(manager);
     MCGameplayWorld *world=MCGameplayWorld_new(game.heap,MCGameplay_get(&game),NULL,manager);CHECK(world);
-    world->remote=true;CHECK(MCGameplay_setWorld(&game,(MCObject *)world));
+    world->isRemote=true;CHECK(MCGameplay_setWorld(&game,(MCObject *)world));
     MCGameplayPlayer *p=MCGameplayPlayer_nativeAllocate(game.heap);CHECK(p);
     p->living.entity.worldObj=(MCObject *)world;
     p->gameProfile=NativeGameProfile_new(game.heap,NULL,NBTString_fromASCII(game.heap,"Bootstrap"));CHECK(p->gameProfile);
@@ -107,7 +110,7 @@ static void native_binding_preserves_callback_order(void) {
     for(unsigned mode=0;mode<5;mode++) {
         MCGameplay game={0};CHECK(MCGameplay_init(&game,8*1024*1024));
         CraftingManager *manager=CraftingManager_newEmpty(game.heap);CHECK(manager);
-        MCGameplayWorld *w=MCGameplayWorld_new(game.heap,MCGameplay_get(&game),NULL,manager);CHECK(w);w->remote=mode!=1;
+        MCGameplayWorld *w=MCGameplayWorld_new(game.heap,MCGameplay_get(&game),NULL,manager);CHECK(w);w->isRemote=mode!=1;
         MCGameplayPlayer *p=MCGameplayPlayer_nativeAllocate(game.heap);CHECK(p);
         p->living.entity.worldObj=mode==2?NULL:(MCObject *)w;
         Controller *c=controller(game.heap);
@@ -204,14 +207,14 @@ static void check_source_aliases(NetHandlerPlayClient *h,MCObjectHeap *heap) {
     CHECK(p->effects==(MCObject *)c&&sp->clientPlayer.playerInfo==p->pendingPackets&&p->pendingPackets==(MCObject *)p->savedFields);
     CHECK(sp->statWriter==p->stats&&NBTString_equalsASCII(sp->clientBrand,"NativeClient"));
     CHECK(sp->movementInput&&sp->movementInput->sneak&&NBTString_equalsASCII(p->savedRootName,"NativeSaved"));
-    CHECK(h->clientWorldController==(MCGameplayWorld *)p->living.entity.worldObj&&h->clientWorldController->remote);
+    CHECK(h->clientWorldController==(MCGameplayWorld *)p->living.entity.worldObj&&h->clientWorldController->isRemote);
     CHECK(!c->lookups&&c->profileGets==1&&!MCObjectHeap_failed(heap));
 }
 static void bootstrap_actual_source_subtype(void) {
     MCGameplay game={0};CHECK(MCGameplay_init(&game,8*1024*1024));
     CraftingManager *manager=CraftingManager_newEmpty(game.heap);CHECK(manager);
     MCGameplayWorld *world=MCGameplayWorld_new(game.heap,MCGameplay_get(&game),NULL,manager);CHECK(world);
-    world->remote=true;world->dimension=7;world->itemDisplayName=registry_display;
+    world->isRemote=true;world->provider->dimensionId=7;world->itemDisplayName=registry_display;
     CHECK(MCGameplay_setWorld(&game,(MCObject *)world));
     Controller *c=controller(game.heap);
     NetHandlerPlayClient *h=NetHandlerPlayClient_nativeBootstrap(game.heap,profile(game.heap),(MCObject *)c,(MCObject *)c,&deps);CHECK(h);
@@ -260,7 +263,7 @@ static void bootstrap_actual_source_subtype(void) {
 static void nullable_profile_reaches_source_parent_failure(void) {
     MCGameplay game={0};CHECK(MCGameplay_init(&game,8*1024*1024));
     CraftingManager *manager=CraftingManager_newEmpty(game.heap);CHECK(manager);
-    MCGameplayWorld *world=MCGameplayWorld_new(game.heap,MCGameplay_get(&game),NULL,manager);CHECK(world);world->remote=true;
+    MCGameplayWorld *world=MCGameplayWorld_new(game.heap,MCGameplay_get(&game),NULL,manager);CHECK(world);world->isRemote=true;
     Controller *c=controller(game.heap);
     NetHandlerPlayClient *h=NetHandlerPlayClient_nativeBootstrap(game.heap,NULL,(MCObject *)c,(MCObject *)c,&deps);CHECK(h);
     CHECK(!NetHandlerPlayClient_getGameProfile(h)&&!MCObjectHeap_failed(game.heap));
@@ -279,6 +282,84 @@ static void nullable_profile_reaches_source_parent_failure(void) {
     CHECK(!p->gameProfile&&!p->inventoryContainer&&!p->handler&&!p->savedFields&&!p->stats);
     CHECK(MCGameplay_free(&game));
 }
+static void native_dimension_import_preserves_canonical_graph(void) {
+    /* This is the real native received-dimension adapter, not a claimed
+       WorldClient constructor or full respawn-handler translation. */
+    mc_world terrain;mc_world_init(&terrain,123);
+    MCGameplay game={0};CHECK(mc_client_graph_init(&game,&terrain,"DimensionWitness"));
+    MCGameplayObjects *owners=MCGameplay_get(&game);
+    MCGameplayPlayer *p=mc_client_graph_player(&game);
+    MCClientBindings *bindings=mc_client_graph_bindings(&game);
+    CHECK(p&&bindings&&bindings->player==p&&EntityPlayerSP_asPlayer(bindings->sp)==p);
+    NetHandlerPlayClient *handler=(NetHandlerPlayClient *)p->handler;
+    World *old=mc_client_graph_world(&game);CHECK(old&&handler&&old->isRemote);
+    Scoreboard *scoreboard=World_getScoreboard(old);
+    InventoryPlayer *inventory=p->inventory;NativeJavaUUID *uuid=p->living.entity.entityUniqueID;
+    NativeJavaRandom *random=p->living.entity.rand;int32_t entityId=Entity_getEntityId(&p->living.entity);
+    CHECK(NativeReferenceList_size(old->loadedEntityList)==1&&
+          NativeReferenceList_get(old->loadedEntityList,0)==(MCObject *)p&&
+          NativeReferenceList_get(old->playerEntities,0)==(MCObject *)p&&
+          World_getEntityByID(old,entityId)==&p->living.entity);
+    const int32_t dimensions[]={-1,1};
+    for(size_t i=0;i<2;i++) {
+        MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,game.heap));
+        old=mc_client_graph_world(&game);
+        CHECK(mc_client_graph_nativeImportDimension(&game,dimensions[i],&WorldSettingsGameType_ADVENTURE));
+        World *current=mc_client_graph_world(&game);CHECK(current&&current!=old&&current->isRemote);
+        CHECK(WorldProvider_getDimensionId(current->provider)==dimensions[i]&&
+              (i==0?WorldProviderHell_isInstance((MCObject *)current->provider):WorldProviderEnd_isInstance((MCObject *)current->provider)));
+        CHECK(p==mc_client_graph_player(&game)&&bindings==mc_client_graph_bindings(&game)&&
+              owners==MCGameplay_get(&game)&&p->living.entity.worldObj==(MCObject *)current&&
+              handler->clientWorldController==current&&bindings->sp->sendQueue==handler);
+        CHECK(p->living.entity.dimension==dimensions[i]&&p->inventory==inventory&&
+              p->living.entity.entityUniqueID==uuid&&p->living.entity.rand==random&&
+              Entity_getEntityId(&p->living.entity)==entityId&&World_getScoreboard(current)==scoreboard);
+        CHECK(NativeReferenceList_size(old->loadedEntityList)==0&&
+              NativeReferenceList_size(old->playerEntities)==0&&!World_getEntityByID(old,entityId));
+        CHECK(NativeReferenceList_size(current->loadedEntityList)==1&&
+              NativeReferenceList_get(current->loadedEntityList,0)==(MCObject *)p&&
+              NativeReferenceList_get(current->playerEntities,0)==(MCObject *)p&&
+              World_getEntityByID(current,entityId)==&p->living.entity&&MCGameplay_validateWorldIndexes(owners));
+        CHECK(WorldInfo_getGameType(current->worldInfo)==&WorldSettingsGameType_ADVENTURE);
+        uint32_t mod=current->loadedEntityList->modCount;
+        IntHashMapEntry *entry=IntHashMap_lookupEntry(current->entitiesById,entityId);
+        size_t live=MCObjectHeap_liveObjects(game.heap);
+        CHECK(mc_client_graph_nativeImportDimension(&game,dimensions[i],&WorldSettingsGameType_SPECTATOR));
+        CHECK(mc_client_graph_world(&game)==current&&WorldInfo_getGameType(current->worldInfo)==&WorldSettingsGameType_SPECTATOR&&
+              current->loadedEntityList->modCount==mod&&IntHashMap_lookupEntry(current->entitiesById,entityId)==entry&&
+              MCObjectHeap_liveObjects(game.heap)==live);
+        MCObjectRootScope_end(&scope);CHECK(MCObjectHeap_collect(game.heap));
+        CHECK(mc_client_graph_player(&game)==p&&World_getScoreboard(current)==scoreboard&&
+              World_getEntityByID(current,entityId)==&p->living.entity&&MCGameplay_validateWorldIndexes(owners));
+    }
+    /* Snapshot the actual live graph, preserving its aliases and retained
+       scoreboard, then adopt and reacquire every managed reference. */
+    MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));
+    MCGameplayObjects *branch=MCGameplay_get(&tx.working);World *cw=(World *)branch->world;
+    MCGameplayPlayer *cp=mc_client_graph_player(&tx.working);
+    MCClientBindings *cb=mc_client_graph_bindings(&tx.working);
+    NetHandlerPlayClient *ch=(NetHandlerPlayClient *)cp->handler;
+    CHECK(cp!=p&&cw!=mc_client_graph_world(&game)&&cb!=bindings&&cb->player==cp&&
+          EntityPlayerSP_asPlayer(cb->sp)==cp&&ch->clientWorldController==cw&&cp->living.entity.worldObj==(MCObject *)cw);
+    CHECK(cw->worldScoreboard!=scoreboard&&cw->worldScoreboard->object.heap==tx.working.heap&&
+          World_getEntityByID(cw,entityId)==&cp->living.entity&&
+          NativeReferenceList_get(cw->loadedEntityList,0)==(MCObject *)cp&&MCGameplay_validateWorldIndexes(branch));
+    CHECK(MCObjectHeap_collect(tx.working.heap)&&MCGameplay_validateWorldIndexes(branch));
+    CHECK(MCObjectHeap_adopt(game.heap,tx.working.heap));CHECK(MCGameplay_abort(&tx));
+    owners=MCGameplay_get(&game);p=mc_client_graph_player(&game);bindings=mc_client_graph_bindings(&game);
+    World *current=mc_client_graph_world(&game);handler=(NetHandlerPlayClient *)p->handler;
+    CHECK(p==cp&&current==cw&&bindings==cb&&handler==ch&&bindings->player==p&&
+          handler->clientWorldController==current&&World_getEntityByID(current,entityId)==&p->living.entity);
+    CHECK(MCObjectHeap_collect(game.heap)&&MCGameplay_validateWorldIndexes(owners));
+    CHECK(MCGameplay_begin(&game,&tx));branch=MCGameplay_get(&tx.working);
+    cp=mc_client_graph_player(&tx.working);cw=mc_client_graph_world(&tx.working);ch=(NetHandlerPlayClient *)cp->handler;
+    CHECK(!mc_client_graph_nativeImportDimension(&tx.working,123456,&WorldSettingsGameType_SURVIVAL)&&MCObjectHeap_failed(tx.working.heap));
+    CHECK(branch->world==(MCObject *)cw&&cp->living.entity.worldObj==(MCObject *)cw&&
+          ch->clientWorldController==cw&&cp->living.entity.dimension==1&&World_getEntityByID(current,entityId)==&p->living.entity);
+    CHECK(MCGameplay_abort(&tx)&&MCGameplay_get(&game)==owners&&!MCObjectHeap_failed(game.heap)&&
+          MCGameplay_validateWorldIndexes(owners));
+    CHECK(MCGameplay_free(&game));mc_world_free(&terrain);
+}
 int main(void) {
     descriptor_safety_existing_boundary();
     profile_before_player_lifetime();
@@ -287,5 +368,6 @@ int main(void) {
     attachment_does_not_reconstruct_source_parent();
     bootstrap_actual_source_subtype();
     nullable_profile_reaches_source_parent_failure();
+    native_dimension_import_preserves_canonical_graph();
     printf("source client bootstrap: %u checks passed\n",checks);return 0;
 }

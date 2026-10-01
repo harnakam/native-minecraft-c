@@ -1,4 +1,5 @@
 #include "stats/StatFileWriter.h"
+#include "stats/ObjectiveStat.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@ static void progress_trace(MCObject *object,MCObjectVisitor visitor,void *contex
     progress->stat=(StatBase *)visitor((MCObject *)progress->stat,context);
 }
 static const MCObjectClass progress_class={"TestStatProgress",MCObjectHeap_plainClone,progress_trace,NULL};
+static bool any_object(const MCObject *object,void *context) { (void)object; (void)context; return true; }
 static StatBase *stat(MCObjectHeap *heap,const char *id,StatBaseKind kind) {
     StatBase *value=StatBase_newIdentity(heap,NBTString_fromASCII(heap,id),kind); CHECK(value); return value;
 }
@@ -101,8 +103,17 @@ static void parents(void) {
     CHECK(StatFileWriter_readStat(writer,&child->base)==INT32_MIN && !MCObjectHeap_failed(heap)); MCObjectHeap_free(heap);
 }
 static void progress_and_snapshots(void) {
-    MCObjectHeap *heap=MCObjectHeap_new(8*1024*1024); StatFileWriter *writer=StatFileWriter_new(heap); CHECK(writer);
-    StatBaseRegistry *registry=StatBaseRegistry_new(heap); CHECK(registry); StatBase *key=stat(heap,"counter",STAT_BASE_KIND_CRAFTING);
+    MCObjectHeap *heap=MCObjectHeap_new(8*1024*1024); CHECK(heap);
+    StatBase *key=stat(heap,"counter",STAT_BASE_KIND_CRAFTING);
+    /* Source INSTANCES retains ObjectiveStat -> StatBase even after native
+       writer/registry roots disappear. Measure that exact static graph first. */
+    CHECK(MCObjectHeap_collect(heap));
+    size_t static_objects=MCObjectHeap_liveObjects(heap),static_bytes=MCObjectHeap_liveBytes(heap);
+    CHECK(static_objects>0 && ObjectiveStat_isInstance((MCObject *)StatBase_getCriteria(key)));
+    CHECK(((ObjectiveStat *)StatBase_getCriteria(key))->stat==key);
+    StatFileWriter *writer=StatFileWriter_new(heap); CHECK(writer);
+    StatBaseRegistry *registry=StatBaseRegistry_new(heap); CHECK(registry);
+    const MCObjectClass *writer_class=writer->object.klass,*registry_class=((MCObject *)registry)->klass;
     CHECK(StatBaseRegistry_register(registry,key));
     Progress *progress=(Progress *)MCObjectHeap_alloc(heap,sizeof(*progress),&progress_class); CHECK(progress);
     progress->writer=writer; progress->stat=key; progress->value=23;
@@ -125,15 +136,27 @@ static void progress_and_snapshots(void) {
     key=StatBaseRegistry_find_ascii(registry,"counter"); CHECK(StatFileWriter_readStat(writer,key)==11);
     CHECK(StatFileWriter_func_150872_a(writer,key,NULL)==NULL); CHECK(!StatFileWriter_func_150870_b(writer,key));
     CHECK(StatFileWriter_readStat(writer,key)==11 && !MCObjectHeap_failed(heap));
-    MCObjectRoot_drop(&rw); MCObjectRoot_drop(&rr); CHECK(MCObjectHeap_collect(heap)); CHECK(MCObjectHeap_liveObjects(heap)==0);
+    MCObjectRoot_drop(&rw); MCObjectRoot_drop(&rr); CHECK(MCObjectHeap_collect(heap));
+    CHECK(MCObjectHeap_liveObjects(heap)==static_objects && MCObjectHeap_liveBytes(heap)==static_bytes);
+    CHECK(IScoreObjectiveCriteria_find(heap,key->statId)==StatBase_getCriteria(key));
+    CHECK(((ObjectiveStat *)StatBase_getCriteria(key))->stat==key);
+    CHECK(!MCObjectHeap_findObject(heap,writer_class,any_object,NULL));
+    CHECK(!MCObjectHeap_findObject(heap,registry_class,any_object,NULL));
+    CHECK(!MCObjectHeap_findObject(heap,&progress_class,any_object,NULL));
     MCObjectHeap_free(heap);
 }
 static void collisions_and_growth(void) {
     MCObjectHeap *heap=MCObjectHeap_new(16*1024*1024); StatFileWriter *writer=StatFileWriter_new(heap); CHECK(writer);
-    StatBase *keys[512]; char id[19];
+    StatBase *keys[512]; char id[19],constructor_id[32];
     for (unsigned n=0;n<512;n++) {
         for (unsigned i=0;i<9;i++) { id[i*2]=(n&(1u<<i)) ? 'A' : 'B'; id[i*2+1]=(n&(1u<<i)) ? 'a' : 'B'; } id[18]=0;
-        keys[n]=stat(heap,id,STAT_BASE_KIND_BASE);
+        /* This is a StatFileWriter receiver-state fixture. Construct real
+           criteria with distinct names before injecting writer collision IDs;
+           the separate INSTANCES map's unported tree bins are not its subject. */
+        snprintf(constructor_id,sizeof(constructor_id),"writer-fixture-%u",n);
+        keys[n]=stat(heap,constructor_id,STAT_BASE_KIND_BASE);
+        keys[n]->statId=NBTString_fromASCII(heap,id);CHECK(keys[n]->statId);
+        MCObjectHeap_touch(heap);
         CHECK(StatBase_hashCode(keys[n])==StatBase_hashCode(keys[0]));
         CHECK(StatFileWriter_increaseStat(writer,NULL,keys[n],(int32_t)n));
     }
@@ -142,6 +165,24 @@ static void collisions_and_growth(void) {
     MCObjectRoot root; CHECK(MCObjectRoot_init(&root,heap,(MCObject *)writer)); CHECK(MCObjectHeap_collect(heap));
     for (unsigned n=0;n<512;n++) CHECK(StatFileWriter_readStat(writer,keys[n])==(int32_t)n);
     CHECK(!MCObjectHeap_failed(heap)); MCObjectHeap_free(heap);
+}
+static void criterion_registry_tree_bin_boundary(void) {
+    MCObjectHeap *heap=MCObjectHeap_new(4*1024*1024);CHECK(heap);
+    bool rejected=false;int32_t first_hash=0;
+    /* Unlike the writer-state fixture above, these are genuine constructor
+       names. The declared native INSTANCES tree-bin boundary must fail rather
+       than silently claim the missing JDK HashMap implementation. */
+    for(unsigned n=0;n<32;n++) {
+        char id[11];for(unsigned i=0;i<5;i++) {
+            id[i*2]=(n&(1u<<i))?'A':'B';id[i*2+1]=(n&(1u<<i))?'a':'B';
+        }id[10]=0;
+        NBTString *name=NBTString_fromASCII(heap,id);CHECK(name);
+        StatBase *key=StatBase_newIdentity(heap,name,STAT_BASE_KIND_BASE);
+        if(!key) {CHECK(n>=8 && MCObjectHeap_failed(heap));rejected=true;break;}
+        int32_t hash=StatBase_hashCode(key);if(!n)first_hash=hash;
+        CHECK(hash==first_hash && !MCObjectHeap_failed(heap));
+    }
+    CHECK(rejected && !MCObjectHeap_hasBorrowers(heap));MCObjectHeap_free(heap);
 }
 static void virtual_unlock(void) {
     MCObjectHeap *heap=MCObjectHeap_new(1024*1024); StatFileWriter *writer=StatFileWriter_newWithOverrides(heap,&overrides); CHECK(writer);
@@ -176,6 +217,6 @@ static void exception_boundaries(void) {
     heap=MCObjectHeap_new(1); CHECK(!StatFileWriter_new(heap)); CHECK(MCObjectHeap_failed(heap)); MCObjectHeap_free(heap);
 }
 int main(void) {
-    identity_and_registry(); counters_and_equal_keys(); parents(); progress_and_snapshots(); collisions_and_growth(); virtual_unlock(); exception_boundaries();
+    identity_and_registry(); counters_and_equal_keys(); parents(); progress_and_snapshots(); collisions_and_growth(); criterion_registry_tree_bin_boundary(); virtual_unlock(); exception_boundaries();
     printf("Source stats: %u checks passed\n",checks); return 0;
 }

@@ -12,4 +12,5 @@ bool mc_block_placeable_item(int16_t item_id);
 unsigned mc_block_collision(uint16_t state, mc_box boxes[3]);
 /* Native immutable material identity/property facts for supported registry IDs. */
 bool mc_block_material_flags(uint16_t state,bool *movement,bool *leaves);
+bool mc_block_light_opacity(uint16_t state,int32_t *out);
 #endif

@@ -87,7 +87,7 @@ static void constructor_results_and_graph_lifetime(void) {
     MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,game.heap));
     CraftingManager *manager=CraftingManager_newEmpty(game.heap);CHECK(manager);
     MCGameplayWorld *world=MCGameplayWorld_newWithRandomRuntime(game.heap,MCGameplay_get(&game),NULL,manager,service);
-    CHECK(world&&MCGameplay_setWorld(&game,(MCObject *)world));world->remote=true;
+    CHECK(world&&MCGameplay_setWorld(&game,(MCObject *)world));world->isRemote=true;
     world->itemDisplayName=registry_name;world->itemDisplayContext=(MCObject *)world;
     CHECK(clock.calls==2&&world->updateLCG==INT32_C(0x0a053de4)&&world->ambientTickCountdown==3286);
     CHECK(world->rand->state.seed48==UINT64_C(0x7df268edb03f));

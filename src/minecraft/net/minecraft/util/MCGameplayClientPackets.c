@@ -49,7 +49,7 @@ bool MCGameplayClientPackets_bind(MCGameplayPlayer *p) {
     MCObjectHeap *heap = p->living.entity.object.heap;
     if (!MCGameplayPlayer_isInstance((MCObject *)p) || !((MCGameplayWorld *)(p->living.entity.worldObj)) ||
         !MCGameplayWorld_isInstance((MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj))) || ((MCGameplayWorld *)(p->living.entity.worldObj))->object.heap != heap ||
-        !((MCGameplayWorld *)(p->living.entity.worldObj))->remote || !((MCGameplayWorld *)(p->living.entity.worldObj))->owners || ((MCGameplayWorld *)(p->living.entity.worldObj))->owners->object.heap != heap) {
+        !((MCGameplayWorld *)(p->living.entity.worldObj))->isRemote || !((MCGameplayWorld *)(p->living.entity.worldObj))->owners || ((MCGameplayWorld *)(p->living.entity.worldObj))->owners->object.heap != heap) {
         MCObjectHeap_fail(heap);
         return false;
     }
@@ -97,7 +97,7 @@ bool MCGameplayClientPackets_validate(MCGameplayPlayer *p) {
 bool MCGameplayClientPackets_validateFrame(MCGameplayObjects *objects, void *context) {
     (void)context;
     if (!objects || !MCGameplayWorld_isInstance(objects->world) ||
-        !((MCGameplayWorld *)objects->world)->remote)
+        !((MCGameplayWorld *)objects->world)->isRemote)
         return false;
     for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS; i++)
         if (objects->players[i]) {

@@ -1,6 +1,7 @@
 #include "item/ItemStackCrafting.h"
 #include "item/ItemMapCreated.h"
 #include "world/WorldDataStorage.h"
+#include "world/WorldType.h"
 #include "nbt/NBTTagCompound.h"
 #include <limits.h>
 #include <math.h>
@@ -38,6 +39,9 @@ static void player_trace(MCObject *object, MCObjectVisitor visit, void *context)
 static const MCObjectClass owners_class = {"TestCraftOwners", MCObjectHeap_plainClone, NULL, NULL};
 static const MCObjectClass player_class = {"TestCraftPlayer", MCObjectHeap_plainClone, player_trace,
                                            NULL};
+static bool any_object(const MCObject *object,void *context) {
+    (void)object; (void)context; return true;
+}
 static World *make_world(MCObjectHeap *heap) {
     MCObjectRootScope scope = {0};
     CHECK(MCObjectRootScope_begin(&scope, heap));
@@ -202,9 +206,9 @@ static void missing_remote_and_limits(void) {
     MCObjectHeap *h = MCObjectHeap_new(8 * 1024 * 1024);
     World *w = make_world(h);
     Player *p = make_player(h, -1);
-    w->spawnX = -65;
-    w->spawnZ = 1024;
-    w->dimension = -1;
+    w->worldInfo->spawnX = -65;
+    w->worldInfo->spawnZ = 1024;
+    w->provider->dimensionId = -1;
     CHECK(World_nativeImportMapNextProjection(w, 10));
     p->stack->itemDamage = 100000;
     NBTTagCompound *tag = mark(p->stack);
@@ -223,7 +227,7 @@ static void missing_remote_and_limits(void) {
     h = MCObjectHeap_new(1024 * 1024);
     w = make_world(h);
     p = make_player(h, 1);
-    w->remote = true;
+    w->isRemote = true;
     tag = mark(p->stack);
     CHECK(!ItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(MCObjectHeap_failed(h));
@@ -233,7 +237,7 @@ static void missing_remote_and_limits(void) {
     h = MCObjectHeap_new(8 * 1024 * 1024);
     w = make_world(h);
     p = make_player(h, 1);
-    w->remote = true;
+    w->isRemote = true;
     add_map(w, 4, 4, 192, 192, 0);
     CHECK(World_nativeImportMapNextProjection(w,5));
     tag = mark(p->stack);
@@ -328,6 +332,23 @@ static void counter_replacement(void) {
 }
 static void transaction_graph(void) {
     MCObjectHeap *h = MCObjectHeap_new(8 * 1024 * 1024);
+    /* Initialize the same reached class statics/literals, then reclaim the
+       complete warm-up World/player graph before measuring retained roots. */
+    World *warm_world=make_world(h);
+    Player *warm_player=make_player(h,0);
+    mark(warm_player->stack);
+    CHECK(World_nativeImportMapNextProjection(warm_world,10));
+    CHECK(ItemStack_onCrafting(warm_player->stack,(MCObject *)warm_world,(MCObject *)warm_player,2,&dispatch));
+    const MCObjectClass *world_class=warm_world->object.klass;
+    CHECK(MCObjectHeap_collect(h));
+    CHECK(!MCObjectHeap_findObject(h,world_class,any_object,NULL));
+    CHECK(!MCObjectHeap_findObject(h,&player_class,any_object,NULL));
+    CHECK(!MCObjectHeap_findObject(h,&owners_class,any_object,NULL));
+    WorldTypeStatics *world_types=WorldType_getStatics(h);CHECK(world_types);
+    CHECK(world_types->DEFAULT==world_types->worldTypes->items[0] &&
+          world_types->FLAT==world_types->worldTypes->items[1]);
+    size_t static_objects=MCObjectHeap_liveObjects(h),static_bytes=MCObjectHeap_liveBytes(h);
+    CHECK(static_objects>0);
     World *w = make_world(h);
     Player *p = make_player(h, 0);
     add_map(w, 4, 1, 100, -50, 0);
@@ -381,7 +402,13 @@ static void transaction_graph(void) {
     MCObjectRoot_drop(&rw);
     MCObjectRoot_drop(&rp);
     CHECK(MCObjectHeap_collect(h));
-    CHECK(MCObjectHeap_liveObjects(h) == 0);
+    CHECK(MCObjectHeap_liveObjects(h)==static_objects && MCObjectHeap_liveBytes(h)==static_bytes);
+    world_types=WorldType_getStatics(h);CHECK(world_types);
+    CHECK(world_types->DEFAULT==world_types->worldTypes->items[0] &&
+          world_types->FLAT==world_types->worldTypes->items[1]);
+    CHECK(!MCObjectHeap_findObject(h,world_class,any_object,NULL));
+    CHECK(!MCObjectHeap_findObject(h,&player_class,any_object,NULL));
+    CHECK(!MCObjectHeap_findObject(h,&owners_class,any_object,NULL));
     MCObjectHeap_free(h);
 }
 int main(void) {

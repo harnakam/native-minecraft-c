@@ -32,7 +32,10 @@ ItemStack *ItemEmptyMap_onItemRightClick(const Item *self,ItemStack *input,
             if(stored) {
                 stored->scale=0;
                 ItemMapData_calculateMapCenter(stored,player->living.entity.posX,player->living.entity.posZ,stored->scale);
-                uint8_t dimension=(uint8_t)world->dimension;
+                WorldProvider *provider=world->provider;
+                if(!WorldProvider_isInstance((MCObject *)provider)||provider->object.heap!=heap){fail(heap);goto done;}
+                uint8_t dimension=(uint8_t)WorldProvider_getDimensionId(provider);
+                if(MCObjectHeap_failed(heap))goto done;
                 memcpy(&stored->dimension,&dimension,sizeof(dimension));
                 stored->metadata_known=true;stored->dirty=true;MCObjectHeap_touch(heap);
                 uint32_t count=(uint32_t)input->stackSize-1u;
@@ -68,6 +71,7 @@ ItemStack *ItemEmptyMap_onItemRightClick(const Item *self,ItemStack *input,
             }
         }
     }
+done:
     MCObjectRootScope_end(&scope);
     return MCObjectHeap_failed(heap)?NULL:result;
 }

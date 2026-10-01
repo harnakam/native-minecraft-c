@@ -265,7 +265,8 @@ static bool load_items(MCGameplayWorld *w,const mc_nbt *input,MCObject *context,
     }
     if (ok) {
         for(size_t i=0;i<MC_GAMEPLAY_MAX_ITEMS;i++)w->owners->items[i]=i<count?(MCObject *)loaded[i]:NULL;
-        w->owners->itemCount=count;ok=NBTTagCompound_removeTag_ascii(root,"Version")&&NBTTagCompound_removeTag_ascii(root,"Entities");
+        w->owners->itemCount=count;MCObjectHeap_touch(heap);
+        ok=MCGameplay_reindexWorld(w->owners)&&NBTTagCompound_removeTag_ascii(root,"Version")&&NBTTagCompound_removeTag_ascii(root,"Entities");
         if (ok) {w->savedItemFields=root;w->savedItemRootName=name;MCObjectHeap_touch(heap);}
     }
     if (!ok)fail(heap);

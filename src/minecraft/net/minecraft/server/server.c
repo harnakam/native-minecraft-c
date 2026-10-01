@@ -1,7 +1,7 @@
 #include "network/play/client/C03PacketPlayer.h"
 #include "server.h"
 #include "../network/protocol.h"
-#include "../world/world.h"
+#include "../world/NativeWorld.h"
 #include "../item/item.h"
 #include "util/transfer.h"
 #include "world/map.h"
@@ -1210,7 +1210,10 @@ static int advance_idle_tick(mc_server *server) {
     }
     if (idle) {
         MCGameplayWorld *world = mc_server_graph_world(&server->gameplay);
-        world->worldTime = world->worldTime == INT64_MAX ? INT64_MIN : world->worldTime + 1;
+        int64_t time=World_getWorldTime(world);
+        (void)World_setWorldTime(world,time==INT64_MAX?INT64_MIN:time+1);
+        int64_t total=World_getTotalWorldTime(world);
+        (void)WorldInfo_setWorldTotalTime(world->worldInfo,total==INT64_MAX?INT64_MIN:total+1);
         for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS && !MCObjectHeap_failed(server->gameplay.heap); i++) {
             MCGameplayPlayer *p = (MCGameplayPlayer *)objects->players[i];
             if (p) {
@@ -1247,7 +1250,10 @@ static void tick_items(mc_server *server, uint64_t now) {
         bool ok = MCObjectRootScope_begin(&scope, tx.working.heap);
         MCGameplayObjects *o = MCGameplay_get(&tx.working);
         MCGameplayWorld *w = mc_server_graph_world(&tx.working);
-        w->worldTime = w->worldTime == INT64_MAX ? INT64_MIN : w->worldTime + 1;
+        int64_t time=World_getWorldTime(w);
+        ok=ok&&World_setWorldTime(w,time==INT64_MAX?INT64_MIN:time+1);
+        int64_t total=World_getTotalWorldTime(w);
+        ok=ok&&WorldInfo_setWorldTotalTime(w->worldInfo,total==INT64_MAX?INT64_MIN:total+1);
         for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS && ok; i++) {
             MCGameplayPlayer *p = (MCGameplayPlayer *)o->players[i];
             if (!p)

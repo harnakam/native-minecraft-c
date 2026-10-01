@@ -137,3 +137,23 @@ bool mc_block_material_flags(uint16_t state,bool *movement,bool *leaves) {
     if(!movement||!leaves||!mc_block_valid(state))return false;
     *movement=(flags[state>>4]&1)!=0;*leaves=(flags[state>>4]&2)!=0;return true;
 }
+
+/* Independently observed registry field facts. Metadata does not change the
+   reached Block.getLightOpacity() getter; full block/state classes are pending. */
+bool mc_block_light_opacity(uint16_t state,int32_t *out) {
+    static const uint8_t opacity[198]={
+        0,255,255,255,255,255,0,255,3,3,0,0,255,255,255,255,255,255,
+        1,255,0,255,255,255,255,255,0,0,0,0,1,0,0,0,0,255,
+        0,0,0,0,0,255,255,255,255,255,255,255,255,255,0,0,0,255,
+        0,0,255,255,255,0,255,255,255,0,0,0,0,255,0,0,0,0,
+        0,255,255,0,0,0,0,3,255,0,255,0,255,0,255,255,255,255,
+        0,255,0,0,0,0,0,255,255,255,255,0,0,255,0,0,0,0,
+        255,255,255,0,255,0,255,0,0,0,0,0,0,255,0,255,255,255,
+        255,0,255,255,0,0,0,255,255,255,255,255,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,255,255,0,255,255,0,255,255,0,1,
+        255,255,255,0,0,0,255,255,255,0,255,255,255,0,0,0,0,255,
+        255,255,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+    };
+    if(!out||!mc_block_valid(state))return false;
+    *out=opacity[state>>4];return true;
+}

@@ -1,7 +1,7 @@
 #ifndef C919_CLIENT_H
 #define C919_CLIENT_H
 #include "../network/protocol.h"
-#include "../world/world.h"
+#include "../world/NativeWorld.h"
 #include "client/native_runtime.h"
 #include "item/item.h"
 

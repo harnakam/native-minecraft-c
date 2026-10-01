@@ -50,11 +50,11 @@ static bool location(MCObject *context,Entity *e,double x,double y,double z,floa
 }
 static bool dimension(MCObject *context,MCObject *w,int32_t *out) {
     (void)context;if(!MCGameplayWorld_isInstance(w)||!out){MCObjectHeap_fail(w?w->heap:NULL);return false;}
-    *out=((MCGameplayWorld *)w)->dimension;return true;
+    *out=WorldProvider_getDimensionId(((World *)w)->provider);return !MCObjectHeap_failed(w->heap);
 }
 static bool remote(MCObject *context,MCObject *w,bool *out) {
     (void)context;if(!MCGameplayWorld_isInstance(w)||!out){MCObjectHeap_fail(w?w->heap:NULL);return false;}
-    *out=((MCGameplayWorld *)w)->remote;return true;
+    *out=((World *)w)->isRemote;return true;
 }
 static bool attributes(MCObject *context,EntityLivingBase *e) {(void)context;return EntityPlayer_applyEntityAttributes((MCGameplayPlayer *)e);}
 static BaseAttributeMap *attribute_map(MCObject *context,EntityLivingBase *e) {(void)context;return EntityLivingBase_getAttributeMap(e);}
@@ -69,8 +69,7 @@ static bool math_random(MCObject *context,double *out) {
 }
 static DataWatcherBlockPos *spawn_point(MCObject *context,MCObject *w) {
     (void)context;if(!MCGameplayWorld_isInstance(w)){MCObjectHeap_fail(w?w->heap:NULL);return NULL;}
-    MCGameplayWorld *world=(MCGameplayWorld *)w;
-    return DataWatcher_blockPos(w->heap,world->spawnX,world->spawnY,world->spawnZ);
+    return World_getSpawnPoint((World *)w);
 }
 static bool player_location(MCObject *context,MCGameplayPlayer *p,double x,double y,double z,float yaw,float pitch) {
     return location(context,&p->living.entity,x,y,z,yaw,pitch);

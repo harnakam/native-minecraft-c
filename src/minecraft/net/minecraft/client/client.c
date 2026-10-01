@@ -329,6 +329,15 @@ static bool receive_chunk(mc_client *c, int x, int z, uint16_t mask, bool full,
         unload_items(c,x,z); mc_world_unload(&c->world, x, z); return true;
     }
     if (length != chunk_size(mask, skylight, full)) return false;
+    if(length&&!data)return false;
+    /* The native dense store supports the known target block IDs. Validate
+       that boundary before changing an existing chunk or allocating one. */
+    size_t blockBytes=(size_t)section_count(mask)*8192u;
+    for(size_t offset=0;offset<blockBytes;offset+=2) {
+        uint16_t state=(uint16_t)(data[offset]|((uint16_t)data[offset+1]<<8));
+        int32_t opacity;
+        if(!mc_block_light_opacity(state,&opacity))return false;
+    }
     mc_chunk *chunk = client_chunk(c, x, z);
     if (!chunk) return false;
     if (full) memset(chunk->blocks, 0, MC_CHUNK_BLOCKS * sizeof(*chunk->blocks));
@@ -340,6 +349,9 @@ static bool receive_chunk(mc_client *c, int x, int z, uint16_t mask, bool full,
             offset += 2;
         }
     }
+    if(full)chunk->sectionMask=(uint16_t)mask;
+    else chunk->sectionMask|=(uint16_t)mask;
+    if(!mc_world_refresh_chunk_metadata(chunk,false))return false;
     ++chunk->revision;
     ++c->chunks_received;
     return true;
@@ -450,7 +462,10 @@ static void actor_native_state(mc_client *c) {
         b->player->living.entity.onGround=c->on_ground;
         b->player->living.entity.entityId=c->entity_id; b->player->spectator=c->gamemode==3;
         b->player->living.entity.dimension=c->dimension;
-        ((MCGameplayWorld *)(b->player->living.entity.worldObj))->dimension=c->dimension;
+        if(!mc_client_graph_nativeImportDimension(&c->gameplay,c->dimension,WorldSettingsGameType_getByID(c->gamemode))||
+           !MCGameplay_reindexWorld(MCGameplay_get(&c->gameplay))) {
+            MCObjectRootScope_end(&scope);client_error(c,"Cannot import Source world dimension/entity indexes");return;
+        }
         if (c->gamemode!=1) b->creativeScreen=false;
         MCObjectHeap_touch(c->gameplay.heap);
     }
@@ -1049,13 +1064,20 @@ static int self_test(void) {
     int errors = 0;
     if (!data) { free(c); return 1; }
 #define CHECK(condition, message) do { if (!(condition)) { fprintf(stderr, "FAIL: %s\n", message); ++errors; } } while (0)
-    data[0] = 0x53; data[1] = 0x12;
+    data[0] = 0x13; data[1] = 0x01;
     CHECK(receive_chunk(c, -1, 0, 1, true, true, data, length), "full chunk is accepted");
-    CHECK(mc_world_get(&c->world, -16, 0, 0) == 0x1253, "chunk block state is little endian at negative coordinate");
+    CHECK(mc_world_get(&c->world, -16, 0, 0) == 0x0113, "chunk block state is little endian at negative coordinate");
+    mc_chunk *chunk=mc_world_chunk(&c->world,-1,0,false);
+    CHECK(chunk&&chunk->heightMap[0]==1&&chunk->sectionMask==1,"full chunk owns its height and exact section mask");
+    unsigned revision=chunk?chunk->revision:0;
+    data[0]=0x53;data[1]=0x12;
+    CHECK(!receive_chunk(c,-1,0,1,true,true,data,length)&&mc_world_get(&c->world,-16,0,0)==0x0113&&chunk->revision==revision,"unsupported native block ID rejected before replacing existing chunk");
+    data[0]=0x13;data[1]=0x01;
     CHECK(!receive_chunk(c, 0, 0, 1, true, true, data, length - 1), "truncated chunk rejected");
     CHECK(!receive_chunk(c, 2000000, 0, 1, true, true, data, length), "out of range chunk coordinate rejected");
     CHECK(receive_chunk(c, -1, 0, 2, false, true, data, chunk_size(2, true, false)), "partial section accepted");
-    CHECK(mc_world_get(&c->world, -16, 0, 0) == 0x1253 && mc_world_get(&c->world, -16, 16, 0) == 0x1253, "partial section preserves existing section");
+    CHECK(mc_world_get(&c->world, -16, 0, 0) == 0x0113 && mc_world_get(&c->world, -16, 16, 0) == 0x0113, "partial section preserves existing section");
+    CHECK(chunk->heightMap[0]==17&&chunk->sectionMask==3,"partial chunk preserves allocated section metadata");
     CHECK(receive_chunk(c, -1, 0, 0, true, true, NULL, 0) && c->world.count == 0, "zero length vanilla unload accepted");
     CHECK(correct_position(c, 4, 70, -3, 720, 20, 0) && c->yaw == 0, "valid position and yaw normalization");
     CHECK(correct_position(c, 2, 1, 5, 15, -10, 31) && c->x == 6 && c->y == 71 && c->z == 2 && c->pitch == 10, "relative correction applied safely");

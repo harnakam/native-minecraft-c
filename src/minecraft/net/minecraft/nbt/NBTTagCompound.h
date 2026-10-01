@@ -6,6 +6,8 @@
 #include "nbt/NBTTagIntArray.h"
 typedef struct NBTCompoundKeySet NBTCompoundKeySet;
 NBTTagCompound *NBTTagCompound_new(MCObjectHeap *heap);
+/* Exact managed-class guard for native dependency calls. */
+bool NBTTagCompound_isInstance(const MCObject *object);
 bool NBTTagCompound_setTag(NBTTagCompound *tag,NBTString *key,NBTBase *value);
 NBTBase *NBTTagCompound_getTag(const NBTTagCompound *tag,const NBTString *key);
 int8_t NBTTagCompound_getTagId(const NBTTagCompound *tag,const NBTString *key);

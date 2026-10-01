@@ -1,11 +1,19 @@
 #include "stats/StatBase.h"
 #include "stats/StatList.h"
+#include "stats/ObjectiveStat.h"
+#include "stats/Achievement.h"
+#include "stats/StatCrafting.h"
 
 extern const MCObjectClass c919_achievement_class;
 extern const MCObjectClass c919_statcrafting_class;
 void StatBase_trace(MCObject *object,MCObjectVisitor visitor,void *context) {
+    if(MCObjectHeap_objectSize(object)<sizeof(StatBase)){MCObjectHeap_fail(object->heap);return;}
     StatBase *stat=(StatBase *)object;
     stat->statId=(NBTString *)visitor((MCObject *)stat->statId,context);
+    stat->statName=visitor(stat->statName,context);
+    stat->type=visitor(stat->type,context);
+    stat->objectiveCriteria=(IScoreObjectiveCriteria *)visitor((MCObject *)stat->objectiveCriteria,context);
+    stat->field_150956_d=visitor(stat->field_150956_d,context);
 }
 static const MCObjectClass base_class={"net.minecraft.stats.StatBase",MCObjectHeap_plainClone,StatBase_trace,NULL};
 static const MCObjectClass basic_class={"C919.identity.StatBasic",MCObjectHeap_plainClone,StatBase_trace,NULL};
@@ -15,16 +23,44 @@ StatBase *StatBase_newIdentity(MCObjectHeap *heap,NBTString *id,StatBaseKind kin
         kind==STAT_BASE_KIND_BASIC ? &basic_class : kind==STAT_BASE_KIND_CRAFTING ? &crafting_class : NULL;
     if (!klass || (id && ((MCObject *)id)->heap!=heap)) { MCObjectHeap_fail(heap); return NULL; }
     StatBase *stat=(StatBase *)MCObjectHeap_alloc(heap,sizeof(*stat),klass);
-    if (stat) stat->statId=id;
-    return stat;
+    return stat&&StatBase_constructIdentity(stat,id)?stat:NULL;
+}
+bool StatBase_construct(StatBase *stat,NBTString *id,MCObject *name,MCObject *type) {
+    MCObjectHeap *heap=stat?stat->object.heap:NULL;
+    if(StatBase_getKind(stat)==STAT_BASE_KIND_UNKNOWN){MCObjectHeap_fail(heap);return false;}
+    MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,heap))return false;
+    bool ok=MCObjectRootScope_pin(&scope,(MCObject *)stat)&&MCObjectRootScope_pin(&scope,(MCObject *)id)&&
+        MCObjectRootScope_pin(&scope,name)&&MCObjectRootScope_pin(&scope,type);
+    if(ok) {
+        stat->statId=id;stat->statName=name;stat->type=type;MCObjectHeap_touch(heap);
+        ObjectiveStat *criteria=ObjectiveStat_new(heap,stat);
+        if(criteria) {
+            stat->objectiveCriteria=&criteria->dummy.criteria;MCObjectHeap_touch(heap);
+            IScoreObjectiveCriteria *receiver=stat->objectiveCriteria;
+            NBTString *key=IScoreObjectiveCriteria_getName(stat->objectiveCriteria);
+            ok=!MCObjectHeap_failed(heap)&&IScoreObjectiveCriteria_register(receiver,key);
+        }else ok=false;
+    }
+    MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(heap);
+}
+bool StatBase_constructIdentity(StatBase *stat,NBTString *id){return StatBase_construct(stat,id,NULL,NULL);}
+StatBase *StatBase_new(MCObjectHeap *heap,NBTString *id,MCObject *name,MCObject *type) {
+    StatBase *stat=(StatBase *)MCObjectHeap_alloc(heap,sizeof(*stat),&base_class);
+    return stat&&StatBase_construct(stat,id,name,type)?stat:NULL;
+}
+StatBase *StatBase_newWithSimpleType(MCObjectHeap *heap,NBTString *id,MCObject *name,MCObject *capturedSimpleStatType){return StatBase_new(heap,id,name,capturedSimpleStatType);}
+IScoreObjectiveCriteria *StatBase_getCriteria(StatBase *stat) {
+    if(StatBase_getKind(stat)==STAT_BASE_KIND_UNKNOWN){MCObjectHeap_fail(stat?stat->object.heap:NULL);return NULL;}
+    return stat->objectiveCriteria;
 }
 StatBaseKind StatBase_getKind(const StatBase *stat) {
-    if (!stat) return STAT_BASE_KIND_UNKNOWN;
+    if (!stat||MCObjectHeap_objectSize((const MCObject *)stat)<sizeof(*stat)) return STAT_BASE_KIND_UNKNOWN;
     const MCObjectClass *klass=stat->object.klass;
     if (klass==&base_class) return STAT_BASE_KIND_BASE;
     if (klass==&basic_class) return STAT_BASE_KIND_BASIC;
-    if (klass==&crafting_class || klass==&c919_statcrafting_class) return STAT_BASE_KIND_CRAFTING;
-    if (klass==&c919_achievement_class) return STAT_BASE_KIND_ACHIEVEMENT;
+    if (klass==&crafting_class) return STAT_BASE_KIND_CRAFTING;
+    if (klass==&c919_statcrafting_class&&MCObjectHeap_objectSize((const MCObject *)stat)>=sizeof(StatCrafting)) return STAT_BASE_KIND_CRAFTING;
+    if (klass==&c919_achievement_class&&MCObjectHeap_objectSize((const MCObject *)stat)>=sizeof(Achievement)) return STAT_BASE_KIND_ACHIEVEMENT;
     return STAT_BASE_KIND_UNKNOWN;
 }
 StatBase *StatBase_initIndependentStat(StatBase *stat) {

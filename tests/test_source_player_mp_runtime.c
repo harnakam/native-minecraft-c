@@ -51,7 +51,7 @@ static void construction_and_adoption(void) {
     CHECK(e->posX>=-9.5&&e->posX<=9.5&&e->posZ>=-9.5&&e->posZ<=9.5&&e->posY==6);
     CHECK(e->stepHeight==0&&e->boundingBox->minY==6);
     CHECK(mp->playerLastActiveTime>=before&&mp->playerLastActiveTime<=after);
-    mc_server_graph_world(&tx.working)->worldTime=7;
+    mc_server_graph_world(&tx.working)->worldInfo->worldTime=7;
     CHECK(active(NULL,&mp->player)&&mp->playerLastActiveTime!=7);
     CHECK(ItemInWorldManager_isCreative(mp->theItemInWorldManager)&&mp->player.capabilities->isCreativeMode);
     CHECK(MCGameplayPlayer_setChangingQuantityOnly(&mp->player,true));
@@ -97,8 +97,8 @@ static void actual_terrain_dependencies(void) {
     CHECK(NativeReferenceList_size((NativeReferenceList *)list)==0);
     BlockPos *pos=DataWatcher_blockPos(tx.working.heap,0,99,0);CHECK(pos);
     CHECK(mp_top_solid(NULL,(MCObject *)world,pos)->y==6);
-    CHECK(WorldBorder_setCenter(r->border,0,0)&&WorldBorder_setTransition(r->border,4));
-    double distance;CHECK(mp_border_distance(NULL,(MCObject *)r->border,0,0,&distance)&&distance==2);
+    CHECK(WorldBorder_setCenter(world->worldBorder,0,0)&&WorldBorder_setTransition(world->worldBorder,4));
+    double distance;CHECK(mp_border_distance(NULL,(MCObject *)world->worldBorder,0,0,&distance)&&distance==2);
     mp->theItemInWorldManager->gameType=&WorldSettingsGameType_SPECTATOR;
     CHECK(manager_spectator(mp->player.effects)&&!manager_creative(mp->player.effects));
     mp->player.itemInUse=InventoryPlayer_getCurrentItem(mp->player.inventory);

@@ -40,7 +40,7 @@ static bool inherited_init(MCObject *o,Entity *e) {
 }
 static bool inherited_position(MCObject *o,Entity *e,double x,double y,double z) {(void)o;return Entity_setPosition(e,x,y,z);}
 static bool inherited_bounds(MCObject *o,Entity *e,AxisAlignedBB *box) {(void)o;return Entity_setEntityBoundingBox(e,box);}
-static bool inherited_dimension(MCObject *o,MCObject *w,int32_t *out) {(void)o;CHECK(MCGameplayWorld_isInstance(w));*out=((MCGameplayWorld *)w)->dimension;return true;}
+static bool inherited_dimension(MCObject *o,MCObject *w,int32_t *out) {(void)o;CHECK(MCGameplayWorld_isInstance(w));*out=WorldProvider_getDimensionId(((World *)w)->provider);return true;}
 static const EntityDependencies inheritedDependencies={.entityInit=inherited_init,.setPosition=inherited_position,
     .setEntityBoundingBox=inherited_bounds,.getDimensionId=inherited_dimension,.watcher=&watcherMethods};
 static bool base(MCObject *o,EntityItem *e,MCObject *w) {

@@ -51,7 +51,7 @@ static const mc_crafting_dispatch crafting_dependencies={MCGameplayPlayer_invent
 static MCGameplayPlayer *setup(MCGameplay *game,MCObjectRootScope *scope,bool remote) {
     CHECK(MCGameplay_init(game,32*1024*1024));CHECK(MCObjectRootScope_begin(scope,game->heap));
     CraftingManager *manager=CraftingManager_newEmpty(game->heap);CHECK(manager);RecipeBookCloning *book=RecipeBookCloning_new(game->heap);CHECK(book);CHECK(CraftingManager_addRecipe(manager,RecipeBookCloning_asRecipe(book)));
-    MCGameplayWorld *world=MCGameplayWorld_new(game->heap,MCGameplay_get(game),NULL,manager);CHECK(world);world->remote=remote;CHECK(MCGameplay_setWorld(game,(MCObject *)world));
+    MCGameplayWorld *world=MCGameplayWorld_new(game->heap,MCGameplay_get(game),NULL,manager);CHECK(world);world->isRemote=remote;CHECK(MCGameplay_setWorld(game,(MCObject *)world));
     MCGameplayPlayer *player=MCGameplayPlayer_new(world,NBTString_fromASCII(game->heap,"Owner"),NULL,&crafting_dependencies);CHECK(player);CHECK(MCGameplay_setPlayer(game,0,"11111111-1111-1111-1111-111111111111",(MCObject *)player));
     Effects *effects=(Effects *)MCObjectHeap_alloc(game->heap,sizeof(*effects),&effect_class);CHECK(effects);player->effects=(MCObject *)effects;CHECK(EntityPlayerMPWindows_bind(player,&window_dependencies));return player;
 }

@@ -1,5 +1,6 @@
 #include "stats/Achievement.h"
 static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
+    if(MCObjectHeap_objectSize(object)<sizeof(Achievement)){MCObjectHeap_fail(object->heap);return;}
     Achievement *achievement=(Achievement *)object;
     StatBase_trace(object,visitor,context);
     achievement->parentAchievement=(Achievement *)visitor((MCObject *)achievement->parentAchievement,context);
@@ -11,7 +12,10 @@ Achievement *Achievement_newIdentity(MCObjectHeap *heap,NBTString *id,Achievemen
         MCObjectHeap_fail(heap); return NULL;
     }
     Achievement *achievement=(Achievement *)MCObjectHeap_alloc(heap,sizeof(*achievement),&c919_achievement_class);
-    if (achievement) { achievement->base.statId=id; achievement->parentAchievement=parent; }
+    if (achievement) {
+        if(!StatBase_constructIdentity(&achievement->base,id))return NULL;
+        achievement->parentAchievement=parent;
+    }
     return achievement;
 }
 Achievement *Achievement_initIndependentStat(Achievement *achievement) {

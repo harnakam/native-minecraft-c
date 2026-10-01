@@ -9,6 +9,10 @@ typedef struct {
     int32_t x, z;
     uint16_t *blocks;
     unsigned revision;
+    /* Actual dense-store height and retained section-allocation metadata.
+       This does not implement Source Chunk/ExtendedBlockStorage lifecycle. */
+    uint16_t heightMap[256];
+    uint16_t sectionMask;
 } mc_chunk;
 typedef struct {
     mc_chunk chunks[MC_MAX_CHUNKS];
@@ -26,5 +30,6 @@ int mc_world_surface(const mc_world *world, int x, int z);
 bool mc_world_save(const mc_world *world, const char *path, char *error, unsigned error_size);
 bool mc_world_load(mc_world *world, const char *path, char *error, unsigned error_size);
 bool mc_world_solid(uint16_t state);
+bool mc_world_refresh_chunk_metadata(mc_chunk *chunk,bool reconstructSectionMask);
 int mc_floor_div16(int value);
 #endif

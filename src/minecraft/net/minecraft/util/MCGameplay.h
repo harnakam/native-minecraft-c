@@ -17,6 +17,9 @@ typedef struct MCGameplayObjects {
     char uuids[MC_TRANSFER_MAX_PLAYERS][37];
     MCObject *items[MC_GAMEPLAY_MAX_ITEMS];
     size_t itemCount;
+    /* Native registration bookkeeping, not another entity/ID authority. Source
+       World lists and entitiesById retain the exact canonical objects. */
+    MCObject *nativeEntityIndex;
 } MCGameplayObjects;
 /* Initialize native handles with {0}. They own the heap and must not be copied. */
 typedef struct {
@@ -38,6 +41,11 @@ bool MCGameplay_setWorld(MCGameplay *,MCObject *world);
 bool MCGameplay_setPlayer(MCGameplay *,size_t index,const char *uuid,MCObject *player);
 bool MCGameplay_addItem(MCGameplay *,MCObject *item);
 bool MCGameplay_removeItem(MCGameplay *,size_t index);
+/* Incremental native admission/removal and Source-ID rekeying. Unchanged
+   lists/entries retain identity/modCount; unrelated Source entities survive.
+   This does not claim WorldServer/WorldClient spawn/remove method translation. */
+bool MCGameplay_reindexWorld(MCGameplayObjects *);
+bool MCGameplay_validateWorldIndexes(const MCGameplayObjects *);
 bool MCGameplay_begin(MCGameplay *,MCGameplayTransaction *);
 /* Working handles cannot start another durable transaction. Commit operates
    only against the authoritative owner; nested disk commits are invalid. */

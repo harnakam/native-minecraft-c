@@ -18,7 +18,7 @@ StatCrafting *StatCrafting_newIdentity(MCObjectHeap *h,const NBTString *prefix,c
     if(b)memcpy(units+a,NBTString_units(suffix),b*sizeof(*units));
     NBTString *id=NBTString_fromUTF16(h,units,a+b);free(units);
     if(id){s=(StatCrafting *)MCObjectHeap_alloc(h,sizeof(*s),&c919_statcrafting_class);
-        if(s){s->base.statId=id;s->field_150960_a=item;}}
+        if(s){if(!StatBase_constructIdentity(&s->base,id))s=NULL;else s->field_150960_a=item;}}
 done:
     MCObjectRootScope_end(&scope);return MCObjectHeap_failed(h)?NULL:s;
 }

@@ -61,7 +61,7 @@ static const EntityItemDependencies entity_dependencies={logged,remote,inventory
 static bool inherited_init(MCObject *c,Entity *e) {(void)c;return EntityItem_entityInit((EntityItem *)e);}
 static bool inherited_position(MCObject *c,Entity *e,double x,double y,double z) {(void)c;return Entity_setPosition(e,x,y,z);}
 static bool inherited_bounds(MCObject *c,Entity *e,AxisAlignedBB *b) {(void)c;return Entity_setEntityBoundingBox(e,b);}
-static bool inherited_dimension(MCObject *c,MCObject *w,int32_t *out) {(void)c;CHECK(MCGameplayWorld_isInstance(w));*out=((MCGameplayWorld *)w)->dimension;return true;}
+static bool inherited_dimension(MCObject *c,MCObject *w,int32_t *out) {(void)c;CHECK(MCGameplayWorld_isInstance(w));*out=WorldProvider_getDimensionId(((World *)w)->provider);return true;}
 static const EntityDependencies inherited_methods={.entityInit=inherited_init,.setPosition=inherited_position,.setEntityBoundingBox=inherited_bounds,.getDimensionId=inherited_dimension,.watcher=&watcherMethods};
 static bool base_constructor(MCObject *ctx,EntityItem *e,MCObject *w) {
     CHECK(ctx->heap==w->heap&&e->health==0&&EntityItem_getDataWatcher(e)==NULL);
@@ -264,10 +264,21 @@ static void native_position_restore_and_failure(void) {
 }
 static void source_constructor_ids_survive_native_load(void) {
     MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);
+    MCGameplayWorld *w=(MCGameplayWorld *)p->living.entity.worldObj;
     EntityItem *original=EntityItem_new_stack(g.heap,(MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)),p->effects,
         &entity_dependencies,&constructors,1.25,20.5,-2.0,book(p,1));
     CHECK(original&&MCGameplay_addItem(&g,(MCObject *)original));
     original->entity.entityId=INT32_MIN;original->age=37;MCObjectHeap_touch(g.heap);
+    CHECK(MCGameplay_reindexWorld(MCGameplay_get(&g)));
+    /* A real Source entity outside the native registered-item array survives
+       native bulk-load replacement in its existing list position and Entry. */
+    EntityItem *unrelated=EntityItem_new_stack(g.heap,(MCObject *)w,p->effects,
+        &entity_dependencies,&constructors,2,20,2,book(p,0));CHECK(unrelated);
+    Entity_setEntityId(&unrelated->entity,INT32_MAX);
+    CHECK(NativeReferenceList_add(w->loadedEntityList,(MCObject *)unrelated)&&
+          IntHashMap_addKey(w->entitiesById,INT32_MAX,(MCObject *)unrelated));
+    IntHashMapEntry *unrelatedEntry=IntHashMap_lookupEntry(w->entitiesById,INT32_MAX);
+    CHECK(unrelatedEntry&&IntHashMap_lookup(w->entitiesById,INT32_MIN)==(MCObject *)original);
     mc_nbt data={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&data,NULL));
     int32_t expected=((MCGameplayWorld *)(p->living.entity.worldObj))->nextEntityId;
     CHECK(MCGameplayStorage_loadItemsWithSourceIDs(((MCGameplayWorld *)(p->living.entity.worldObj)),&data,p->effects,&entity_dependencies,&constructors));
@@ -275,8 +286,21 @@ static void source_constructor_ids_survive_native_load(void) {
     CHECK(loaded!=original&&loaded->entity.entityId==expected&&loaded->entity.entityId!=INT32_MIN);
     CHECK(loaded->age==37&&loaded->entity.posY==20.5&&watched(loaded)->stackSize==1);
     CHECK(((MCGameplayWorld *)(p->living.entity.worldObj))->nextEntityId==expected+1);
+    CHECK(MCGameplay_validateWorldIndexes(MCGameplay_get(&g))&&
+          !IntHashMap_lookup(w->entitiesById,INT32_MIN)&&IntHashMap_lookup(w->entitiesById,expected)==(MCObject *)loaded);
+    CHECK(NativeReferenceList_size(w->loadedEntityList)==4&&
+          NativeReferenceList_get(w->loadedEntityList,2)==(MCObject *)unrelated&&
+          NativeReferenceList_get(w->loadedEntityList,3)==(MCObject *)loaded&&
+          IntHashMap_lookupEntry(w->entitiesById,INT32_MAX)==unrelatedEntry);
+    EntityItem *previous=loaded;
     CHECK(MCGameplayStorage_loadItems(((MCGameplayWorld *)(p->living.entity.worldObj)),&data,p->effects,&entity_dependencies,&constructors));
     loaded=(EntityItem *)MCGameplay_get(&g)->items[0];CHECK(loaded->entity.entityId==INT32_MIN);
+    CHECK(loaded!=previous&&MCGameplay_validateWorldIndexes(MCGameplay_get(&g))&&
+          !IntHashMap_lookup(w->entitiesById,expected)&&IntHashMap_lookup(w->entitiesById,INT32_MIN)==(MCObject *)loaded);
+    CHECK(NativeReferenceList_size(w->loadedEntityList)==4&&
+          NativeReferenceList_get(w->loadedEntityList,2)==(MCObject *)unrelated&&
+          NativeReferenceList_get(w->loadedEntityList,3)==(MCObject *)loaded&&
+          IntHashMap_lookupEntry(w->entitiesById,INT32_MAX)==unrelatedEntry);
     mc_nbt_free(&data);finish(&g,&scope);
 }
 static void map_provider_namespaces_and_journal(void) {
@@ -286,14 +310,14 @@ static void map_provider_namespaces_and_journal(void) {
     NBTString *map=NBTString_fromASCII(g.heap,"map"),*other=NBTString_fromUTF8(g.heap,"別の保存ID");
     CHECK(map&&other&&World_getUniqueDataId(w,map,&id)&&id==0);
     CHECK(World_getUniqueDataId(w,other,&id)&&id==0);
-    w->remote=true;CHECK(World_getUniqueDataId(w,map,&id)&&id==1&&map_next(w)==2);
+    w->isRemote=true;CHECK(World_getUniqueDataId(w,map,&id)&&id==1&&map_next(w)==2);
     CHECK(MapStorage_nativeImportExactShort(base,other,INT16_MAX));
     CHECK(World_getUniqueDataId(w,other,&id)&&id==INT16_MIN);
     SaveDataMemoryStorage *memory=SaveDataMemoryStorage_nativeNewCounterProvider(g.heap);
-    CHECK(memory);w->mapStorage=&memory->base;w->remote=false;
+    CHECK(memory);w->mapStorage=&memory->base;w->isRemote=false;
     CHECK(World_getUniqueDataId(w,map,&id)&&id==0&&World_getUniqueDataId(w,other,&id)&&id==0);
     CHECK(MapStorage_nativeIdCountSize(w->mapStorage)==0&&map_next(w)==0);
-    w->mapStorage=base;w->remote=false;MCObjectHeap_touch(g.heap);
+    w->mapStorage=base;w->isRemote=false;MCObjectHeap_touch(g.heap);
     mc_nbt data={0};CHECK(MCGameplayStorage_encodeMaps(MCGameplay_get(&g),&data,NULL));
     CHECK(map_next(w)==2&&MapStorage_nativeIdCountSize(base)==2);
     MCGameplay copy={0};MCObjectRootScope copiedScope={0};MCGameplayPlayer *q=setup(&copy,&copiedScope);

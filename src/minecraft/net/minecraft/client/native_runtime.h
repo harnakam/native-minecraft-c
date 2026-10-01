@@ -23,6 +23,10 @@ typedef struct MCClientBindings {
     bool screenOpen, creativeScreen;
 } MCClientBindings;
 bool mc_client_graph_init(MCGameplay *, const mc_world *, const char *name);
+/* Native received-dimension import; full WorldClient/respawn construction is
+   separate. It creates one new Source base World with a final real provider,
+   retains scoreboard identity, and updates canonical player/handler/index refs. */
+bool mc_client_graph_nativeImportDimension(MCGameplay *,int32_t,const WorldSettingsGameType *);
 MCGameplayPlayer *mc_client_graph_player(const MCGameplay *);
 MCGameplayWorld *mc_client_graph_world(const MCGameplay *);
 MCClientBindings *mc_client_graph_bindings(const MCGameplay *);

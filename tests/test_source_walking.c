@@ -220,7 +220,7 @@ static Fixture *setup(MCGameplay *g, MCObjectRootScope *scope) {
   CHECK(f);
   f->world = MCGameplayWorld_new(g->heap, MCGameplay_get(g), NULL, NULL);
   CHECK(f->world);
-  f->world->remote = true;
+  f->world->isRemote = true;
   CHECK(MCGameplay_setWorld(g, (MCObject *)f->world));
   f->sp = EntityPlayerSP_nativeAllocate(g->heap);
   CHECK(f->sp);

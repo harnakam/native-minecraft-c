@@ -1,7 +1,7 @@
 #ifndef C919_NATIVE_ITEM_MOTION_H
 #define C919_NATIVE_ITEM_MOTION_H
 #include "entity/item/EntityItem.h"
-#include "world/world.h"
+#include "world/NativeWorld.h"
 /* Explicit native terrain/collision kernel on canonical inherited scalar
    Entity fields. It never copies, frees or normalizes an ItemStack. Complete
    Entity.onUpdate/moveEntity and EntityItem.onUpdate are still separate ports. */

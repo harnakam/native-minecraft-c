@@ -3,6 +3,8 @@
 #include "client/multiplayer/PlayerControllerMP.h"
 #include "network/GameplayPacketRouter.h"
 #include "nbt/NBTTagByte.h"
+#include "entity/item/EntityItem.h"
+#include "server/native_gameplay.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -154,7 +156,7 @@ static Context *setup(MCGameplay *game, bool remote) {
     CHECK(m);
     MCGameplayWorld *w = MCGameplayWorld_new(game->heap, MCGameplay_get(game), NULL, m);
     CHECK(w);
-    w->remote = remote;
+    w->isRemote = remote;
     CHECK(MCGameplay_setWorld(game, (MCObject *)w));
     MCGameplayPlayer *p =
         MCGameplayPlayer_new(w, NBTString_fromASCII(game->heap, "Alice"), NULL, &crafting);
@@ -179,7 +181,10 @@ static Context *setup(MCGameplay *game, bool remote) {
     CHECK(shared);
     CHECK(InventoryPlayer_setInventorySlotContents(p->inventory, 0, shared) &&
           InventoryPlayer_setInventorySlotContents(q->inventory, 1, shared));
-    CHECK(MCGameplay_addItem(game, (MCObject *)shared));
+    EntityItem *item=EntityItem_nativeNew(game->heap,(MCObject *)w,NULL,mc_server_graph_item_dependencies());
+    CHECK(item&&EntityItem_nativeInitializeDataWatcher(item,NULL,NULL)&&EntityItem_setEntityItemStack(item,shared));
+    item->entity.entityId=INT32_MIN;
+    CHECK(MCGameplay_addItem(game,(MCObject *)item));
     MCObjectRootScope_end(&scope);
     return c;
 }
@@ -251,7 +256,7 @@ int main(void) {
     Context *c = setup(&game, true);
     MCGameplayPlayer *p = c->player;
     MCObjectRoot extra = {0};
-    CHECK(MCObjectRoot_init(&extra, game.heap, MCGameplay_get(&game)->items[0]));
+    CHECK(MCObjectRoot_init(&extra, game.heap, (MCObject *)EntityItem_getEntityItem((EntityItem *)MCGameplay_get(&game)->items[0])));
     MCGameplayTransaction tx = {0};
     CHECK(MCGameplay_begin(&game, &tx));
     MCGameplayPlayer *wp = player(&tx.working, 0), *wq = player(&tx.working, 1);
@@ -260,12 +265,12 @@ int main(void) {
     MCObjectRootScope scope = {0};
     CHECK(MCObjectRootScope_begin(&scope, tx.working.heap));
     wp->openContainer->transactionID = INT16_MAX;
-    ItemStack *result = (ItemStack *)MCGameplay_get(&game)->items[0];
+    ItemStack *result = (ItemStack *)MCObjectRoot_get(&extra);
     CHECK(PlayerControllerMP_windowClick(wc->controller, 0, 36, 0, 0, wp, &result));
     CHECK(result && result->stackSize == 5 && wp->openContainer->transactionID == INT16_MIN);
     ItemStack *shared = InventoryPlayer_getItemStack(wp->inventory);
     CHECK(shared && shared == InventoryPlayer_getStackInSlot(wq->inventory, 1) &&
-          (MCObject *)shared == MCGameplay_get(&tx.working)->items[0]);
+          shared == EntityItem_getEntityItem((EntityItem *)MCGameplay_get(&tx.working)->items[0]));
     int32_t id = 0;
     C0EPacketClickWindow *first =
         (C0EPacketClickWindow *)MCGameplayClientPackets_packetAt(wp, 0, &id);
@@ -302,7 +307,7 @@ int main(void) {
     CHECK(shared && !shared->stackSize &&
           shared != InventoryPlayer_getStackInSlot(p->inventory, 1) &&
           InventoryPlayer_getStackInSlot(p->inventory, 1)->stackSize == 5 &&
-          (MCObject *)shared == MCGameplay_get(&game)->items[0] &&
+          shared == EntityItem_getEntityItem((EntityItem *)MCGameplay_get(&game)->items[0]) &&
           (MCObject *)shared == MCObjectRoot_get(&extra));
     CHECK(MCGameplay_get(&game)->commitSerial == 1 && !MCGameplay_get(&game)->durableSerial);
     CHECK(c->controller->netClientHandler == (NetHandlerPlayClient *)p->handler && c->player == p);
@@ -405,9 +410,9 @@ int main(void) {
        working graph tries to turn a server World into a remote World. */
     setup(&game, false);
     CHECK(MCGameplay_begin(&game, &tx));
-    ((MCGameplayWorld *)MCGameplay_get(&tx.working)->world)->remote = true;
+    ((MCGameplayWorld *)MCGameplay_get(&tx.working)->world)->isRemote = true;
     CHECK(!MCGameplay_acceptClientFrame(&tx, validate, NULL, error, sizeof error) && !tx.active &&
-          !((MCGameplayWorld *)MCGameplay_get(&game)->world)->remote);
+          !((MCGameplayWorld *)MCGameplay_get(&game)->world)->isRemote);
     CHECK(MCGameplay_free(&game));
     setup(&game, true);
     MCGameplay_get(&game)->commitSerial = UINT64_MAX;

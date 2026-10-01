@@ -65,7 +65,7 @@ static const EntityItemDependencies entityDeps={log_missing,is_remote,inventory,
 static bool inherited_init(MCObject *c,Entity *e) {(void)c;return EntityItem_entityInit((EntityItem *)e);}
 static bool inherited_position(MCObject *c,Entity *e,double x,double y,double z) {(void)c;return Entity_setPosition(e,x,y,z);}
 static bool inherited_bounds(MCObject *c,Entity *e,AxisAlignedBB *b) {(void)c;return Entity_setEntityBoundingBox(e,b);}
-static bool inherited_dimension(MCObject *c,MCObject *w,int32_t *out) {(void)c;CHECK(MCGameplayWorld_isInstance(w));*out=((MCGameplayWorld *)w)->dimension;return true;}
+static bool inherited_dimension(MCObject *c,MCObject *w,int32_t *out) {(void)c;CHECK(MCGameplayWorld_isInstance(w));*out=WorldProvider_getDimensionId(((MCGameplayWorld *)w)->provider);return true;}
 static const EntityDependencies inherited_methods={.entityInit=inherited_init,.setPosition=inherited_position,.setEntityBoundingBox=inherited_bounds,.getDimensionId=inherited_dimension};
 static bool base(MCObject *o,EntityItem *e,MCObject *w) {
     Fixture *f=(Fixture *)o;CHECK(e->health==0&&e->entity.worldObj==NULL);
@@ -117,7 +117,7 @@ static Fixture *setup(MCGameplay *g,int32_t count,bool full,bool creative,bool r
     MCGameplayPlayer *p=MCGameplayPlayer_new(world,n,stats,&crafting);CHECK(p&&MCGameplay_setPlayer(g,0,"11111111-1111-1111-1111-111111111111",(MCObject *)p));
     Fixture *f=(Fixture *)MCObjectHeap_alloc(g->heap,sizeof(*f),&fixtureClass);CHECK(f);f->player=p;p->effects=(MCObject *)f;
     f->stat=StatBase_newIdentity(g->heap,NBTString_fromASCII(g->heap,"stat.useItem.minecraft.map"),STAT_BASE_KIND_BASE);CHECK(f->stat);
-    p->capabilities->isCreativeMode=creative;world->remote=remote;world->dimension=dimension;CHECK(World_nativeImportMapNextProjection(world,next));p->living.entity.posX=x;p->living.entity.posZ=z;p->living.entity.posY=64;
+    p->capabilities->isCreativeMode=creative;world->isRemote=remote;world->provider->dimensionId=dimension;CHECK(World_nativeImportMapNextProjection(world,next));p->living.entity.posX=x;p->living.entity.posZ=z;p->living.entity.posY=64;
     if(full)for(int i=1;i<36;i++)CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,i,ItemStack_new(g->heap,ItemStack_registryItem(1),64,0)));
     f->input=ItemStack_new(g->heap,ItemStack_registryItem(395),count,0);CHECK(f->input&&InventoryPlayer_setInventorySlotContents(p->inventory,0,f->input));
     CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,38,f->input)); /* Cross-owner source alias. */

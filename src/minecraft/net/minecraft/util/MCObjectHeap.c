@@ -207,12 +207,12 @@ bool MCObjectHeap_collect(MCObjectHeap *heap) {
     for (ObjectEntry *value=heap->objects;value;value=value->next) value->marked=false;
     Marker marker={heap,queue,0,heap->count,false};
     for (size_t i=0;i<heap->root_count;i++) mark_child(heap->roots[i].object,&marker);
-    for (size_t i=0;i<marker.count && !marker.failed;i++) {
+    for (size_t i=0;i<marker.count && !marker.failed && !heap->failed;i++) {
         MCObject *object=queue[i];
         if (object->klass->trace) object->klass->trace(object,mark_child,&marker);
     }
     free(queue);
-    if (marker.failed) { heap->failed=true; return false; }
+    if (marker.failed || heap->failed) { heap->failed=true; return false; }
     ObjectEntry **next=&heap->objects;
     while (*next) {
         ObjectEntry *value=*next;

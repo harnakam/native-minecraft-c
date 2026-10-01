@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 static unsigned checks;
+static bool any_object(const MCObject *object,void *context) {(void)object;(void)context;return true;}
 #define CHECK(x) do { ++checks;if (!(x)) {fprintf(stderr,"gameplay owner check %u at %d: %s\n",checks,__LINE__,#x);exit(1);} } while (0)
 typedef struct {MCObject object;unsigned crafts,drops,achievements;ItemStack *last;} FixtureEffects;
 static void effects_trace(MCObject *o,MCObjectVisitor v,void *c) {FixtureEffects *f=(FixtureEffects *)o;f->last=(ItemStack *)v((MCObject *)f->last,c);}
@@ -45,15 +46,15 @@ static void constructor_container_world_flag(void) {
     for(unsigned remote=0;remote<2;remote++) {
         MCGameplay game={0};CHECK(MCGameplay_init(&game,32*1024*1024));
         MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,game.heap));
-        MCGameplayWorld *world=world_new(&game,NULL);world->remote=remote!=0;
+        MCGameplayWorld *world=world_new(&game,NULL);world->isRemote=remote!=0;
         MCGameplayPlayer *player=MCGameplayPlayer_new(world,NBTString_fromASCII(game.heap,"WorldFlag"),NULL,&dependencies);CHECK(player);
         CHECK(Entity_isInstance((MCObject *)player));
-        CHECK(((ContainerPlayer *)(player->inventoryContainer))->isLocalWorld==!world->remote);
+        CHECK(((ContainerPlayer *)(player->inventoryContainer))->isLocalWorld==!world->isRemote);
         CHECK(MCGameplay_setPlayer(&game,0,"11111111-1111-1111-1111-111111111111",(MCObject *)player));
         MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));
         CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
         MCGameplayPlayer *copy=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
-        CHECK(((MCGameplayWorld *)(copy->living.entity.worldObj))->remote==(remote!=0)&&((ContainerPlayer *)(copy->inventoryContainer))->isLocalWorld==!((MCGameplayWorld *)(copy->living.entity.worldObj))->remote);
+        CHECK(((MCGameplayWorld *)(copy->living.entity.worldObj))->isRemote==(remote!=0)&&((ContainerPlayer *)(copy->inventoryContainer))->isLocalWorld==!((MCGameplayWorld *)(copy->living.entity.worldObj))->isRemote);
         CHECK(((ContainerPlayer *)(copy->inventoryContainer))!=((ContainerPlayer *)(player->inventoryContainer))&&((ContainerPlayer *)(copy->inventoryContainer))->thePlayer==(MCObject *)copy);
         MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx));CHECK(MCGameplay_free(&game));
     }
@@ -70,7 +71,7 @@ static void construction_and_source_crafting(void) {
     CHECK(player->inventory->player==(MCObject *)player&&player->openContainer==player->inventoryContainer);
     CHECK(ContainerList_size(player->openContainer->inventorySlots)==45&&((ContainerPlayer *)(player->inventoryContainer))->thePlayer==(MCObject *)player);
     CHECK(MCGameplayPlayer_inventory((MCObject *)player)==player->inventory&&MCGameplayPlayer_world((MCObject *)player)==(MCObject *)world);
-    CHECK(!MCGameplayPlayer_isCreativeMode((MCObject *)player)&&!MCGameplayWorld_isRemote((MCObject *)world));player->capabilities->isCreativeMode=true;world->remote=true;CHECK(MCGameplayPlayer_isCreativeMode((MCObject *)player)&&MCGameplayWorld_isRemote((MCObject *)world));player->capabilities->isCreativeMode=false;world->remote=false;
+    CHECK(!MCGameplayPlayer_isCreativeMode((MCObject *)player)&&!MCGameplayWorld_isRemote((MCObject *)world));player->capabilities->isCreativeMode=true;world->isRemote=true;CHECK(MCGameplayPlayer_isCreativeMode((MCObject *)player)&&MCGameplayWorld_isRemote((MCObject *)world));player->capabilities->isCreativeMode=false;world->isRemote=false;
     player->living.entity.posX=1;player->living.entity.posY=2;player->living.entity.posZ=3;CHECK(MCGameplayPlayer_getDistanceSq((MCObject *)player,4,6,3)==25);CHECK(isnan(MCGameplayPlayer_getDistanceSq((MCObject *)player,NAN,0,0)));
     CHECK(MCGameplayWorld_isCraftingTable((MCObject *)world,1,2,3)&&!MCGameplayWorld_isCraftingTable((MCObject *)world,1,1,3));
     ItemStack *source=stack(game.heap,387,2,7);NBTTagCompound *tag=NBTTagCompound_new(game.heap);CHECK(tag);CHECK(NBTTagCompound_setInteger_ascii(tag,"generation",0));CHECK(ItemStack_setTagCompound(source,tag));
@@ -93,7 +94,7 @@ static void snapshots_and_maps(void) {
     StatBase *stat=StatBase_newIdentity(game.heap,NBTString_fromASCII(game.heap,"stat.craft.test"),STAT_BASE_KIND_CRAFTING);CHECK(stat);world->craftStats[1]=world->craftStats[2]=stat;CHECK(StatFileWriter_increaseStat(stats,(MCObject *)a,stat,17));
     mc_map_info map={0};map.id=7;map.metadata_known=true;map.colors[0]=42;map_body(&map.original_nbt,19);map_body(&map.original_entry_nbt,23);CHECK(mc_maps_add(&world->maps,&map));mc_map_info_free(&map);map_body(&world->maps.original_nbt,29);
     mc_MapInfo *tracking=mc_MapData_getMapInfo(&world->maps.entries[0],5);CHECK(tracking);tracking->packet_counter=17;
-    world->remote=true;world->spawnX=-55;world->spawnZ=91;world->dimension=-1;CHECK(NativeJavaRandom_setSeed(world->rand,-1));world->nextEntityId=123;
+    world->isRemote=true;world->worldInfo->spawnX=-55;world->worldInfo->spawnZ=91;world->provider->dimensionId=-1;CHECK(NativeJavaRandom_setSeed(world->rand,-1));world->nextEntityId=123;
     a->living.entity.posX=1.5;a->living.entity.posY=20;a->living.entity.posZ=-8;a->living.entity.rotationYaw=33;a->living.entity.rotationPitch=-15;a->spectator=true;CHECK(Entity_setSilent(&a->living.entity,true));a->isChangingQuantityOnly=true;
     MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));MCGameplayObjects *owners=MCGameplay_get(&tx.working);MCGameplayWorld *copy=(MCGameplayWorld *)owners->world;MCGameplayPlayer *ca=(MCGameplayPlayer *)owners->players[0],*cb=(MCGameplayPlayer *)owners->players[1];
     CHECK(copy!=world&&copy->owners==owners&&copy->terrain==&terrain&&copy->manager!=world->manager);CHECK(((MCGameplayWorld *)(ca->living.entity.worldObj))==copy&&((MCGameplayWorld *)(cb->living.entity.worldObj))==copy);
@@ -106,7 +107,7 @@ static void snapshots_and_maps(void) {
     CHECK(StatFileWriter_increaseStat(ca->stats,(MCObject *)ca,copy->craftStats[1],6));CHECK(StatFileWriter_readStat(stats,stat)==17&&StatFileWriter_readStat(ca->stats,copy->craftStats[1])==23);
     CHECK(copy->maps.entries!=world->maps.entries&&copy->maps.entries[0].original_nbt.data!=world->maps.entries[0].original_nbt.data&&copy->maps.original_nbt.data!=world->maps.original_nbt.data);
     CHECK(copy->maps.entries[0].original_entry_nbt.data!=world->maps.entries[0].original_entry_nbt.data&&copy->maps.entries[0].tracking!=world->maps.entries[0].tracking);
-    CHECK(mc_MapData_getMapInfo(&copy->maps.entries[0],5)->packet_counter==17);CHECK(copy->remote&&copy->spawnX==-55&&copy->spawnZ==91&&copy->dimension==-1&&copy->nextEntityId==123);
+    CHECK(mc_MapData_getMapInfo(&copy->maps.entries[0],5)->packet_counter==17);CHECK(copy->isRemote&&copy->worldInfo->spawnX==-55&&copy->worldInfo->spawnZ==91&&copy->provider->dimensionId==-1&&copy->nextEntityId==123);
     CHECK(copy->rand!=world->rand&&copy->rand->state.seed48==world->rand->state.seed48&&copy->randomRuntime==world->randomRuntime);
     CHECK(ca->living.entity.rand!=a->living.entity.rand&&cb->living.entity.rand!=b->living.entity.rand&&ca->living.entity.rand!=cb->living.entity.rand&&ca->living.entity.entityUniqueID!=a->living.entity.entityUniqueID);
     CHECK(ca->living.entity.entityUniqueID->mostSignificantBits==a->living.entity.entityUniqueID->mostSignificantBits&&ca->living.entity.entityUniqueID->leastSignificantBits==a->living.entity.entityUniqueID->leastSignificantBits);
@@ -136,21 +137,38 @@ static void invalid_dependencies_and_clone_failure(void) {
     CHECK(MCGameplay_init(&game,32*1024*1024));world=world_new(&game,NULL);NBTString *wrong=NBTString_fromASCII(foreign,"Foreign");CHECK(wrong);CHECK(!MCGameplayPlayer_new(world,wrong,NULL,&dependencies));CHECK(MCObjectHeap_failed(game.heap)&&!MCObjectHeap_failed(foreign));CHECK(MCGameplay_free(&game));MCObjectHeap_free(foreign);
 }
 static void bounded_constructor_failures(void) {
-    unsigned failed_after_world=0,successful=0;
+    unsigned failed_world=0,failed_after_world=0,successful=0;
+    MCGameplay measured={0};CHECK(MCGameplay_init(&measured,32*1024*1024));
+    CraftingManager *measured_manager=CraftingManager_newEmpty(measured.heap);CHECK(measured_manager);
+    MCGameplayWorld *measured_world=MCGameplayWorld_new(measured.heap,MCGameplay_get(&measured),NULL,measured_manager);CHECK(measured_world);
+    CHECK(MCGameplay_setWorld(&measured,(MCObject *)measured_world));
+    NBTString *measured_name=NBTString_fromASCII(measured.heap,"Bounded");CHECK(measured_name);
+    size_t world_bytes=MCObjectHeap_liveBytes(measured.heap);
+    MCGameplayPlayer *measured_player=MCGameplayPlayer_new(measured_world,measured_name,NULL,&dependencies);CHECK(measured_player);
+    size_t complete_bytes=MCObjectHeap_liveBytes(measured.heap);
+    CHECK(complete_bytes>world_bytes && world_bytes>8192 && complete_bytes<=SIZE_MAX-8192);
+    CHECK(MCGameplay_free(&measured));
     /* Exercise allocation failure at successive source constructor stages.
-       No fake allocation hook or platform allocator substitution is needed. */
-    for (size_t budget=16384;budget<=65536;budget+=256) {
+       Derive the interval from this actual World/player graph, including the
+       Source 32768-element light array. No fake allocation hook is needed. */
+    for (size_t budget=world_bytes-8192;budget<=complete_bytes+8192;budget+=128) {
         MCGameplay game={0};CHECK(MCGameplay_init(&game,budget));
         CraftingManager *manager=CraftingManager_newEmpty(game.heap);
         MCGameplayWorld *world=manager ? MCGameplayWorld_new(game.heap,MCGameplay_get(&game),NULL,manager) : NULL;
-        if (world) {CHECK(MCGameplay_setWorld(&game,(MCObject *)world));NBTString *name=NBTString_fromASCII(game.heap,"Bounded");
+        if (world && MCGameplay_setWorld(&game,(MCObject *)world)) {NBTString *name=NBTString_fromASCII(game.heap,"Bounded");
             if (name) {MCGameplayPlayer *p=MCGameplayPlayer_new(world,name,NULL,&dependencies);
-                if (p) {++successful;CHECK(p->openContainer==p->inventoryContainer&&!MCObjectHeap_failed(game.heap));}
+                if (p) {++successful;CHECK(p->openContainer==p->inventoryContainer&&!MCObjectHeap_failed(game.heap));
+                    const MCObjectClass *player_class=p->living.entity.object.klass;
+                    CHECK(MCObjectHeap_collect(game.heap));
+                    CHECK(!MCObjectHeap_findObject(game.heap,player_class,any_object,NULL));
+                    CHECK(MCGameplay_get(&game)->world==(MCObject *)world && !MCObjectHeap_failed(game.heap));
+                }
                 else {++failed_after_world;CHECK(MCObjectHeap_failed(game.heap));}
-            }
-        }
+            } else {++failed_world;CHECK(MCObjectHeap_failed(game.heap));}
+        } else {++failed_world;CHECK(MCObjectHeap_failed(game.heap));}
         CHECK(!MCObjectHeap_hasBorrowers(game.heap));CHECK(MCGameplay_free(&game));
+        CHECK(!game.heap && !game.root.heap && !game.root.id);
     }
-    CHECK(failed_after_world>20&&successful>20);
+    CHECK(failed_world>20&&failed_after_world>20&&successful>20);
 }
 int main(void) {constructor_container_world_flag();construction_and_source_crafting();snapshots_and_maps();invalid_dependencies_and_clone_failure();bounded_constructor_failures();printf("gameplay owners: %u checks passed\n",checks);return 0;}

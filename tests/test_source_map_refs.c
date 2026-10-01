@@ -31,7 +31,7 @@ static MCGameplayPlayer *actor(MCGameplay *game,MCGameplayWorld *world,unsigned 
     CHECK(MCGameplayCrafting_nativeDispatch(&deps,&effects)); deps.findMatchingRecipe=recipe; deps.getRemainingItems=remaining;
     MCGameplayPlayer *p=MCGameplayPlayer_new(world,NBTString_fromASCII(game->heap,name),NULL,&deps); CHECK(p);
     char uuid[37]; snprintf(uuid,sizeof(uuid),"00000000-0000-0000-0000-%012u",index+1);
-    CHECK(MCGameplay_setPlayer(game,index,uuid,(MCObject *)p)); p->living.entity.dimension=world->dimension;
+    CHECK(MCGameplay_setPlayer(game,index,uuid,(MCObject *)p)); p->living.entity.dimension=WorldProvider_getDimensionId(world->provider);
     return p;
 }
 static ItemStack *held(MCGameplayPlayer *p,int32_t count,int32_t damage,int slot) {
@@ -39,8 +39,8 @@ static ItemStack *held(MCGameplayPlayer *p,int32_t count,int32_t damage,int slot
     CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,slot,s)); return s;
 }
 static mc_map_info *add_map(MCGameplayWorld *w,int32_t id,uint8_t scale) {
-    mc_map_info m={0}; m.id=id; m.scale=scale; m.dimension=(int8_t)w->dimension; m.metadata_known=true;
-    CHECK(mc_maps_add(&w->maps,&m)); return mc_maps_find(&w->maps,id);
+    mc_map_info m={0}; m.id=id; m.scale=scale; m.dimension=(int8_t)WorldProvider_getDimensionId(w->provider); m.metadata_known=true;
+    CHECK(ItemMapData_nativeSetItemData(w,&m)); return mc_maps_find(&w->maps,id);
 }
 static unsigned rectangle(mc_buf *b,int32_t id,unsigned *x,unsigned *z,unsigned *height) {
     b->pos=0; CHECK(mc_get_varint(b)==0x34 && mc_get_varint(b)==id); (void)mc_get_u8(b);
@@ -118,15 +118,15 @@ static void nbt_and_graph_identity(void) {
 }
 static void branches_and_failures(void) {
     MCGameplay game={0}; MCGameplayWorld *w=setup(&game,NULL); MCGameplayPlayer *p=actor(&game,w,0,"A"); bool changed=true;
-    w->remote=true; CHECK(ItemMap_onUpdate(NULL,w,NULL,0,true,&changed) && !changed && w->maps.count==0);
-    w->remote=false; w->spawnX=-65; w->spawnZ=1024; ItemStack *s=held(p,-1,999,0);
+    w->isRemote=true; CHECK(ItemMap_onUpdate(NULL,w,NULL,0,true,&changed) && !changed && w->maps.count==0);
+    w->isRemote=false; CHECK(World_setSpawnPoint(w,DataWatcher_blockPos(game.heap,-65,0,1024))); ItemStack *s=held(p,-1,999,0);
     CHECK(ItemMap_onUpdate(s,w,(MCObject *)w,0,true,&changed) && changed && s->itemDamage==0 && w->maps.count==1);
     mc_map_info *m=mc_maps_find(&w->maps,0); CHECK(m && m->scale==3 && m->center_x==-576 && m->center_z==1472);
     mc_buf b={0}; CHECK(ItemMap_createMapDataPacket(s,w,p,&b)==0);
     CHECK(ItemMap_createMapDataPacket(s,w,NULL,&b)==0);
     p->living.entity.dimension=1; CHECK(ItemMap_onUpdate(s,w,(MCObject *)p,0,false,&changed) && !changed && m->icon_count==0);
-    w->dimension=1; CHECK(ItemMap_updateMapData(w,(MCObject *)p,m,&changed) && !changed); /* mismatch bypasses terrain */
-    w->dimension=0; MCGameplayTransaction tx={0}; CHECK(MCGameplay_begin(&game,&tx));
+    w->provider->dimensionId=1; CHECK(ItemMap_updateMapData(w,(MCObject *)p,m,&changed) && !changed); /* mismatch bypasses terrain */
+    w->provider->dimensionId=0; MCGameplayTransaction tx={0}; CHECK(MCGameplay_begin(&game,&tx));
     MCGameplayWorld *cw=(MCGameplayWorld *)MCGameplay_get(&tx.working)->world; MCGameplayPlayer *cp=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
     ItemStack *cs=InventoryPlayer_getStackInSlot(cp->inventory,0); CHECK(!ItemMap_onUpdate(cs,cw,(MCObject *)cp,0,true,&changed));
     CHECK(MCObjectHeap_failed(tx.working.heap) && MapData_getMapInfo(m,w,p)->update_counter==0); CHECK(MCGameplay_abort(&tx));
@@ -187,7 +187,7 @@ static void facts(void) {
     const float yaws[]={0,-8,90,359.9f,NAN,-INFINITY,FLT_MAX}; unsigned rows=0;
     for (unsigned xi=0;xi<sizeof xs/sizeof *xs;xi++) for (unsigned yi=0;yi<sizeof yaws/sizeof *yaws;yi++)
     for (int dim=-1;dim<=1;dim++) for (int scale=0;scale<=4;scale+=4) for (int ti=0;ti<2;ti++) {
-        MCGameplay game={0}; MCGameplayWorld *w=setup(&game,NULL); w->dimension=dim; w->worldTime=ti?INT64_MAX:0;
+        MCGameplay game={0}; MCGameplayWorld *w=setup(&game,NULL); w->provider->dimensionId=dim; CHECK(World_setWorldTime(w,ti?INT64_MAX:0));
         MCGameplayPlayer *p=actor(&game,w,0,"A"); p->living.entity.posX=xs[xi]; p->living.entity.posZ=-xs[xi]; p->living.entity.rotationYaw=yaws[yi];
         ItemStack *s=held(p,(int32_t)(xi%3)-1,4,xi%2==0?0:38); mc_map_info *m=add_map(w,4,(uint8_t)scale);
         const uint16_t units[]={'k','e','y',0,0xd800}; NBTString *key=NBTString_fromUTF16(game.heap,units,5); CHECK(key);
@@ -215,9 +215,9 @@ static void nullable_profile_name(void) {
     CHECK(MapData_updateVisiblePlayers(m,w,p,s)&&m->icon_count==0);
     CHECK(!MCObjectHeap_failed(game.heap)&&MCGameplay_free(&game));
     w=setup(&game,NULL);p=actor(&game,w,0,"SkippedName");s=held(p,1,4,0);m=add_map(w,4,0);
-    p->gameProfile=NULL;p->living.entity.dimension=w->dimension+1;MCObjectHeap_touch(game.heap);
+    p->gameProfile=NULL;p->living.entity.dimension=WorldProvider_getDimensionId(w->provider)+1;MCObjectHeap_touch(game.heap);
     CHECK(MapData_updateVisiblePlayers(m,w,p,s)&&m->icon_count==0&&!MCObjectHeap_failed(game.heap));
-    p->living.entity.dimension=w->dimension;p->living.entity.isDead=true;MCObjectHeap_touch(game.heap);
+    p->living.entity.dimension=WorldProvider_getDimensionId(w->provider);p->living.entity.isDead=true;MCObjectHeap_touch(game.heap);
     CHECK(MapData_updateVisiblePlayers(m,w,p,s)&&m->icon_count==0&&!MCObjectHeap_failed(game.heap));
     CHECK(MCGameplay_free(&game));
     w=setup(&game,NULL);p=actor(&game,w,0,"BrokenProfile");s=held(p,1,4,0);m=add_map(w,4,0);
@@ -225,4 +225,31 @@ static void nullable_profile_name(void) {
     CHECK(!MapData_updateVisiblePlayers(m,w,p,s)&&MCObjectHeap_failed(game.heap));
     CHECK(m->icon_count==0&&!MCObjectHeap_hasBorrowers(game.heap));CHECK(MCGameplay_free(&game));
 }
-int main(int argc,char **argv) { if (argc==2 && !strcmp(argv[1],"--facts")) { facts();return 0; } nullable_profile_name(); lifecycle(); nbt_and_graph_identity(); branches_and_failures(); mutable_entity_keys(); packet_failure_rollback(); nullable_hash_key(); survey(); printf("source map refs: %u checks passed\n",checks); return 0; }
+typedef struct {MCObject object;World *world;WorldInfo *first,*second;unsigned calls,timeCalls,failAt;} WorldGetterFixture;
+static void getter_trace(MCObject *o,MCObjectVisitor v,void *c){WorldGetterFixture *f=(WorldGetterFixture *)o;f->world=(World *)v((MCObject *)f->world,c);f->first=(WorldInfo *)v((MCObject *)f->first,c);f->second=(WorldInfo *)v((MCObject *)f->second,c);}
+static const MCObjectClass getter_class={"test.Map.WorldGetters",MCObjectHeap_plainClone,getter_trace,NULL};
+static WorldInfo *get_info(MCObject *c,World *world) {
+    WorldGetterFixture *f=(WorldGetterFixture *)c;CHECK(world==f->world&&MCObjectHeap_hasBorrowers(c->heap));CHECK(!MCObjectHeap_collect(c->heap));
+    ++f->calls;if(f->calls==f->failAt){MCObjectHeap_fail(c->heap);return NULL;}
+    WorldInfo *result=world->worldInfo;world->worldInfo=f->second;MCObjectHeap_touch(c->heap);return result;
+}
+static int64_t get_time(MCObject *c,WorldInfo *info){WorldGetterFixture *f=(WorldGetterFixture *)c;CHECK(info==f->second&&MCObjectHeap_hasBorrowers(c->heap));++f->timeCalls;return INT64_MAX;}
+static const WorldInfoVirtualMethods time_methods={.getWorldTime=get_time};
+static void original_world_getter_points(void) {
+    for(unsigned failAt=0;failAt<=2;failAt++) {
+        MCGameplay game={0};World *world=setup(&game,NULL);WorldGetterFixture *f=(WorldGetterFixture *)MCObjectHeap_alloc(game.heap,sizeof *f,&getter_class);CHECK(f);f->world=world;f->first=world->worldInfo;f->second=WorldInfo_newCopy(game.heap,f->first);CHECK(f->second);f->failAt=failAt;
+        CHECK(WorldInfo_setSpawnX(f->first,-65)&&WorldInfo_setSpawnZ(f->first,-999));CHECK(WorldInfo_setSpawnX(f->second,999)&&WorldInfo_setSpawnZ(f->second,1024));
+        WorldDependencies deps=*world->dependencies;deps.getWorldInfo=get_info;world->dependencies=&deps;world->dependencyContext=(MCObject *)f;world->provider->dimensionId=129;
+        ItemStack *stack=ItemStack_new(game.heap,ItemStack_registryItem(358),1,999);CHECK(stack);mc_map_info *map=ItemMap_getMapData(stack,world);
+        if(!failAt){CHECK(map&&f->calls==2&&map->center_x==-576&&map->center_z==1472&&map->dimension==-127&&map->dirty&&stack->itemDamage==0);CHECK(world->maps.next_id==0);}
+        else {int32_t next=-1;CHECK(!map&&MCObjectHeap_failed(game.heap)&&f->calls==failAt&&stack->itemDamage==0&&world->maps.count==0);CHECK(MapStorage_nativeGetMapNextProjectionDiagnostic(world->mapStorage,&next)&&next==1);}
+        CHECK(!MCObjectHeap_hasBorrowers(game.heap)&&MCGameplay_free(&game));
+    }
+    MCGameplay game={0};World *world=setup(&game,NULL);MCGameplayPlayer *p=actor(&game,world,0,"Clock");ItemStack *stack=held(p,1,4,0);mc_map_info *map=add_map(world,4,0);
+    WorldGetterFixture *f=(WorldGetterFixture *)MCObjectHeap_alloc(game.heap,sizeof *f,&getter_class);CHECK(f);f->world=world;f->first=f->second=world->worldInfo;world->worldInfo->virtualMethods=&time_methods;world->worldInfo->virtualContext=(MCObject *)f;world->dependencyContext=(MCObject *)f;WorldDependencies deps=*world->dependencies;deps.getWorldInfo=get_info;world->dependencies=&deps;
+    CHECK(Entity_setPosition(&p->living.entity,0,1,0));CHECK(MapData_updateVisiblePlayers(map,world,p,stack)&&f->calls==0&&f->timeCalls==0);
+    p->living.entity.dimension=map->dimension=-1;CHECK(Entity_setPosition(&p->living.entity,400,1,0));CHECK(MapData_updateVisiblePlayers(map,world,p,stack)&&f->calls==0&&f->timeCalls==0);
+    CHECK(Entity_setPosition(&p->living.entity,0,1,0));CHECK(MapData_updateVisiblePlayers(map,world,p,stack)&&f->calls==1&&f->timeCalls==1);CHECK(MCGameplay_free(&game));
+    world=setup(&game,NULL);stack=ItemStack_new(game.heap,ItemStack_registryItem(358),1,999);CHECK(stack);world->provider=NULL;CHECK(!ItemMap_getMapData(stack,world)&&MCObjectHeap_failed(game.heap)&&stack->itemDamage==0&&world->maps.count==0);CHECK(MCGameplay_free(&game));
+}
+int main(int argc,char **argv) { if (argc==2 && !strcmp(argv[1],"--facts")) { facts();return 0; } original_world_getter_points(); nullable_profile_name(); lifecycle(); nbt_and_graph_identity(); branches_and_failures(); mutable_entity_keys(); packet_failure_rollback(); nullable_hash_key(); survey(); printf("source map refs: %u checks passed\n",checks); return 0; }

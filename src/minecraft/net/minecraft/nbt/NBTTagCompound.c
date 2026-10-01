@@ -26,6 +26,9 @@ static void trace(MCObject *o,MCObjectVisitor v,void *x) {
     t->index=(NBTCompoundEntry*)v((MCObject*)t->index,x);
 }
 static const MCObjectClass tagClass={"NBTTagCompound",MCObjectHeap_plainClone,trace,NULL};
+bool NBTTagCompound_isInstance(const MCObject *object) {
+    return object&&object->klass==&tagClass&&MCObjectHeap_objectSize(object)>=sizeof(NBTTagCompound);
+}
 static uint32_t hash(const NBTString *s) { uint32_t h=(uint32_t)NBTString_hashCode(s);return h^(h>>16); }
 static uint32_t asciiHash(const char *s) {
     uint32_t h=0;if(s)while(*s)h=h*31u+(unsigned char)*s++;

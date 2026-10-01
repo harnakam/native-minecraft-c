@@ -282,9 +282,9 @@ static void native_player_crafts(void) {
 static void source_maps_and_snapshot(void) {
     Fixture f;
     init(&f);
-    f.world->spawnX = -65;
-    f.world->spawnZ = 1024;
-    f.world->dimension = 255;
+    f.world->worldInfo->spawnX = -65;
+    f.world->worldInfo->spawnZ = 1024;
+    f.world->provider->dimensionId = 255;
     CHECK(World_nativeImportMapNextProjection(f.world, 10));
     ItemStack *s = item(&f, 358, 0, 999);
     NBTTagCompound *tag = NBTTagCompound_new(f.game.heap);
@@ -298,11 +298,11 @@ static void source_maps_and_snapshot(void) {
           map->dimension == -1 && map->dirty && map_next(f.world) == 11);
     map->metadata_known = false;
     CHECK(ItemMap_getMapData(s, f.world) == map);
-    f.world->remote = true;
+    f.world->isRemote = true;
     ItemStack *missing = item(&f, 1, -1, 500);
     CHECK(!ItemMap_getMapData(missing, f.world) && missing->itemDamage == 500 &&
           map_next(f.world) == 11 && !MCObjectHeap_failed(f.game.heap));
-    f.world->remote = false;
+    f.world->isRemote = false;
     map->metadata_known = true;
     MCObjectRootScope_end(&f.scope);
     MCGameplayTransaction tx = {0};
@@ -329,8 +329,8 @@ static void source_maps_and_snapshot(void) {
     CHECK(MCObjectRootScope_begin(&f.scope, f.game.heap));
     finish(&f);
     init(&f);
-    f.world->spawnX = INT32_MAX;
-    f.world->spawnZ = INT32_MIN;
+    f.world->worldInfo->spawnX = INT32_MAX;
+    f.world->worldInfo->spawnZ = INT32_MIN;
     CHECK(World_nativeImportMapNextProjection(f.world, 65535));
     s = item(&f, 1, -1, 999);
     map = ItemMap_getMapData(s, f.world);
@@ -438,10 +438,10 @@ static void original_map_vectors(const char *path) {
         mc_maps_free(&f.world->maps);
         mc_maps_init(&f.world->maps);
         CHECK(World_nativeImportMapNextProjection(f.world, next));
-        f.world->spawnX = x;
-        f.world->spawnZ = z;
-        f.world->dimension = dimension;
-        f.world->remote = remote != 0;
+        f.world->worldInfo->spawnX = x;
+        f.world->worldInfo->spawnZ = z;
+        f.world->provider->dimensionId = dimension;
+        f.world->isRemote = remote != 0;
         ItemStack *s = item(&f, 358, 0, 999);
         mc_map_info *map = ItemMap_getMapData(s, f.world);
         CHECK((map != NULL) == (present != 0));

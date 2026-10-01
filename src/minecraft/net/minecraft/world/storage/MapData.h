@@ -3,7 +3,7 @@
 #include "inventory/inventory.h"
 #include "util/MCObjectHeap.h"
 
-typedef struct MCGameplayWorld MCGameplayWorld;
+typedef struct World MCGameplayWorld;
 typedef struct MCGameplayPlayer MCGameplayPlayer;
 typedef struct ItemStack ItemStack;
 typedef struct mc_maps mc_maps;

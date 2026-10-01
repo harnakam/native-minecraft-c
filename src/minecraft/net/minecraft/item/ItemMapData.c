@@ -17,7 +17,7 @@ void ItemMapData_calculateMapCenter(mc_map_info *map,double x,double z,int32_t s
 int32_t ItemMapData_getUniqueDataId(MCGameplayWorld *world) {
     MCObjectHeap *heap=world?world->object.heap:NULL;MCObjectRootScope scope={0};
     if(!MCObjectRootScope_begin(&scope,heap))return 0;
-    NBTString *key=NBTString_fromASCII(heap,"map");int32_t value=0;
+    NBTString *key=NBTString_literalASCII(heap,"map");int32_t value=0;
     bool ok=key&&World_getUniqueDataId(world,key,&value);
     if(!ok)MCObjectHeap_fail(heap);
     MCObjectRootScope_end(&scope);return value;
@@ -45,18 +45,30 @@ mc_map_info *ItemMap_getMapData(ItemStack *stack,MCGameplayWorld *world) {
     MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,h))return NULL;
     bool ok=MCObjectRootScope_pin(&scope,(MCObject *)stack)&&MCObjectRootScope_pin(&scope,(MCObject *)world);
     mc_map_info *map=ok?mc_maps_find(&world->maps,ItemStack_getMetadata(stack)):NULL;
-    if(ok&&!map&&!world->remote) {
+    if(ok&&!map&&!world->isRemote) {
         /* ItemMap source order: allocate ID, mutate the exact stack, construct
            MapData, scale/center/dimension, markDirty, then setItemData. */
         int32_t id=ItemMapData_getUniqueDataId(world);
         if(!MCObjectHeap_failed(h)) {
             ItemStack_setItemDamage(stack,id);
             mc_map_info created={0};created.id=ItemStack_getMetadata(stack);created.scale=3;
-            ItemMapData_calculateMapCenter(&created,(double)world->spawnX,(double)world->spawnZ,created.scale);
-            uint8_t dimension=(uint8_t)world->dimension;memcpy(&created.dimension,&dimension,sizeof(dimension));
+            /* Each argument independently evaluates the actual World getter;
+               a virtual first getter may replace worldInfo before the second. */
+            WorldInfo *info=World_getWorldInfo(world);
+            if(!info){MCObjectHeap_fail(h);goto done;}
+            int32_t x=WorldInfo_getSpawnX(info);if(MCObjectHeap_failed(h))goto done;
+            info=World_getWorldInfo(world);
+            if(!info){MCObjectHeap_fail(h);goto done;}
+            int32_t z=WorldInfo_getSpawnZ(info);if(MCObjectHeap_failed(h))goto done;
+            ItemMapData_calculateMapCenter(&created,(double)x,(double)z,created.scale);
+            WorldProvider *provider=world->provider;
+            if(!WorldProvider_isInstance((MCObject *)provider)||provider->object.heap!=h){MCObjectHeap_fail(h);goto done;}
+            uint8_t dimension=(uint8_t)WorldProvider_getDimensionId(provider);if(MCObjectHeap_failed(h))goto done;
+            memcpy(&created.dimension,&dimension,sizeof(dimension));
             created.metadata_known=true;created.dirty=true;MCObjectHeap_touch(h);
             map=ItemMapData_nativeSetItemData(world,&created);
         }
     }
+done:
     MCObjectRootScope_end(&scope);return MCObjectHeap_failed(h)?NULL:map;
 }

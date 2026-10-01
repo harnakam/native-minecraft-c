@@ -1,7 +1,7 @@
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
-#include "world.h"
+#include "NativeWorld.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,6 +80,7 @@ bool mc_world_load(mc_world *w, const char *path, char *error, unsigned size) {
             for (uint32_t j=0; j<length; ++j) c->blocks[offset++] = state;
         }
         if (offset!=MC_CHUNK_BLOCKS) ok=false;
+        if(ok)ok=mc_world_refresh_chunk_metadata(c,true);
     }
     if (ok && fgetc(f)!=EOF) ok=false;
     if (ferror(f)) ok=false;

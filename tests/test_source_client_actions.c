@@ -218,7 +218,7 @@ static Fixture *setup(MCGameplay *g, MCObjectRootScope *scope) {
     CHECK(m);
     MCGameplayWorld *w = MCGameplayWorld_new(g->heap, MCGameplay_get(g), NULL, m);
     CHECK(w);
-    w->remote = true;
+    w->isRemote = true;
     CHECK(MCGameplay_setWorld(g, (MCObject *)w));
     StatFileWriter *stats = StatFileWriter_new(g->heap);
     CHECK(stats);

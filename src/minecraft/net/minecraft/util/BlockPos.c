@@ -1,4 +1,5 @@
 #include "util/BlockPos.h"
+#include "util/MathHelper.h"
 
 bool BlockPos_isInstance(const MCObject *object) {
     return DataWatcher_blockPosIsInstance(object)&&MCObjectHeap_objectSize(object)>=sizeof(BlockPos);
@@ -6,6 +7,18 @@ bool BlockPos_isInstance(const MCObject *object) {
 static int32_t signed_bits(uint32_t bits) {
     return bits<=INT32_MAX?(int32_t)bits:-1-(int32_t)(UINT32_MAX-bits);
 }
+BlockPos *BlockPos_newDouble(MCObjectHeap *heap,double x,double y,double z) {
+    int32_t ix=MathHelper_floor_double(x);
+    int32_t iy=MathHelper_floor_double(y);
+    int32_t iz=MathHelper_floor_double(z);
+    return DataWatcher_blockPos(heap,ix,iy,iz);
+}
+BlockPos *BlockPos_downN(BlockPos *self,int32_t n) {
+    /* DOWN has immutable original offset facts (0,-1,0). Enum construction
+       and the general EnumFacing/offset dispatch remain a native boundary. */
+    return BlockPos_add(self,0,signed_bits(UINT32_C(0)-(uint32_t)n),0);
+}
+BlockPos *BlockPos_down(BlockPos *self) { return BlockPos_downN(self,1); }
 BlockPos *BlockPos_add(BlockPos *self,int32_t x,int32_t y,int32_t z) {
     MCObjectHeap *heap=self?self->object.heap:NULL;
     if(!BlockPos_isInstance((MCObject *)self)){MCObjectHeap_fail(heap);return NULL;}

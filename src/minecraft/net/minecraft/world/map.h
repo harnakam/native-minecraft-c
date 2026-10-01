@@ -1,7 +1,7 @@
 #ifndef C919_MAP_H
 #define C919_MAP_H
 #include "inventory/inventory.h"
-#include "world/world.h"
+#include "world/NativeWorld.h"
 #include "world/storage/MapData.h"
 
 #define MC_MAP_SIDE 128u

@@ -2,12 +2,10 @@
 #define C919_STAT_BASE_H
 #include "nbt/NBTString.h"
 
-/* Identity fields needed by the source equals/hashCode and counter methods.
-   Chat components, formatters, objective construction/registration and the
-   original overloaded constructors are separate, undeclared dependencies.
-   Basic/Crafting identities allocated here are native constructor adapters.
-   StatCrafting's separate source Item field/getter has its own descriptor;
-   display/objective behavior remains a separate dependency. */
+/* Source constructor fields and objective identity. Chat components/IStatType
+   and Class metadata are explicit managed dependencies, not formatter/chat
+   implementations. Basic/Crafting identity factories remain native adapters;
+   every such identity owns the real ObjectiveStat constructor result. */
 typedef enum {
     STAT_BASE_KIND_UNKNOWN=-1,STAT_BASE_KIND_BASE,STAT_BASE_KIND_BASIC,STAT_BASE_KIND_CRAFTING,
     STAT_BASE_KIND_ACHIEVEMENT
@@ -15,9 +13,20 @@ typedef enum {
 typedef struct StatBase {
     MCObject object;
     NBTString *statId;
+    MCObject *statName;
     bool isIndependent;
+    MCObject *type;
+    struct IScoreObjectiveCriteria *objectiveCriteria;
+    MCObject *field_150956_d;
 } StatBase;
 typedef struct StatList StatList;
+/* Exact three-argument constructor body. The delegated overload receives its
+   already evaluated class-static simpleStatType dependency explicitly. */
+StatBase *StatBase_new(MCObjectHeap *,NBTString *,MCObject *statName,MCObject *type);
+StatBase *StatBase_newWithSimpleType(MCObjectHeap *,NBTString *,MCObject *statName,MCObject *capturedSimpleStatType);
+bool StatBase_construct(StatBase *,NBTString *,MCObject *statName,MCObject *type);
+bool StatBase_constructIdentity(StatBase *,NBTString *);
+struct IScoreObjectiveCriteria *StatBase_getCriteria(StatBase *);
 StatBase *StatBase_newIdentity(MCObjectHeap *,NBTString *id,StatBaseKind kind);
 StatBase *StatBase_initIndependentStat(StatBase *);
 bool StatBase_isAchievement(const StatBase *);

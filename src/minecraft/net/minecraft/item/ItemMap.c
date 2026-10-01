@@ -185,17 +185,25 @@ bool ItemMap_updateMapData(MCGameplayWorld *world,MCObject *viewer,mc_map_info *
     if (!changed || !MCGameplayWorld_isInstance((MCObject *)world) || !map ||
         (viewer && viewer->heap!=h)) { MCObjectHeap_fail(h); return false; }
     *changed=false;
-    /* Exact source guards precede MapInfo allocation and terrain dependency. */
-    if (world->dimension!=map->dimension || !MCGameplayPlayer_isInstance(viewer)) return !MCObjectHeap_failed(h);
     MCObjectRootScope scope={0}; if (!MCObjectRootScope_begin(&scope,h)) return false;
+    /* Source dimension and no-sky getters precede MapInfo allocation. The
+       subsequent dense terrain survey remains the explicit native adapter. */
+    WorldProvider *provider=world->provider;bool ok=false;
+    if(!WorldProvider_isInstance((MCObject *)provider)||provider->object.heap!=h){MCObjectHeap_fail(h);goto done;}
+    int32_t dimension=WorldProvider_getDimensionId(provider);if(MCObjectHeap_failed(h))goto done;
+    if(dimension!=map->dimension||!MCGameplayPlayer_isInstance(viewer)){ok=true;goto done;}
+    provider=world->provider;
+    if(!WorldProvider_isInstance((MCObject *)provider)||provider->object.heap!=h){MCObjectHeap_fail(h);goto done;}
+    bool no_sky=WorldProvider_getHasNoSky(provider);if(MCObjectHeap_failed(h))goto done;
     MCGameplayPlayer *p=(MCGameplayPlayer *)viewer;
     mc_MapInfo *info=MapData_getMapInfo(map,world,p);
-    bool ok=info!=NULL;
+    ok=info!=NULL;
     if (ok) {
         ++info->update_counter; MCObjectHeap_touch(h);
-        ok=mc_ItemMap_survey(map,world->terrain,p->living.entity.posX,p->living.entity.posZ,world->dimension,world->hasNoSky,info->update_counter,changed);
+        ok=mc_ItemMap_survey(map,world->terrain,p->living.entity.posX,p->living.entity.posZ,dimension,no_sky,info->update_counter,changed);
     }
     if (!ok) MCObjectHeap_fail(h);
+done:
     MCObjectRootScope_end(&scope); return ok && !MCObjectHeap_failed(h);
 }
 bool ItemMap_onUpdate(ItemStack *stack,MCGameplayWorld *world,MCObject *entity,int32_t slot,bool selected,bool *changed) {
@@ -203,7 +211,7 @@ bool ItemMap_onUpdate(ItemStack *stack,MCGameplayWorld *world,MCObject *entity,i
     MCObjectHeap *h=world ? world->object.heap : NULL;
     if (!changed || !MCGameplayWorld_isInstance((MCObject *)world)) { MCObjectHeap_fail(h); return false; }
     *changed=false;
-    if (world->remote) return !MCObjectHeap_failed(h);
+    if (world->isRemote) return !MCObjectHeap_failed(h);
     if (!ItemStack_isInstance((MCObject *)stack) || stack->object.heap!=h || (entity && entity->heap!=h)) { MCObjectHeap_fail(h); return false; }
     MCObjectRootScope scope={0}; if (!MCObjectRootScope_begin(&scope,h)) return false;
     bool missing=mc_maps_find(&world->maps,ItemStack_getMetadata(stack))==NULL;

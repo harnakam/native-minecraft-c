@@ -1,5 +1,6 @@
-#include "world.h"
+#include "NativeWorld.h"
 #include <limits.h>
+#include "block/block.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -25,6 +26,7 @@ mc_chunk *mc_world_chunk(mc_world *w, int32_t x, int32_t z, bool create) {
     uint16_t *blocks = calloc(MC_CHUNK_BLOCKS, sizeof(*blocks));
     if (!blocks) return NULL;
     mc_chunk *c = &w->chunks[w->count++];
+    memset(c,0,sizeof(*c));
     c->x = x; c->z = z; c->blocks = blocks; c->revision = 1;
     return c;
 }
@@ -43,11 +45,21 @@ uint16_t mc_world_get(const mc_world *w, int x, int y, int z) {
     return 0;
 }
 bool mc_world_set(mc_world *w, int x, int y, int z, uint16_t state) {
-    if (!valid_block(x, y, z)) return false;
+    if (!valid_block(x, y, z)||!mc_block_valid(state)) return false;
     mc_chunk *c = mc_world_chunk(w, mc_floor_div16(x), mc_floor_div16(z), true);
     if (!c) return false;
     size_t index = block_index(x, y, z);
-    if (c->blocks[index] != state) { c->blocks[index] = state; ++c->revision; }
+    if (c->blocks[index] != state) {
+        c->blocks[index] = state;++c->revision;
+        if(state>>4)c->sectionMask|=(uint16_t)(1u<<(y>>4));
+        int32_t height=0;
+        for(int scan=255;scan>=0;scan--) {
+            int32_t opacity;
+            if(!mc_block_light_opacity(c->blocks[block_index(x,scan,z)],&opacity))return false;
+            if(opacity>0){height=scan+1;break;}
+        }
+        c->heightMap[((z&15)<<4)|(x&15)]=(uint16_t)height;
+    }
     return true;
 }
 bool mc_world_solid(uint16_t state) {
@@ -90,9 +102,29 @@ void mc_world_generate(mc_world *w, int32_t cx, int32_t cz) {
         if (tx >= cx*16 && tx < cx*16+16 && tz >= cz*16 && tz < cz*16+16)
             for (int y = top-4; y <= top; ++y) c->blocks[block_index(tx-cx*16,y,tz-cz*16)] = 17 << 4;
     }
+    (void)mc_world_refresh_chunk_metadata(c,true);
     ++c->revision;
 }
 int mc_world_surface(const mc_world *w, int x, int z) {
     for (int y = 255; y >= 0; --y) if (mc_world_solid(mc_world_get(w,x,y,z))) return y;
     return -1;
+}
+
+/* Metadata is real store state used by Source World read leaves. Legacy native
+   saves lack allocated air-only sections; their import explicitly reconstructs
+   those section identities from blocks rather than claiming Source Chunk saves. */
+bool mc_world_refresh_chunk_metadata(mc_chunk *chunk,bool reconstructSectionMask) {
+    if(!chunk||!chunk->blocks)return false;
+    if(reconstructSectionMask)chunk->sectionMask=0;
+    for(int z=0;z<16;z++)for(int x=0;x<16;x++) {
+        int32_t height=0;
+        for(int y=255;y>=0;y--) {
+            uint16_t state=chunk->blocks[block_index(x,y,z)];int32_t opacity;
+            if(!mc_block_light_opacity(state,&opacity))return false;
+            if(reconstructSectionMask&&(state>>4))chunk->sectionMask|=(uint16_t)(1u<<(y>>4));
+            if(!height&&opacity>0)height=y+1;
+        }
+        chunk->heightMap[(z<<4)|x]=(uint16_t)height;
+    }
+    return true;
 }

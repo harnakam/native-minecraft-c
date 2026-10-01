@@ -25,6 +25,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Registry subclass resolution is a native binding. In this original version
    ItemMap is the sole Item.onUpdate override; all other registered Items inherit
@@ -74,41 +75,12 @@ static bool same_thread(RuntimeThread a, RuntimeThread b) {
 }
 #endif
 
-/* Native storage for the real initially empty world scoreboard. Its objective
-   collection is managed state, rather than an empty iterator callback. Commands,
-   persistence and the complete Scoreboard/ObjectiveStat classes remain ports. */
-typedef struct {
-    MCObject object;
-    MCObject *criteria;
-    NBTString *name;
-} RuntimeObjective;
-typedef struct {
-    MCObject object;
-    RuntimeObjective *objective;
-    NBTString *name;
-    int32_t points;
-} RuntimeScore;
-typedef struct {
-    MCObject object;
-    MCObject *objectives[128];
-    size_t objectiveCount;
-    RuntimeScore *scores[1024];
-    size_t scoreCount;
-} RuntimeScoreboard;
-typedef struct {
-    MCObject object;
-    MCObject *values[128];
-    size_t count, index;
-} RuntimeIterator;
 typedef struct RuntimeServer RuntimeServer;
 typedef struct RuntimeConfiguration RuntimeConfiguration;
 typedef struct {
     MCObject object;
     RuntimeThread thread;
-    RuntimeScoreboard *scoreboard;
     bool announceAchievements;
-    const WorldSettingsGameType *gameType;
-    WorldBorder *border;
     RuntimeServer *server;
 } RuntimeWorld;
 struct RuntimeServer {
@@ -134,22 +106,8 @@ static bool fail(MCObjectHeap *heap) {
     MCObjectHeap_fail(heap);
     return false;
 }
-static void trace_board(MCObject *o, MCObjectVisitor visit, void *ctx) {
-    RuntimeScoreboard *b = (RuntimeScoreboard *)o;
-    for (size_t i = 0; i < b->objectiveCount; i++)
-        b->objectives[i] = visit(b->objectives[i], ctx);
-    for (size_t i = 0; i < b->scoreCount; i++)
-        b->scores[i] = (RuntimeScore *)visit((MCObject *)b->scores[i], ctx);
-}
-static void trace_iterator(MCObject *o, MCObjectVisitor v, void *c) {
-    RuntimeIterator *i = (RuntimeIterator *)o;
-    for (size_t n = 0; n < i->count; n++)
-        i->values[n] = v(i->values[n], c);
-}
 static void trace_world(MCObject *o, MCObjectVisitor v, void *c) {
     RuntimeWorld *w = (RuntimeWorld *)o;
-    w->scoreboard = (RuntimeScoreboard *)v((MCObject *)w->scoreboard, c);
-    w->border=(WorldBorder *)v((MCObject *)w->border,c);
     w->server=(RuntimeServer *)v((MCObject *)w->server,c);
 }
 static void trace_server(MCObject *o,MCObjectVisitor v,void *c) {
@@ -168,21 +126,10 @@ static void trace_actor(MCObject *o, MCObjectVisitor v, void *c) {
     RuntimeActor *a = (RuntimeActor *)o;
     a->actor = (MCGameplayPlayer *)v((MCObject *)a->actor, c);
 }
-static void trace_score(MCObject *o, MCObjectVisitor v, void *c) {
-    RuntimeScore *s = (RuntimeScore *)o;
-    s->objective = (RuntimeObjective *)v((MCObject *)s->objective, c);
-    s->name = (NBTString *)v((MCObject *)s->name, c);
-}
-static const MCObjectClass boardClass = {"C919.native.ScoreboardState", MCObjectHeap_plainClone,
-                                         trace_board, NULL};
-static const MCObjectClass iteratorClass = {"C919.native.ScoreObjectives", MCObjectHeap_plainClone,
-                                            trace_iterator, NULL};
 static const MCObjectClass worldClass = {"C919.native.ServerWorldBindings", MCObjectHeap_plainClone,
                                          trace_world, NULL};
 static const MCObjectClass actorClass = {"C919.native.ServerActorBindings", MCObjectHeap_plainClone,
                                          trace_actor, NULL};
-static const MCObjectClass scoreClass = {"C919.native.ScoreState", MCObjectHeap_plainClone,
-                                         trace_score, NULL};
 static const MCObjectClass serverClass={"C919.native.MinecraftServerView",MCObjectHeap_plainClone,trace_server,NULL};
 static const MCObjectClass configurationClass={"C919.native.ServerConfigurationState",MCObjectHeap_plainClone,trace_configuration,NULL};
 static const MCObjectClass playerStatClass={"C919.native.PlayerStatEntry",MCObjectHeap_plainClone,trace_player_stat,NULL};
@@ -278,81 +225,35 @@ bool mc_server_graph_send_motion(EntityItem *e) {
     mc_put_i16(&p, velocity(e->entity.motionZ));
     return emit(w, &p);
 }
-static MCObject *get_board(MCObject *ctx, MCGameplayPlayer *p) {
-    (void)ctx;
-    RuntimeWorld *r = bindings(((MCGameplayWorld *)(p->living.entity.worldObj)));
-    return r ? (MCObject *)r->scoreboard : NULL;
+static MCObject *get_board(MCObject *context,MCGameplayPlayer *player) {
+    (void)context;return (MCObject *)World_getScoreboard((World *)player->living.entity.worldObj);
 }
-static MCObject *criteria(MCObject *ctx, StatBase *stat) {
-    (void)ctx;
-    return (MCObject *)stat;
+static MCObject *criteria(MCObject *context,StatBase *stat) {
+    (void)context;return (MCObject *)StatBase_getCriteria(stat);
 }
-static MCObject *objectives(MCObject *ctx, MCObject *board, MCObject *key) {
-    (void)ctx;
-    RuntimeScoreboard *b = (RuntimeScoreboard *)board;
-    if (!board || board->klass != &boardClass)
-        return fail(board ? board->heap : NULL), NULL;
-    RuntimeIterator *out =
-        (RuntimeIterator *)MCObjectHeap_alloc(board->heap, sizeof(*out), &iteratorClass);
-    if (!out)
-        return NULL;
-    for (size_t i = 0; i < b->objectiveCount; i++) {
-        RuntimeObjective *o = (RuntimeObjective *)b->objectives[i];
-        if (o->criteria == key)
-            out->values[out->count++] = (MCObject *)o;
-    }
-    return (MCObject *)out;
+static MCObject *objectives(MCObject *context,MCObject *board,MCObject *criterion) {
+    (void)context;return (MCObject *)Scoreboard_getObjectivesFromCriteria((Scoreboard *)board,(IScoreObjectiveCriteria *)criterion);
 }
-static MCObject *iterator(MCObject *ctx, MCObject *list) {
-    (void)ctx;
-    return list;
+static MCObject *iterator(MCObject *context,MCObject *list) {
+    (void)context;return (MCObject *)NativeIterator_fromList((NativeReferenceList *)list);
 }
-static bool has_next(MCObject *ctx, MCObject *list) {
-    (void)ctx;
-    RuntimeIterator *i = (RuntimeIterator *)list;
-    return i->index < i->count;
+static bool has_next(MCObject *context,MCObject *value) {
+    (void)context;return NativeIterator_hasNext((NativeIterator *)value);
 }
-static MCObject *next(MCObject *ctx, MCObject *list) {
-    (void)ctx;
-    RuntimeIterator *i = (RuntimeIterator *)list;
-    if (i->index >= i->count)
-        return fail(list->heap), NULL;
-    return i->values[i->index++];
+static MCObject *next(MCObject *context,MCObject *value) {
+    (void)context;MCObject *out=NULL;return NativeIterator_next((NativeIterator *)value,&out)?out:NULL;
 }
-static NBTString *player_name(MCObject *ctx, MCGameplayPlayer *p) {
-    (void)ctx;
-    return EntityPlayer_getName(p);
+static NBTString *player_name(MCObject *context,MCGameplayPlayer *player) {
+    (void)context;return EntityPlayer_getName(player);
 }
-static MCObject *score(MCObject *ctx, MCObject *board, const NBTString *name, MCObject *objective) {
-    (void)ctx;
-    RuntimeScoreboard *b = (RuntimeScoreboard *)board;
-    for (size_t i = 0; i < b->scoreCount; i++)
-        if (b->scores[i]->objective == (RuntimeObjective *)objective &&
-            NBTString_equals(b->scores[i]->name, name))
-            return (MCObject *)b->scores[i];
-    if (b->scoreCount == 1024)
-        return fail(board->heap), NULL;
-    RuntimeScore *s = (RuntimeScore *)MCObjectHeap_alloc(board->heap, sizeof(*s), &scoreClass);
-    if (!s)
-        return NULL;
-    s->objective = (RuntimeObjective *)objective;
-    s->name = (NBTString *)name;
-    b->scores[b->scoreCount++] = s;
-    return (MCObject *)s;
+static MCObject *score(MCObject *context,MCObject *board,const NBTString *name,MCObject *objective) {
+    (void)context;return (MCObject *)Scoreboard_getValueFromObjective((Scoreboard *)board,(NBTString *)name,(ScoreObjective *)objective);
 }
-static bool increment(MCObject *ctx, MCObject *o, int32_t amount) {
-    (void)ctx;
-    RuntimeScore *s = (RuntimeScore *)o;
-    uint32_t value = (uint32_t)s->points + (uint32_t)amount;
-    s->points = value <= INT32_MAX ? (int32_t)value : -1 - (int32_t)(UINT32_MAX - value);
-    MCObjectHeap_touch(o->heap);
-    return true;
+static bool increment(MCObject *context,MCObject *value,int32_t amount) {
+    (void)context;return Score_increseScore((Score *)value,amount);
 }
-static bool points(MCObject *ctx, MCObject *o, int32_t value) {
-    (void)ctx;
-    ((RuntimeScore *)o)->points = value;
-    MCObjectHeap_touch(o->heap);
-    return true;
+static bool points(MCObject *context,MCObject *value,int32_t amount) {
+    (void)context;return Score_setScorePoints((Score *)value,amount);
 }
 static const EntityPlayerMPStatsDependencies statDependencies = {
     get_board, criteria,    objectives, iterator,  has_next,
@@ -374,7 +275,7 @@ static bool announcement(MCObject *ctx, MCObject *server, MCObject *p, StatBase 
 }
 static int32_t tick_counter(MCObject *ctx, MCObject *server) {
     (void)server;
-    return (int32_t)((MCGameplayWorld *)ctx)->worldTime;
+    return (int32_t)World_getWorldTime((World *)ctx);
 }
 static bool send_stats(MCObject *ctx, MCObject *object, StatisticsFileIntMap *map) {
     (void)ctx;
@@ -451,11 +352,11 @@ static bool entity_box(MCObject *c,Entity *e,AxisAlignedBB *box) {
 }
 static bool entity_dimension(MCObject *c,MCObject *world,int32_t *out) {
     if (!MCGameplayWorld_isInstance(c) || !MCGameplayWorld_isInstance(world) || !out) return false;
-    *out=((MCGameplayWorld *)world)->dimension;return true;
+    *out=WorldProvider_getDimensionId(((World *)world)->provider);return !MCObjectHeap_failed(world->heap);
 }
 static bool entity_remote(MCObject *c,MCObject *world,bool *out) {
     if (!MCGameplayWorld_isInstance(c) || !MCGameplayWorld_isInstance(world) || !out) return false;
-    *out=((MCGameplayWorld *)world)->remote;return true;
+    *out=((World *)world)->isRemote;return true;
 }
 static bool entity_location(MCObject *c,Entity *e,double x,double y,double z,float yaw,float pitch) {
     return MCGameplayWorld_isInstance(c) && Entity_setLocationAndAngles(e,x,y,z,yaw,pitch);
@@ -617,6 +518,8 @@ static bool join_item(MCObject *ctx, MCGameplayPlayer *p, EntityItem *e) {
         return fail(e->entity.object.heap);
     o->items[o->itemCount++] = (MCObject *)e;
     MCObjectHeap_touch(e->entity.object.heap);
+    if (!MCGameplay_reindexWorld(o))
+        return false;
     for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS; i++) {
         MCGameplayPlayer *recipient = (MCGameplayPlayer *)o->players[i];
         if (recipient && !recipient->living.entity.isDead && !mc_server_graph_send_item(recipient, e))
@@ -704,36 +607,31 @@ static const NetHandlerPlayServerDependencies handlerDependencies = {
 static NBTString *display_name(MCObject *ctx, const ItemStack *stack) {
     return NBTString_fromUTF8(ctx->heap, mc_item_name((int16_t)ItemStack_registryId(stack->item)));
 }
-/* These are native views for the still untranslated World/Server providers.
-   They own real graph state and read loaded terrain; they never replace the
-   Source MP constructor's branch, Random, clock, position or collision loop. */
+/* Source World/WorldInfo/provider/border own the MP reads. Remaining native
+   server/configuration, collision, tracking and save leaves are explicit. */
 static MCObject *mp_new_list(MCObject *context) {
     return (MCObject *)NativeReferenceList_new(context->heap);
 }
 static BlockPos *mp_spawn(MCObject *context,MCObject *world) {
-    (void)context;
-    if(!MCGameplayWorld_isInstance(world))return fail(world?world->heap:NULL),NULL;
-    MCGameplayWorld *w=(MCGameplayWorld *)world;
-    return DataWatcher_blockPos(world->heap,w->spawnX,w->spawnY,w->spawnZ);
+    (void)context;return World_getSpawnPoint((World *)world);
 }
 static MCObject *mp_provider(MCObject *context,MCObject *world) {
     (void)context;
-    if(!MCGameplayWorld_isInstance(world))return fail(world?world->heap:NULL),NULL;
-    return world;
+    if(!World_isInstance(world))return fail(world?world->heap:NULL),NULL;
+    return (MCObject *)((World *)world)->provider;
 }
 static bool mp_no_sky(MCObject *context,MCObject *provider,bool *out) {
     (void)context;
-    if(!MCGameplayWorld_isInstance(provider)||!out)return fail(provider?provider->heap:NULL);
-    *out=((MCGameplayWorld *)provider)->hasNoSky;return true;
+    if(!WorldProvider_isInstance(provider)||!out)return fail(provider?provider->heap:NULL);
+    *out=WorldProvider_getHasNoSky((WorldProvider *)provider);return !MCObjectHeap_failed(provider->heap);
 }
 static MCObject *mp_world_info(MCObject *context,MCObject *world) {
-    (void)context;
-    return (MCObject *)bindings((MCGameplayWorld *)world);
+    (void)context;return (MCObject *)World_getWorldInfo((World *)world);
 }
 static bool mp_world_type(MCObject *context,MCObject *info,const WorldSettingsGameType **out) {
     (void)context;
-    if(!info||info->klass!=&worldClass||!out)return fail(info?info->heap:NULL);
-    *out=((RuntimeWorld *)info)->gameType;return true;
+    if(!WorldInfo_isInstance(info)||!out)return fail(info?info->heap:NULL);
+    *out=WorldInfo_getGameType((WorldInfo *)info);return !MCObjectHeap_failed(info->heap);
 }
 static bool mp_protection(MCObject *context,MCObject *server,int32_t *out) {
     (void)context;
@@ -741,8 +639,7 @@ static bool mp_protection(MCObject *context,MCObject *server,int32_t *out) {
     *out=((RuntimeServer *)server)->spawnProtectionSize;return true;
 }
 static MCObject *mp_border(MCObject *context,MCObject *world) {
-    (void)context;RuntimeWorld *r=bindings((MCGameplayWorld *)world);
-    return r?(MCObject *)r->border:NULL;
+    (void)context;return (MCObject *)World_getWorldBorder((World *)world);
 }
 static bool mp_border_distance(MCObject *context,MCObject *border,double x,double z,double *out) {
     (void)context;return WorldBorder_getClosestDistance((WorldBorder *)border,x,z,out);
@@ -762,31 +659,7 @@ static uint16_t chunk_state(const mc_chunk *chunk,int32_t x,int32_t y,int32_t z)
     return chunk->blocks[((size_t)y<<8)|((size_t)(z&15)<<4)|(size_t)(x&15)];
 }
 static BlockPos *mp_top_solid(MCObject *context,MCObject *world,BlockPos *position) {
-    (void)context;
-    if(!MCGameplayWorld_isInstance(world)||!BlockPos_isInstance((MCObject *)position))
-        return fail(world?world->heap:NULL),NULL;
-    const mc_chunk *chunk=loaded_chunk(((MCGameplayWorld *)world)->terrain,position->x,position->z);
-    if(!chunk||!chunk->blocks)return fail(world->heap),NULL;
-    /* Dense native chunks do not retain ExtendedBlockStorage allocation
-       metadata. A highest non-air segment is sufficient for this scan's result;
-       Chunk/World construction and block registry classes remain dependencies. */
-    int32_t top=0;
-    for(int32_t y=MC_CHUNK_HEIGHT-1;y>=0;y--) {
-        bool present=false;
-        for(size_t i=(size_t)y<<8;i<((size_t)y+1)<<8;i++)
-            if((chunk->blocks[i]>>4)!=0){present=true;break;}
-        if(present){top=(y/16)*16;break;}
-    }
-    BlockPos *pos=DataWatcher_blockPos(world->heap,position->x,top+16,position->z);
-    while(pos&&pos->y>=0) {
-        BlockPos *below=BlockPos_add(pos,0,-1,0);
-        bool movement=false,leaves=false;
-        if(!below||!mc_block_material_flags(chunk_state(chunk,below->x,below->y,below->z),&movement,&leaves))
-            return fail(world->heap),NULL;
-        if(movement&&!leaves)break;
-        pos=below;
-    }
-    return pos;
+    (void)context;return World_getTopSolidOrLiquidBlock((World *)world,position);
 }
 static MCObject *mp_configuration(MCObject *context,MCObject *server) {
     (void)context;
@@ -836,8 +709,8 @@ static MCObject *mp_collisions(MCObject *context,MCObject *world,EntityPlayerMP 
        maxX<minX||maxZ<minZ||(int64_t)maxX-minX>32||(int64_t)maxZ-minZ>32)
         return fail(world->heap),NULL;
     double borderMinX,borderMinZ,borderMaxX,borderMaxZ;
-    if(!WorldBorder_minX(r->border,&borderMinX)||!WorldBorder_minZ(r->border,&borderMinZ)||
-       !WorldBorder_maxX(r->border,&borderMaxX)||!WorldBorder_maxZ(r->border,&borderMaxZ))return NULL;
+    if(!WorldBorder_minX(w->worldBorder,&borderMinX)||!WorldBorder_minZ(w->worldBorder,&borderMinZ)||
+       !WorldBorder_maxX(w->worldBorder,&borderMaxX)||!WorldBorder_maxZ(w->worldBorder,&borderMaxZ))return NULL;
     Entity *entity=&p->player.living.entity;
     bool outside=entity->isOutsideBorder;
     double adjustment=outside?1.0:-1.0;
@@ -877,7 +750,6 @@ static bool mp_empty(MCObject *context,MCObject *list,bool *out) {
 static bool mp_position(MCObject *context,EntityPlayerMP *p,double x,double y,double z) {
     (void)context;return Entity_setPosition(&p->player.living.entity,x,y,z);
 }
-static const WorldBorderDependencies borderDependencies={.currentTimeMillis=NativeWallClock_currentTimeMillis};
 static const EntityPlayerMPConstructorDependencies mpConstructors={
     .player=&MCGameplayPlayer_nativeConstructorBindings,
     .newLinkedList=mp_new_list,.currentTimeMillis=NativeWallClock_currentTimeMillis,
@@ -897,35 +769,25 @@ bool mc_server_graph_init(MCGameplay *game, const mc_world *terrain, int32_t spa
         return false;
     static const MCGameplayCraftingEffects effects = {crafting, craft_achievement, drop};
     bool ok = MCGameplayCrafting_nativeDispatch(&craftingDispatch, &effects);
-    MCGameplayWorld *w =
-        ok ? MCGameplayWorld_new(game->heap, MCGameplay_get(game), terrain, NULL) : NULL;
-    RuntimeWorld *r =
-        w ? (RuntimeWorld *)MCObjectHeap_alloc(game->heap, sizeof(*r), &worldClass) : NULL;
-    if (r)
-        r->scoreboard = (RuntimeScoreboard *)MCObjectHeap_alloc(game->heap, sizeof(*r->scoreboard),
-                                                                &boardClass);
-    if(r&&r->scoreboard)r->server=(RuntimeServer *)MCObjectHeap_alloc(game->heap,sizeof(*r->server),&serverClass);
+    int64_t worldSeed;memcpy(&worldSeed,&seed,sizeof(worldSeed));
+    MCGameplayWorld *w=ok?MCGameplayWorld_nativeNewDimension(game->heap,MCGameplay_get(game),terrain,NULL,
+        NativeJavaRandomRuntime_process(),worldSeed,0,false):NULL;
+    RuntimeWorld *r=w?(RuntimeWorld *)MCObjectHeap_alloc(game->heap,sizeof(*r),&worldClass):NULL;
+    if(r)r->server=(RuntimeServer *)MCObjectHeap_alloc(game->heap,sizeof(*r->server),&serverClass);
     if(r&&r->server)r->server->configuration=(RuntimeConfiguration *)MCObjectHeap_alloc(game->heap,sizeof(RuntimeConfiguration),&configurationClass);
     if(r&&r->server&&r->server->configuration) {
-        r->server->spawnProtectionSize=16;
-        r->server->configuration->world=w;
+        r->server->spawnProtectionSize=16;r->server->configuration->world=w;
         r->server->configuration->playerStatFiles=NativeReferenceList_new(game->heap);
-        r->border=WorldBorder_new(game->heap,&borderDependencies,(MCObject *)w);
-        r->gameType=&WorldSettingsGameType_SURVIVAL;
     }
-    ok = r && r->scoreboard&&r->server&&r->server->configuration&&
-        r->server->configuration->playerStatFiles&&r->border;
-    if (ok) {
-        r->thread = current_thread();
-        w->nativeContext = (MCObject *)r;
-        w->spawnX = spawnX;
-        w->spawnY = terrain?mc_world_surface(terrain,spawnX,spawnZ)+1:0;
-        w->spawnZ = spawnZ;
+    ok=r&&r->server&&r->server->configuration&&r->server->configuration->playerStatFiles&&w->worldBorder;
+    if(ok) {
+        r->thread=current_thread();w->nativeContext=(MCObject *)r;
+        BlockPos *spawn=DataWatcher_blockPos(game->heap,spawnX,terrain?mc_world_surface(terrain,spawnX,spawnZ)+1:0,spawnZ);
+        ok=spawn&&World_setSpawnPoint(w,spawn);
         w->nextEntityId = 1;
         /* The terrain generation seed is not World.rand/Entity.rand or Math's
            process seed. Native no-argument construction owns those streams. */
-        (void)seed;
-        ok = MCGameplayCrafting_configureWorld(w, display_name, (MCObject *)w) &&
+        ok = ok && MCGameplayCrafting_configureWorld(w, display_name, (MCObject *)w) &&
              MCGameplay_setWorld(game, (MCObject *)w);
     }
     MCObjectRootScope_end(&scope);
@@ -934,7 +796,7 @@ bool mc_server_graph_init(MCGameplay *game, const mc_world *terrain, int32_t spa
 bool mc_server_graph_set_world_game_type(MCGameplay *game,const WorldSettingsGameType *type) {
     MCGameplayWorld *world=mc_server_graph_world(game);RuntimeWorld *r=bindings(world);
     if(!r||!WorldSettingsGameType_isCanonical(type))return fail(game?game->heap:NULL);
-    r->gameType=type;MCObjectHeap_touch(game->heap);return true;
+    return WorldInfo_setGameType(world->worldInfo,type);
 }
 static bool add_player(MCGameplay *game, size_t index, const char *uuid,
                                 const char *nameText, int32_t entityId, double x, double y,
@@ -1138,5 +1000,5 @@ bool mc_server_graph_remove_dead(MCGameplayObjects *o) {
         o->items[--o->itemCount] = NULL;
         MCObjectHeap_touch(o->object.heap);
     }
-    return !MCObjectHeap_failed(o->object.heap);
+    return MCGameplay_reindexWorld(o) && !MCObjectHeap_failed(o->object.heap);
 }

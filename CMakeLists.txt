@@ -157,7 +157,7 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/util/NativeJavaRandomRuntime.c
     ${MC_SOURCE}/util/NativeJavaUUID.c
     ${MC_SOURCE}/util/Timer.c
-    ${MC_SOURCE}/world/world.c
+    ${MC_SOURCE}/world/NativeWorld.c
     ${MC_SOURCE}/world/map.c
     ${MC_SOURCE}/world/WorldDataStorage.c
     ${MC_SOURCE}/world/storage/MapStorage.c
@@ -165,10 +165,38 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/network/play/client/C03PacketPlayer.c
     ${MC_SOURCE}/network/play/client/C0BPacketEntityAction.c
     ${MC_SOURCE}/world/storage/MapData.c
-    ${MC_SOURCE}/world/storage.c)
+    ${MC_SOURCE}/world/storage.c
+    ${MC_SOURCE}/scoreboard/IScoreObjectiveCriteria.c
+    ${MC_SOURCE}/scoreboard/Score.c
+    ${MC_SOURCE}/scoreboard/ScoreDummyCriteria.c
+    ${MC_SOURCE}/scoreboard/ScoreObjective.c
+    ${MC_SOURCE}/scoreboard/Scoreboard.c
+    ${MC_SOURCE}/stats/ObjectiveStat.c
+    ${MC_SOURCE}/util/IntHashMap.c
+    ${MC_SOURCE}/util/NativeCalendar.c
+    ${MC_SOURCE}/util/NativeFloatArray.c
+    ${MC_SOURCE}/util/NativeHashMap.c
+    ${MC_SOURCE}/util/NativeHashSet.c
+    ${MC_SOURCE}/util/NativeJavaNumber.c
+    ${MC_SOURCE}/util/NativeJavaString.c
+    ${MC_SOURCE}/util/NativePrimitiveArray.c
+    ${MC_SOURCE}/util/NativeSortedStringMap.c
+    ${MC_SOURCE}/world/ChunkCoordIntPair.c
+    ${MC_SOURCE}/world/EnumDifficulty.c
+    ${MC_SOURCE}/world/GameRules.c
+    ${MC_SOURCE}/world/World.c
+    ${MC_SOURCE}/world/WorldProvider.c
+    ${MC_SOURCE}/world/WorldProviderEnd.c
+    ${MC_SOURCE}/world/WorldProviderHell.c
+    ${MC_SOURCE}/world/WorldProviderSurface.c
+    ${MC_SOURCE}/world/WorldSettings.c
+    ${MC_SOURCE}/world/WorldType.c
+    ${MC_SOURCE}/world/storage/WorldInfo.c
+)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     set_source_files_properties(${MC_SOURCE}/util/NativeJavaRandom.c
         ${MC_SOURCE}/util/NativeStrictMathLog.c ${MC_SOURCE}/util/NativeStrictMathSqrt.c
+        ${MC_SOURCE}/world/WorldProvider.c ${MC_SOURCE}/world/WorldProviderHell.c
         PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-fast-math")
 endif()
 target_include_directories(c919-core PUBLIC ${MC_SOURCE})
@@ -197,7 +225,7 @@ if(WIN32)
     target_link_libraries(c919-client PRIVATE opengl32 gdi32 user32)
 endif()
 if(BUILD_TESTING)
-    foreach(name source_player_mp_runtime source_player_mp_constructor source_item_manager source_world_border source_player_sp_constructor source_client_bootstrap source_walking source_movement_packets source_entity_actions source_sprinting source_map_storage server_lifetime source_player_constructor source_player_profile source_attributes source_player_leaves source_living_constructor java_gaussian player_capabilities source_entity_constructor source_ability_packets protocol gameplay_client_frame source_packet_placement source_empty_map source_action_packets source_client_actions source_server_use source_map_refs source_inventory_animation source_hotbar source_timer java_random native_random_runtime source_uuid source_uuid_nbt native_item_motion native_packets packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
+    foreach(name source_world_constructor source_world_info source_world_provider source_int_hash_map source_scoreboard native_hash_map native_hash_set native_world_views native_java_number native_sorted_string_map gameplay_world_indexes source_player_mp_runtime source_player_mp_constructor source_item_manager source_world_border source_player_sp_constructor source_client_bootstrap source_walking source_movement_packets source_entity_actions source_sprinting source_map_storage server_lifetime source_player_constructor source_player_profile source_attributes source_player_leaves source_living_constructor java_gaussian player_capabilities source_entity_constructor source_ability_packets protocol gameplay_client_frame source_packet_placement source_empty_map source_action_packets source_client_actions source_server_use source_map_refs source_inventory_animation source_hotbar source_timer java_random native_random_runtime source_uuid source_uuid_nbt native_item_motion native_packets packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
         add_executable(test-${name} tests/test_${name}.c)
         target_link_libraries(test-${name} PRIVATE c919-core)
         c919_warnings(test-${name})

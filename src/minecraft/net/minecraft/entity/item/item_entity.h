@@ -1,7 +1,7 @@
 #ifndef C919_ITEM_ENTITY_H
 #define C919_ITEM_ENTITY_H
 #include "inventory/inventory.h"
-#include "world/world.h"
+#include "world/NativeWorld.h"
 
 #define MC_MAX_ITEM_ENTITIES 1024u
 typedef struct {

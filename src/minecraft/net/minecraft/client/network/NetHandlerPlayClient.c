@@ -57,7 +57,7 @@ bool NetHandlerPlayClient_nativeBindPlayer(NetHandlerPlayClient *h,MCGameplayPla
         !MCGameplayPlayer_isInstance((MCObject *)player)||!same_heap(heap,(MCObject *)player))return failed(heap);
     MCObject *world=player->living.entity.worldObj;
     if(!MCGameplayWorld_isInstance(world)||!same_heap(heap,world)||
-        !((MCGameplayWorld *)world)->remote)return failed(heap);
+        !((MCGameplayWorld *)world)->isRemote)return failed(heap);
     MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,heap))return false;
     bool ok=MCObjectRootScope_pin(&scope,(MCObject *)h)&&MCObjectRootScope_pin(&scope,(MCObject *)player)&&
         MCObjectRootScope_pin(&scope,world);

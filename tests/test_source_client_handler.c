@@ -2,6 +2,7 @@
 #include "network/GameplayPacketRouter.h"
 #include "inventory/ContainerWorkbench.h"
 #include "item/crafting/RecipeBookCloning.h"
+#include "entity/item/EntityItem.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,7 @@ typedef struct {
     bool creativeScreen, failClose, failSend, poison;
     int32_t selectedTab, inventoryTab;
     DataWatcher *watcher;
+    EntityItem *metadataEntity;
     MCGameplayWorld *metadataWorld;
     int32_t trackedEntityId, notifiedId;
     bool failEntityLookup, failWatcher;
@@ -36,6 +38,7 @@ static void controller_trace(MCObject *o, MCObjectVisitor v, void *ctx) {
     c->player = (MCGameplayPlayer *)v((MCObject *)c->player, ctx);
     c->lastPacket = v(c->lastPacket, ctx);
     c->watcher = (DataWatcher *)v((MCObject *)c->watcher, ctx);
+    c->metadataEntity=(EntityItem *)v((MCObject *)c->metadataEntity,ctx);
     c->metadataWorld = (MCGameplayWorld *)v((MCObject *)c->metadataWorld, ctx);
     for (unsigned i = 0; i < c->sentCount; i++)
         c->sent[i] = (C0FPacketConfirmTransaction *)v((MCObject *)c->sent[i], ctx);
@@ -108,19 +111,26 @@ static MCObject *get_entity(MCObject *ctx, MCGameplayWorld *world, int32_t id) {
     Controller *c = (Controller *)ctx;
     CHECK(world == c->metadataWorld);
     event(c, ENTITY);
+    MCObject *result=NULL;
+    if(id==c->trackedEntityId) {
+        CHECK(world->owners->items[0]==(MCObject *)c->metadataEntity&&
+              World_getEntityByID(world,id)==&c->metadataEntity->entity);
+        result=(MCObject *)c->metadataEntity;
+    }
     if (c->failEntityLookup)
         MCObjectHeap_fail(ctx->heap);
-    return id == c->trackedEntityId ? world->owners->items[0] : NULL;
+    return result;
 }
 static DataWatcher *get_watcher(MCObject *ctx, MCObject *entity) {
     Controller *c = (Controller *)ctx;
-    CHECK(entity == ctx);
+    CHECK(entity==(MCObject *)c->metadataEntity&&EntityItem_isInstance(entity)&&
+          c->metadataEntity->dependencyContext==ctx&&c->metadataEntity->entity.dataWatcher==c->watcher);
     event(c, WATCHER);
     return c->failWatcher ? NULL : c->watcher;
 }
 static bool watcher_update(MCObject *ctx, MCObject *entity, int32_t id) {
-    CHECK(ctx == entity);
     Controller *c = (Controller *)ctx;
+    CHECK(entity==(MCObject *)c->metadataEntity&&c->metadataEntity->dependencyContext==ctx);
     event(c, UPDATE);
     c->notifiedId = id;
     return true;
@@ -202,7 +212,7 @@ static MCGameplayPlayer *setup(MCGameplay *game, MCObjectRootScope *scope, Contr
     CHECK(CraftingManager_addRecipe(m, RecipeBookCloning_asRecipe(b)));
     MCGameplayWorld *w = MCGameplayWorld_new(game->heap, MCGameplay_get(game), NULL, m);
     CHECK(w);
-    w->remote = true;
+    w->isRemote = true;
     CHECK(MCGameplay_setWorld(game, (MCObject *)w));
     MCGameplayPlayer *p =
         MCGameplayPlayer_new(w, NBTString_fromASCII(game->heap, "Player"), NULL, &crafting);
@@ -531,7 +541,7 @@ static void dependency_failures(void) {
             d.closeScreenAndDropStack = NULL;
             CHECK(!NetHandlerPlayClient_nativeNew(p, (MCObject *)c, (MCObject *)c, &d));
         } else if (failure == 7) {
-            ((MCGameplayWorld *)(p->living.entity.worldObj))->remote = false;
+            ((MCGameplayWorld *)(p->living.entity.worldObj))->isRemote = false;
             CHECK(!NetHandlerPlayClient_nativeNew(p, (MCObject *)c, (MCObject *)c, &dependencies));
         } else {
             CHECK(!NetHandlerPlayClient_handleSetSlot(h, NULL));
@@ -682,13 +692,32 @@ static void routed_wire_snapshots(void) {
             finish(&g, &scope);
         }
 }
+/* Native EntityItem allocation-only fixture. Metadata update never invokes
+   pickup/drop/physics leaves; unexpected calls fail this test explicitly. */
+static bool unused_log(MCObject *c,int32_t id){(void)c;(void)id;CHECK(false);return false;}
+static bool unused_remote(MCObject *c,MCObject *w){(void)c;(void)w;CHECK(false);return false;}
+static InventoryPlayer *unused_inventory(MCObject *c,MCObject *p){(void)c;(void)p;CHECK(false);return NULL;}
+static const NBTString *unused_name(MCObject *c,MCObject *p){(void)c;(void)p;CHECK(false);return NULL;}
+static MCObject *unused_find(MCObject *c,MCObject *w,const NBTString *n){(void)c;(void)w;(void)n;CHECK(false);return NULL;}
+static bool unused_achievement(MCObject *c,MCObject *p,EntityItemAchievement a){(void)c;(void)p;(void)a;CHECK(false);return false;}
+static bool unused_silent(MCObject *c,const EntityItem *e){(void)c;(void)e;CHECK(false);return false;}
+static float unused_random(MCObject *c,EntityItem *e){(void)c;(void)e;CHECK(false);return 0;}
+static bool unused_sound(MCObject *c,MCObject *w,MCObject *p,const char *n,float v,float x){(void)c;(void)w;(void)p;(void)n;(void)v;(void)x;CHECK(false);return false;}
+static bool unused_pickup(MCObject *c,MCObject *p,EntityItem *e,int32_t n){(void)c;(void)p;(void)e;(void)n;CHECK(false);return false;}
+static bool unused_dead(MCObject *c,EntityItem *e){(void)c;(void)e;CHECK(false);return false;}
+static const EntityItemDependencies metadata_entity_dependencies={unused_log,unused_remote,
+    unused_inventory,unused_name,unused_find,unused_achievement,unused_silent,
+    unused_random,unused_sound,unused_pickup,unused_dead};
 static void metadata_owner(MCGameplay *game, MCGameplayPlayer *p, Controller *c,
                            NetHandlerPlayClient *h, ItemStack *initial) {
     c->metadataWorld = h->clientWorldController;
     c->trackedEntityId = INT32_MIN;
-    CHECK(MCGameplay_addItem(game, (MCObject *)c));
+    c->metadataEntity=EntityItem_nativeNew(game->heap,(MCObject *)c->metadataWorld,(MCObject *)c,&metadata_entity_dependencies);
+    CHECK(c->metadataEntity);Entity_setEntityId(&c->metadataEntity->entity,c->trackedEntityId);
+    CHECK(MCGameplay_addItem(game, (MCObject *)c->metadataEntity));
     c->watcher =
-        DataWatcher_new(p->living.entity.object.heap, (MCObject *)c, &watcher_dependencies, (MCObject *)c);
+        DataWatcher_new(p->living.entity.object.heap, (MCObject *)c->metadataEntity, &watcher_dependencies, (MCObject *)c);
+    c->metadataEntity->entity.dataWatcher=c->watcher;MCObjectHeap_touch(game->heap);
     CHECK(c->watcher && DataWatcher_addObjectByDataType(c->watcher, 10, 5));
     WatchableObject *watched = DataWatcher_nativeGetWatchedObject(c->watcher, 10);
     CHECK(watched && WatchableObject_setObject(watched, (MCObject *)initial));

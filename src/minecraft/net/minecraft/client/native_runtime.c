@@ -68,7 +68,7 @@ static const InventoryPlayerAnimationDependencies inventory_animation={MCGamepla
 bool mc_client_graph_tick_inventory(MCGameplay *g) {
     MCObjectRootScope scope={0}; if (!g || !MCObjectRootScope_begin(&scope,g->heap)) return false;
     MCClientBindings *b=mc_client_graph_bindings(g);
-    bool ok=b && ((MCGameplayWorld *)(b->player->living.entity.worldObj))->remote && InventoryPlayer_decrementAnimations(b->player->inventory,&inventory_animation,(MCObject *)b);
+    bool ok=b && ((MCGameplayWorld *)(b->player->living.entity.worldObj))->isRemote && InventoryPlayer_decrementAnimations(b->player->inventory,&inventory_animation,(MCObject *)b);
     if (!ok) MCObjectHeap_fail(g->heap);
     MCObjectRootScope_end(&scope); return ok && !MCObjectHeap_failed(g->heap);
 }
@@ -132,16 +132,15 @@ static bool display_null(MCObject *c,MCObject *game) {
     MCObjectHeap_touch(c->heap); return true;
 }
 static MCObject *get_entity(MCObject *c,MCGameplayWorld *w,int32_t id) {
-    if (!binding(c) || !w || w->object.heap!=c->heap) return NULL;
-    for(size_t i=0;i<MC_TRANSFER_MAX_PLAYERS;i++) {
-        MCObject *o=w->owners->players[i];
-        if(Entity_isInstance(o)&&Entity_getEntityId((Entity *)o)==id)return o;
+    if (!binding(c) || !MCGameplayWorld_isInstance((MCObject *)w) || w->object.heap!=c->heap) {
+        MCObjectHeap_fail(c?c->heap:NULL);return NULL;
     }
-    for (size_t i=0;i<w->owners->itemCount;i++) {
-        MCObject *o=w->owners->items[i];
-        if (EntityItem_isInstance(o) && ((EntityItem *)o)->entity.entityId==id) return o;
+    MCObject *entity=(MCObject *)World_getEntityByID(w,id);
+    if(entity&&(!Entity_isInstance(entity)||entity->heap!=c->heap||
+       ((Entity *)entity)->worldObj!=(MCObject *)w||Entity_getEntityId((Entity *)entity)!=id)) {
+        MCObjectHeap_fail(c->heap);return NULL;
     }
-    return NULL;
+    return entity;
 }
 static DataWatcher *get_watcher(MCObject *c,MCObject *e) {
     return binding(c)&&Entity_isInstance(e)?Entity_getDataWatcher((Entity *)e):NULL;
@@ -309,11 +308,11 @@ static bool entity_box(MCObject *c,Entity *e,AxisAlignedBB *box) {
 }
 static bool entity_dimension(MCObject *c,MCObject *world,int32_t *out) {
     if (!binding(c) || !MCGameplayWorld_isInstance(world) || !out) return false;
-    *out=((MCGameplayWorld *)world)->dimension;return true;
+    *out=WorldProvider_getDimensionId(((World *)world)->provider);return !MCObjectHeap_failed(world->heap);
 }
 static bool entity_remote(MCObject *c,MCObject *world,bool *out) {
     if (!binding(c) || !MCGameplayWorld_isInstance(world) || !out) return false;
-    *out=((MCGameplayWorld *)world)->remote;return true;
+    *out=((MCGameplayWorld *)world)->isRemote;return true;
 }
 static bool entity_location(MCObject *c,Entity *e,double x,double y,double z,float yaw,float pitch) {
     return binding(c) && Entity_setLocationAndAngles(e,x,y,z,yaw,pitch);
@@ -411,12 +410,9 @@ const mc_crafting_dispatch *mc_client_graph_crafting(void) {
 bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name) {
     if (!g || !terrain || !name || !MCGameplay_init(g,64u*1024u*1024u)) return false;
     MCObjectRootScope scope={0}; bool ok=MCObjectRootScope_begin(&scope,g->heap);
-    MCGameplayWorld *w=ok ? MCGameplayWorld_new(g->heap,MCGameplay_get(g),terrain,NULL) : NULL;
+    MCGameplayWorld *w=ok ? MCGameplayWorld_nativeNewDimension(g->heap,MCGameplay_get(g),terrain,NULL,NativeJavaRandomRuntime_process(),0,0,true) : NULL;
     if (w) {
-        w->remote=true;
-        SaveDataMemoryStorage *memory=SaveDataMemoryStorage_nativeNewCounterProvider(g->heap);
-        if(memory)w->mapStorage=&memory->base;
-        ok=memory&&MCGameplay_setWorld(g,(MCObject *)w);
+        ok=MCGameplay_setWorld(g,(MCObject *)w);
     }
     MCClientBindings *b=ok ? (MCClientBindings *)MCObjectHeap_alloc(g->heap,sizeof(*b),&klass) : NULL;
     if (b) b->timer=Timer_new(g->heap,20.0f,mc_client_timer_clocks(),NULL);
@@ -452,6 +448,41 @@ bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name
     } else ok=false;
     MCObjectRootScope_end(&scope);
     return ok && !MCObjectHeap_failed(g->heap);
+}
+bool mc_client_graph_nativeImportDimension(MCGameplay *g,int32_t dimension,const WorldSettingsGameType *type) {
+    MCGameplayObjects *owners=MCGameplay_get(g);MCGameplayWorld *old=mc_client_graph_world(g);
+    if(!owners||!old||!old->isRemote||!WorldSettingsGameType_isCanonical(type)) {
+        MCObjectHeap_fail(g?g->heap:NULL);return false;
+    }
+    MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,g->heap))return false;
+    bool ok=false;
+    if(WorldProvider_getDimensionId(old->provider)==dimension) {
+        ok=WorldInfo_setGameType(old->worldInfo,type);goto done;
+    }
+    /* The native packet loop removes old item registrations before importing
+       another dimension. Do not silently migrate dropped entities between it. */
+    if(owners->itemCount){MCObjectHeap_fail(g->heap);goto done;}
+    MCGameplayWorld *world=MCGameplayWorld_nativeNewDimension(g->heap,owners,old->terrain,old->manager,
+        old->randomRuntime,0,dimension,true);
+    if(!world)goto done;
+    world->worldScoreboard=old->worldScoreboard;world->nextEntityId=old->nextEntityId;
+    world->furnace=old->furnace;world->statList=old->statList;world->itemDisplayName=old->itemDisplayName;
+    world->itemDisplayContext=old->itemDisplayContext;world->emptyMapUseStat=old->emptyMapUseStat;
+    for(size_t i=0;i<MC_GAMEPLAY_CRAFT_STAT_COUNT;i++)world->craftStats[i]=old->craftStats[i];
+    if(!WorldInfo_setGameType(world->worldInfo,type))goto done;
+    for(size_t i=0;i<MC_TRANSFER_MAX_PLAYERS;i++)if(owners->players[i]) {
+        MCGameplayPlayer *player=(MCGameplayPlayer *)owners->players[i];
+        if(!MCGameplayPlayer_isInstance((MCObject *)player)){MCObjectHeap_fail(g->heap);goto done;}
+        player->living.entity.worldObj=(MCObject *)world;player->living.entity.dimension=dimension;
+        NetHandlerPlayClient *handler=(NetHandlerPlayClient *)player->handler;
+        if(handler) {
+            if(!NetHandlerPlayClient_isInstance((MCObject *)handler)){MCObjectHeap_fail(g->heap);goto done;}
+            handler->clientWorldController=world;
+        }
+    }
+    ok=MCGameplay_setWorld(g,(MCObject *)world)&&MCGameplay_reindexWorld(owners);
+done:
+    MCObjectHeap_touch(g->heap);MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(g->heap);
 }
 bool mc_client_graph_open(MCGameplay *g,int32_t window,bool workbench) {
     MCClientBindings *b=mc_client_graph_bindings(g); if (!b) return false;

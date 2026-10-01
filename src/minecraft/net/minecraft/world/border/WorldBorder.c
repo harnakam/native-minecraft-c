@@ -1,16 +1,19 @@
 #include "world/border/WorldBorder.h"
+#include "world/WorldProviderHell.h"
 #include <math.h>
 #include <string.h>
 
-static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
-    WorldBorder *border=(WorldBorder *)object;
+void WorldBorder_traceFields(WorldBorder *border,MCObjectVisitor visitor,void *context) {
+    MCObject *object=(MCObject *)border;
     if(MCObjectHeap_objectSize(object)<sizeof(*border)){MCObjectHeap_fail(object->heap);return;}
     border->listeners=(NativeReferenceList *)visitor((MCObject *)border->listeners,context);
     border->dependencyContext=visitor(border->dependencyContext,context);
+    border->positionContext=visitor(border->positionContext,context);
 }
+static void trace(MCObject *object,MCObjectVisitor visitor,void *context) { WorldBorder_traceFields((WorldBorder *)object,visitor,context); }
 static const MCObjectClass borderClass={"net.minecraft.world.border.WorldBorder",MCObjectHeap_plainClone,trace,NULL};
 bool WorldBorder_isInstance(const MCObject *object) {
-    return object&&object->klass==&borderClass&&MCObjectHeap_objectSize(object)>=sizeof(WorldBorder);
+    return object&&((object->klass==&borderClass&&MCObjectHeap_objectSize(object)>=sizeof(WorldBorder))||WorldProviderHellBorder_isInstance(object));
 }
 static bool failed(WorldBorder *border) {MCObjectHeap_fail(border?border->object.heap:NULL);return false;}
 static bool valid(WorldBorder *border) {
@@ -25,20 +28,32 @@ static bool end(WorldBorder *border,MCObjectRootScope *scope,bool ok) {
     ok=ok&&!MCObjectHeap_failed(border->object.heap);if(!ok)failed(border);
     MCObjectRootScope_end(scope);return ok;
 }
-WorldBorder *WorldBorder_new(MCObjectHeap *heap,const WorldBorderDependencies *deps,MCObject *context) {
+WorldBorder *WorldBorder_nativeAllocate(MCObjectHeap *heap,const WorldBorderDependencies *deps,MCObject *context) {
     MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,heap))return NULL;
     WorldBorder *border=NULL;
     if(!MCObjectRootScope_pin(&scope,context))goto done;
     border=(WorldBorder *)MCObjectHeap_alloc(heap,sizeof(*border),&borderClass);
     if(!border)goto done;
     border->dependencies=deps;border->dependencyContext=context;
-    border->listeners=NativeReferenceList_new(heap);
-    if(!border->listeners){border=NULL;goto done;}
+done:
+    MCObjectRootScope_end(&scope);return border;
+}
+bool WorldBorder_construct(WorldBorder *border) {
+    MCObjectRootScope scope={0};if(!begin(border,&scope))return false;
+    MCObjectHeap *heap=border->object.heap;
+    NativeReferenceList *listeners=NativeReferenceList_new(heap);
+    if(!listeners)return end(border,&scope,false);
+    border->listeners=listeners;
     border->centerX=0; border->centerZ=0; border->startDiameter=6.0E7;
     border->endDiameter=border->startDiameter;
     border->worldSize=29999984;border->damageAmount=0.2;border->damageBuffer=5;
     border->warningTime=15;border->warningDistance=5;MCObjectHeap_touch(heap);
-done:
+    return end(border,&scope,true);
+}
+WorldBorder *WorldBorder_new(MCObjectHeap *heap,const WorldBorderDependencies *deps,MCObject *context) {
+    MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,heap))return NULL;
+    WorldBorder *border=WorldBorder_nativeAllocate(heap,deps,context);
+    if(!border||!MCObjectRootScope_pin(&scope,(MCObject *)border)||!WorldBorder_construct(border))border=NULL;
     MCObjectRootScope_end(&scope);return border;
 }
 WorldBorderStatus WorldBorder_getStatus(WorldBorder *border) {
@@ -46,8 +61,24 @@ WorldBorderStatus WorldBorder_getStatus(WorldBorder *border) {
     return border->endDiameter<border->startDiameter?WORLD_BORDER_SHRINKING:
         border->endDiameter>border->startDiameter?WORLD_BORDER_GROWING:WORLD_BORDER_STATIONARY;
 }
-double WorldBorder_getCenterX(WorldBorder *border) {return valid(border)?border->centerX:NAN;}
-double WorldBorder_getCenterZ(WorldBorder *border) {return valid(border)?border->centerZ:NAN;}
+double WorldBorder_getCenterXBase(WorldBorder *border) {return valid(border)?border->centerX:NAN;}
+double WorldBorder_getCenterZBase(WorldBorder *border) {return valid(border)?border->centerZ:NAN;}
+double WorldBorder_getCenterX(WorldBorder *border) {
+    if(!valid(border))return NAN;
+    if(!border->overrides||!border->overrides->getCenterX)return border->centerX;
+    MCObjectRootScope scope={0};if(!begin(border,&scope))return NAN;
+    double value=border->overrides->getCenterX(border);
+    if(!end(border,&scope,!MCObjectHeap_failed(border->object.heap)))return NAN;
+    return value;
+}
+double WorldBorder_getCenterZ(WorldBorder *border) {
+    if(!valid(border))return NAN;
+    if(!border->overrides||!border->overrides->getCenterZ)return border->centerZ;
+    MCObjectRootScope scope={0};if(!begin(border,&scope))return NAN;
+    double value=border->overrides->getCenterZ(border);
+    if(!end(border,&scope,!MCObjectHeap_failed(border->object.heap)))return NAN;
+    return value;
+}
 static bool clock_now(WorldBorder *border,MCObjectRootScope *scope,int64_t *out) {
     const WorldBorderDependencies *deps=border->dependencies;
     MCObject *context=border->dependencyContext;
@@ -92,6 +123,7 @@ static bool edge(WorldBorder *border,double *out,bool x,bool maximum) {
     MCObjectRootScope scope={0};if(!begin(border,&scope))return false;
     bool ok=false;if(!out)goto done;
     double center=x?WorldBorder_getCenterX(border):WorldBorder_getCenterZ(border),diameter;
+    if(MCObjectHeap_failed(border->object.heap))goto done;
     if(!WorldBorder_getDiameter(border,&diameter))goto done;
     double value=maximum?center+diameter/2.0:center-diameter/2.0;
     /* worldSize is read after the mutating diameter/getListeners call. The
@@ -102,10 +134,64 @@ static bool edge(WorldBorder *border,double *out,bool x,bool maximum) {
 done:
     return end(border,&scope,ok);
 }
-bool WorldBorder_minX(WorldBorder *border,double *out) {return edge(border,out,true,false);}
-bool WorldBorder_minZ(WorldBorder *border,double *out) {return edge(border,out,false,false);}
-bool WorldBorder_maxX(WorldBorder *border,double *out) {return edge(border,out,true,true);}
-bool WorldBorder_maxZ(WorldBorder *border,double *out) {return edge(border,out,false,true);}
+bool WorldBorder_minXBase(WorldBorder *border,double *out) {return edge(border,out,true,false);}
+bool WorldBorder_minZBase(WorldBorder *border,double *out) {return edge(border,out,false,false);}
+bool WorldBorder_maxXBase(WorldBorder *border,double *out) {return edge(border,out,true,true);}
+bool WorldBorder_maxZBase(WorldBorder *border,double *out) {return edge(border,out,false,true);}
+static bool edge_dispatch(WorldBorder *border,double *out,bool x,bool maximum) {
+    if(!valid(border))return false;
+    const WorldBorderOverrides *v=border->overrides;
+    bool (*method)(WorldBorder *,double *)=v?(x?(maximum?v->maxX:v->minX):(maximum?v->maxZ:v->minZ)):NULL;
+    if(!method)return edge(border,out,x,maximum);
+    MCObjectRootScope scope={0};if(!begin(border,&scope))return false;
+    bool ok=out&&MCObjectRootScope_pin(&scope,border->dependencyContext)&&method(border,out);
+    return end(border,&scope,ok);
+}
+bool WorldBorder_minX(WorldBorder *border,double *out) {return edge_dispatch(border,out,true,false);}
+bool WorldBorder_minZ(WorldBorder *border,double *out) {return edge_dispatch(border,out,false,false);}
+bool WorldBorder_maxX(WorldBorder *border,double *out) {return edge_dispatch(border,out,true,true);}
+bool WorldBorder_maxZ(WorldBorder *border,double *out) {return edge_dispatch(border,out,false,true);}
+static bool position_coordinate(WorldBorder *border,MCObjectRootScope *scope,BlockPos *position,bool x,int32_t *out) {
+    if(!BlockPos_isInstance((MCObject *)position)||!MCObjectRootScope_pin(scope,(MCObject *)position))return false;
+    const WorldBorderPositionDependencies *d=border->positionDependencies;
+    if(!d){*out=x?position->x:position->z;return true;}
+    if(!MCObjectRootScope_pin(scope,border->positionContext))return false;
+    return (x?d->getX&&d->getX(border->positionContext,position,out):
+        d->getZ&&d->getZ(border->positionContext,position,out))&&!MCObjectHeap_failed(border->object.heap);
+}
+bool WorldBorder_containsBlockPosBase(WorldBorder *border,BlockPos *position,bool *out) {
+    MCObjectRootScope scope={0};if(!begin(border,&scope))return false;
+    bool ok=false,result=false;double edgeValue;int32_t coordinate;
+    if(!out||!position_coordinate(border,&scope,position,true,&coordinate))goto done;
+    uint32_t bits=(uint32_t)coordinate+UINT32_C(1);memcpy(&coordinate,&bits,sizeof coordinate);
+    if(!WorldBorder_minX(border,&edgeValue))goto done;
+    if(!((double)coordinate>edgeValue))goto answered;
+    if(!position_coordinate(border,&scope,position,true,&coordinate))goto done;
+    if(!WorldBorder_maxX(border,&edgeValue))goto done;
+    if(!((double)coordinate<edgeValue))goto answered;
+    if(!position_coordinate(border,&scope,position,false,&coordinate))goto done;
+    bits=(uint32_t)coordinate+UINT32_C(1);memcpy(&coordinate,&bits,sizeof coordinate);
+    if(!WorldBorder_minZ(border,&edgeValue))goto done;
+    if(!((double)coordinate>edgeValue))goto answered;
+    if(!position_coordinate(border,&scope,position,false,&coordinate))goto done;
+    if(!WorldBorder_maxZ(border,&edgeValue))goto done;
+    result=(double)coordinate<edgeValue;
+answered:
+    *out=result;ok=true;
+done:
+    return end(border,&scope,ok);
+}
+bool WorldBorder_containsBlockPos(WorldBorder *border,BlockPos *position,bool *out) {
+    if(!valid(border))return false;
+    const WorldBorderOverrides *v=border->overrides;
+    if(!v||!v->containsBlockPos)return WorldBorder_containsBlockPosBase(border,position,out);
+    MCObjectRootScope scope={0};if(!begin(border,&scope))return false;
+    /* A virtual override observes even a null position. Validation belongs
+       to the reached base/getter body, after the override call. */
+    bool ok=out&&MCObjectRootScope_pin(&scope,(MCObject *)position)&&
+        MCObjectRootScope_pin(&scope,border->dependencyContext)&&v->containsBlockPos(border,position,out);
+    return end(border,&scope,ok);
+}
 static double java_min(double a,double b) {
     if(isnan(a))return a;
     if(a==0.0&&b==0.0&&signbit(b))return b;

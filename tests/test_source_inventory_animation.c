@@ -313,8 +313,8 @@ static void actual_remote_map_does_not_create(void) {
     CHECK(MCObjectRootScope_begin(&scope, h));
     MCGameplayWorld *world = MCGameplayWorld_new(h, MCGameplay_get(&game), NULL, NULL);
     CHECK(world && MCGameplay_setWorld(&game, (MCObject *)world));
-    world->remote = true;
-    world->worldTime = 4321;
+    world->isRemote = true;
+    world->worldInfo->worldTime = 4321;
     CHECK(World_nativeImportMapNextProjection(world,42));
     Fixture *f = fixture(h);
     f->first->world = (MCObject *)world;
@@ -332,7 +332,7 @@ static void actual_remote_map_does_not_create(void) {
     CHECK(InventoryPlayer_decrementAnimations(f->inventory, &d, (MCObject *)f));
     CHECK(map->animationsToGo == 3 && map->stackSize == -1 && map->itemDamage == 999);
     CHECK(NBTTagCompound_getInteger_ascii(map->stackTagCompound, "foreign") == 17);
-    CHECK(map_next(world) == 42 && !world->maps.count && world->worldTime == 4321);
+    CHECK(map_next(world) == 42 && !world->maps.count && world->worldInfo->worldTime == 4321);
     CHECK(MCObjectHeap_liveObjects(h) == objects && MCObjectHeap_liveBytes(h) == bytes);
     CHECK(f->inventory->mainInventory->items[35]->animationsToGo == 1);
     CHECK(!MCObjectHeap_failed(h));
@@ -407,7 +407,7 @@ static void actual_server_binding_updates_shared_source_refs(void) {
     MCGameplayPlayer *first = mc_server_graph_player(game, 0);
     MCGameplayPlayer *second = mc_server_graph_player(game, 1);
     MCGameplayWorld *world = mc_server_graph_world(game);
-    CHECK(first && second && world && !world->remote);
+    CHECK(first && second && world && !world->isRemote);
     CHECK(((MCGameplayWorld *)(first->living.entity.worldObj)) == world && ((MCGameplayWorld *)(second->living.entity.worldObj)) == world);
     ItemStack *shared = make(game->heap, 1, 0, 5);
     ItemStack *armor = make(game->heap, 310, -1, 8);
@@ -422,14 +422,14 @@ static void actual_server_binding_updates_shared_source_refs(void) {
     size_t objects = MCObjectHeap_liveObjects(game->heap), bytes = MCObjectHeap_liveBytes(game->heap);
     int32_t packets = MCGameplayPackets_count(first) + MCGameplayPackets_count(second);
     int32_t mapId = map_next(world);
-    int64_t time = world->worldTime;
+    int64_t time = world->worldInfo->worldTime;
     CHECK(mc_server_graph_tick_inventory(first));
     CHECK(shared->animationsToGo == 3 && tool->animationsToGo == 1);
     CHECK(mc_server_graph_tick_inventory(second));
     CHECK(shared->animationsToGo == 2 && shared->stackSize == 0 && tool->stackSize == -1);
     CHECK(armor->animationsToGo == 8 && cursor->animationsToGo == 9);
     CHECK(first->inventory->mainInventory->items[0] == second->inventory->mainInventory->items[7]);
-    CHECK(map_next(world) == mapId && world->worldTime == time && !world->maps.count);
+    CHECK(map_next(world) == mapId && world->worldInfo->worldTime == time && !world->maps.count);
     CHECK(MCGameplayPackets_count(first) + MCGameplayPackets_count(second) == packets);
     CHECK(MCObjectHeap_liveObjects(game->heap) == objects && MCObjectHeap_liveBytes(game->heap) == bytes);
     CHECK(!MCObjectHeap_failed(game->heap));

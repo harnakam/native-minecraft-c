@@ -234,7 +234,16 @@ static bool source_decorate(mc_map_info *map,MCGameplayWorld *world,int type,NBT
     if (key&&(!NBTString_isInstance((MCObject *)key)||((MCObject *)key)->heap!=h)) return false;
     mc_MapData_tracking *t=map->tracking; size_t i=key_index(t,key); mc_map_icon icon;
     MCObjectHeap_touch(h);
-    if (!icon_value(map,&type,x,z,rot,world->worldTime,&icon)) { source_remove(map,key); return true; }
+    int64_t time=0;
+    if(map->dimension<0) {
+        float dx=(float)(x-map->center_x)/(float)(1u<<map->scale),dz=(float)(z-map->center_z)/(float)(1u<<map->scale);
+        if(dx>=-63&&dz>=-63&&dx<=63&&dz<=63) {
+            WorldInfo *info=World_getWorldInfo(world);
+            if(!info){MCObjectHeap_fail(h);return false;}
+            time=WorldInfo_getWorldTime(info);if(MCObjectHeap_failed(h))return false;
+        }
+    }
+    if (!icon_value(map,&type,x,z,rot,time,&icon)) { source_remove(map,key); return true; }
     if (i==t->source_decorations) {
         if (i==MC_MAX_MAP_ICONS) return false;
         t->source_markers[i].key=key; ++t->source_decorations;
