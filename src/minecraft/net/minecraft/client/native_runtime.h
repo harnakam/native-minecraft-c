@@ -5,6 +5,7 @@
 #include "client/entity/EntityPlayerSP.h"
 #include "inventory/ContainerWorkbench.h"
 #include "client/gui/GuiIngameHotbar.h"
+#include "util/Timer.h"
 
 /* Native Minecraft/screen bindings, not a second inventory. Every retained
    source dependency is traced and remapped with the complete remote graph.
@@ -18,6 +19,7 @@ typedef struct MCClientBindings {
     DataWatcherBlockPos *origin;
     GuiIngameHotbar *hotbar;
     MCObject *fontView;
+    Timer *timer;
     bool screenOpen, creativeScreen;
 } MCClientBindings;
 bool mc_client_graph_init(MCGameplay *, const mc_world *, const char *name);
@@ -36,6 +38,8 @@ bool mc_client_graph_place(MCGameplay *, int32_t x,int32_t y,int32_t z,int32_t f
 /* Native remote 20Hz adapter invokes source bodies directly, preserving their
    partial mutations on failure; it does not branch or roll back the graph. */
 bool mc_client_graph_tick_inventory(MCGameplay *);
+/* Once-per-frame source update; only scalar results cross later graph adopts. */
+bool mc_client_graph_timer_frame(MCGameplay *,int32_t *elapsedTicks,float *renderPartialTicks);
 bool mc_client_graph_bind_hotbar(MCGameplay *,const GuiIngameHotbarDependencies *);
 MCObject *mc_client_graph_font_view(MCObject *context,MCObject *minecraft);
 bool mc_client_graph_render_view(MCObject *context,MCObject *renderer);

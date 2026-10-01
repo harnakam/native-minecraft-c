@@ -893,7 +893,15 @@ static void edit_block(mc_client *c, bool place) {
     start_packet(&packet,0x0a); send_packet(c,&packet);
 }
 
-static void update_player(mc_client *c, const mc_input *input, double dt) {
+static bool update_frame_timer(mc_client *c,int32_t *ticks) {
+    if (c->failed) return false;
+    if (!mc_client_graph_timer_frame(&c->gameplay,ticks,&c->partial_ticks)) {
+        client_error(c,"Source client timer update failed"); return false;
+    }
+    return true;
+}
+
+static void update_player(mc_client *c, const mc_input *input, double dt,int32_t ticks) {
     c->paused = input->paused; c->chat_open = input->chat_open;
     if (!c->joined || !c->positioned || c->failed || c->disconnected) return;
     bool controls_active=!input->paused && !input->chat_open;
@@ -933,17 +941,12 @@ static void update_player(mc_client *c, const mc_input *input, double dt) {
         mc_buf packet; start_packet(&packet, 0x01); mc_put_string(&packet, input->chat); send_packet(c, &packet);
     }
     if (controls_active && input->select_slot >= 0 && input->select_slot < 9) send_slot(c, input->select_slot);
-    uint64_t now=mc_time_ms();
-    if (!c->last_item_tick_ms) c->last_item_tick_ms=now;
-    unsigned ticks=(unsigned)((now-c->last_item_tick_ms)/50); if (ticks>4) ticks=4;
-    c->last_item_tick_ms+=ticks*50u;
-    c->partial_ticks=(float)((now-c->last_item_tick_ms)%50u)/50.0f;
-    for (unsigned step=0;step<ticks;step++) if (!mc_client_graph_tick_inventory(&c->gameplay)) {
+    for (int32_t step=0;step<ticks;step++) if (!mc_client_graph_tick_inventory(&c->gameplay)) {
         client_error(c,"Source inventory animation update failed"); return;
     }
     MCObjectRootScope motion_scope={0};
     if (MCObjectRootScope_begin(&motion_scope,c->gameplay.heap)) {
-        for (unsigned step=0;step<ticks && !MCObjectHeap_failed(c->gameplay.heap);step++) for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) {
+        for (int32_t step=0;step<ticks && !MCObjectHeap_failed(c->gameplay.heap);step++) for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) {
             mc_client_item *item=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,item->eid);
             if (item->active && e && !NativeItemMotion_validate(e)) break;
             if (item->active && item->metadata_ready && e && body_loaded(c,e->posX,e->posZ))
@@ -1067,7 +1070,7 @@ static int self_test(void) {
     MCObjectRootScope_end(&scope); gui_view(c);
     mc_input inactive={0}; inactive.select_slot=-1; inactive.creative_pick=-1;
     inactive.paused=true; inactive.inventory_click=true; inactive.inventory_slot=36;
-    update_player(c,&inactive,0);
+    update_player(c,&inactive,0,0);
     CHECK(!mc_client_cursor(c) && mc_client_player_slot(c,36) && ItemStack_registryId(mc_client_player_slot(c,36)->item)==276,"paused input cannot move source carried item");
     for (unsigned gui=0;gui<3;gui++) for (unsigned window=0;window<3;window++) {
         CHECK(MCObjectRootScope_begin(&scope,c->gameplay.heap),"source close fixture scope");
@@ -1219,6 +1222,10 @@ int main(int argc, char **argv) {
         mc_input input; memset(&input, 0, sizeof(input)); input.select_slot = -1; input.creative_pick=-1;
         if (renderer) mc_renderer_poll(renderer, &input);
         if (input.quit) break;
+        int32_t ticks=0;
+        /* Original runGameLoop updates Timer before scheduled execution.
+           Release its scope before any network frame can adopt the graph. */
+        if (!c->failed) (void)update_frame_timer(c,&ticks);
         if (!c->failed && !c->disconnected) {
             poll_network(c);
             if (use_script && !use_sent && c->joined && c->positioned && mc_client_inventory_ready(c) &&
@@ -1238,7 +1245,9 @@ int main(int argc, char **argv) {
             } else if (drop_index<drop_count && c->inventory_ready && !c->inventory_open) {
                 input.drop_item=true; input.drop_all=drops[drop_index++];
             }
-            update_player(c, &input, dt);
+            /* One-shot GUI/Q/click/chat input is consumed once per frame;
+               only the explicit item phases use signed Source elapsedTicks. */
+            update_player(c, &input, dt,ticks);
         }
         if (renderer) mc_renderer_draw(renderer, c);
         if (!c->failed && MCObjectHeap_failed(c->gameplay.heap)) client_error(c,"Source hotbar rendering failed");

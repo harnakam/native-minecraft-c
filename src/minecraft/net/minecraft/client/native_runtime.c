@@ -1,4 +1,5 @@
 #include "client/native_runtime.h"
+#include "client/native_timer_clock.h"
 #include "util/MCGameplayCrafting.h"
 #include "item/ItemStackCrafting.h"
 #include "item/ItemMapCreated.h"
@@ -27,6 +28,7 @@ static void trace(MCObject *o, MCObjectVisitor v, void *c) {
     b->origin=(DataWatcherBlockPos *)v((MCObject *)b->origin,c);
     b->hotbar=(GuiIngameHotbar *)v((MCObject *)b->hotbar,c);
     b->fontView=v(b->fontView,c);
+    b->timer=(Timer *)v((MCObject *)b->timer,c);
 }
 static const MCObjectClass klass={"C919.native.ClientBindings",MCObjectHeap_plainClone,trace,NULL};
 static const MCObjectClass graphics_view={"C919.native.HotbarGraphicsIdentity",MCObjectHeap_plainClone,NULL,NULL};
@@ -67,6 +69,16 @@ bool mc_client_graph_tick_inventory(MCGameplay *g) {
     bool ok=b && b->player->worldObj->remote && InventoryPlayer_decrementAnimations(b->player->inventory,&inventory_animation,(MCObject *)b);
     if (!ok) MCObjectHeap_fail(g->heap);
     MCObjectRootScope_end(&scope); return ok && !MCObjectHeap_failed(g->heap);
+}
+bool mc_client_graph_timer_frame(MCGameplay *g,int32_t *elapsedTicks,float *renderPartialTicks) {
+    if (!g || !elapsedTicks || !renderPartialTicks) { if (g) MCObjectHeap_fail(g->heap); return false; }
+    MCObjectRootScope scope={0}; if (!MCObjectRootScope_begin(&scope,g->heap)) return false;
+    MCClientBindings *b=mc_client_graph_bindings(g);
+    bool ok=b && Timer_isInstance((MCObject *)b->timer) && b->timer->object.heap==g->heap && Timer_updateTimer(b->timer);
+    if (ok && !MCObjectHeap_failed(g->heap)) {
+        *elapsedTicks=b->timer->elapsedTicks; *renderPartialTicks=b->timer->renderPartialTicks;
+    } else { MCObjectHeap_fail(g->heap); ok=false; }
+    MCObjectRootScope_end(&scope); return ok;
 }
 bool mc_client_graph_bind_hotbar(MCGameplay *g,const GuiIngameHotbarDependencies *d) {
     MCClientBindings *b=mc_client_graph_bindings(g); if (!b) return false;
@@ -299,7 +311,9 @@ bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name
     MCGameplayWorld *w=ok ? MCGameplayWorld_new(g->heap,MCGameplay_get(g),terrain,NULL) : NULL;
     if (w) { w->remote=true; ok=MCGameplay_setWorld(g,(MCObject *)w); }
     MCClientBindings *b=ok ? (MCClientBindings *)MCObjectHeap_alloc(g->heap,sizeof(*b),&klass) : NULL;
-    if (b && w) ok=MCGameplayCrafting_configureWorld(w,display_name,(MCObject *)b);
+    if (b) b->timer=Timer_new(g->heap,20.0f,mc_client_timer_clocks(),NULL);
+    ok=ok && b && b->timer;
+    if (ok && w) ok=MCGameplayCrafting_configureWorld(w,display_name,(MCObject *)b);
     NBTString *n=ok ? NBTString_fromUTF8(g->heap,name) : NULL;
     StatFileWriter *stats=ok ? StatFileWriter_new(g->heap) : NULL;
     MCGameplayPlayer *p=n && stats ? MCGameplayPlayer_new(w,n,stats,mc_client_graph_crafting()) : NULL;

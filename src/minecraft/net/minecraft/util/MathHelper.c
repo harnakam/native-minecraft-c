@@ -32,3 +32,6 @@ float MathHelper_cos(float value) {
     scaled=scaled+16384.0f;
     return sin_table[(uint32_t)java_int(scaled)&65535];
 }
+double MathHelper_clamp_double(double value,double minimum,double maximum) {
+    return value<minimum ? minimum : (value>maximum ? maximum : value);
+}

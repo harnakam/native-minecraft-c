@@ -18,6 +18,7 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/client/entity/EntityPlayerSP.c
     ${MC_SOURCE}/client/gui/GuiIngameHotbar.c
     ${MC_SOURCE}/client/native_runtime.c
+    ${MC_SOURCE}/client/native_timer_clock.c
     ${MC_SOURCE}/network/transport.c
     ${MC_SOURCE}/network/play/client/C08PacketPlayerBlockPlacement.c
     ${MC_SOURCE}/network/play/client/C07PacketPlayerDigging.c
@@ -116,6 +117,7 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/util/MCGameplayCrafting.c
     ${MC_SOURCE}/util/MCGameplayStorage.c
     ${MC_SOURCE}/util/MathHelper.c
+    ${MC_SOURCE}/util/Timer.c
     ${MC_SOURCE}/world/world.c
     ${MC_SOURCE}/world/map.c
     ${MC_SOURCE}/world/storage/MapData.c
@@ -146,12 +148,21 @@ if(WIN32)
     target_link_libraries(c919-client PRIVATE opengl32 gdi32 user32)
 endif()
 if(BUILD_TESTING)
-    foreach(name protocol gameplay_client_frame source_packet_placement source_empty_map source_action_packets source_client_actions source_server_use source_map_refs source_inventory_animation source_hotbar native_item_motion native_packets packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
+    foreach(name protocol gameplay_client_frame source_packet_placement source_empty_map source_action_packets source_client_actions source_server_use source_map_refs source_inventory_animation source_hotbar source_timer native_item_motion native_packets packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
         add_executable(test-${name} tests/test_${name}.c)
         target_link_libraries(test-${name} PRIVATE c919-core)
         c919_warnings(test-${name})
         add_test(NAME ${name} COMMAND test-${name})
     endforeach()
+    # This fixture exercises the actual client's internal frame/input seams.
+    # Its source includes client.c once and links the real renderer separately.
+    add_executable(test-client-timer tests/test_client_timer.c ${MC_SOURCE}/client/renderer.c)
+    target_link_libraries(test-client-timer PRIVATE c919-core)
+    if(WIN32)
+        target_link_libraries(test-client-timer PRIVATE opengl32 gdi32 user32)
+    endif()
+    c919_warnings(test-client-timer)
+    add_test(NAME client-timer COMMAND test-client-timer)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME multiplayer COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_multiplayer.py)
     set_tests_properties(multiplayer PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>" TIMEOUT 90)
