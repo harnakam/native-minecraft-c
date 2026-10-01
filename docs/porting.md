@@ -1,23 +1,43 @@
 # Java原本からの移植記録
 
-目標は、提供されたJava原本をC/C++へ移植することです。元のパッケージとクラス配置を`src/minecraft/net/minecraft`に保ち、各メソッドの状態・分岐・通知・呼び出し順を追える形にします。フォルダーだけ一致する独自実装を、移植済みとは数えません。
+目標は提供されたJava原本の翻訳です。元のパッケージ・クラス・メソッドに対応するC/C++コードをsrc/minecraft/net/minecraftに置き、状態、参照共有、分岐、通知、呼び出し順を照合します。配置や見た目だけが似ている独自実装を翻訳済みとは数えません。
 
-既存のクライアントと専用サーバーは、限定したCreative操作を実行する独自実装です。これを動作確認の接続先として使いながら、原本クラスを順に移植しています。以下のクラスにも未移植の依存関係があります。プロジェクト全体の翻訳は未完了です。
+以下は現在の作業ツリーです。新クラス本体には実物1.8.9との比較とクラス同士の試験がありますが、実server/clientには値型mc_slotを所有する旧経路が残っています。参照型を通信・描画・保存までつなぐ作業は未完了です。作業ツリーの結果は、公開コミットやそのCIの結果とは分けて記録します。
 
-| 原本クラス | C側 | 移植・接続した処理 | 残る境界 |
+| 原本クラス | C側 | 翻訳した本体・状態 | 残る依存先 |
 |---|---|---|---|
-| `InventoryCrafting` | `inventory/InventoryCrafting.{c,h}` | 幅・高さ・stackList・eventHandler、取得・減算・設定・除去・clear、名前・field・開閉等の原本メソッド。減算／設定直後のonCraftMatrixChangedをクラフト消費と残材配置から呼ぶ | `ItemStack`は既存の値型`mc_slot`。Javaのnull・参照共有・符号付きstackSize・例外の完全再現は未移植。Container/Slot全体とIChatComponentは未移植。表示名は翻訳キーのアダプター |
-| `InventoryCraftResult` | `inventory/InventoryCraftResult.{c,h}` | 一枠の結果、要求個数にかかわらず全体を返すdecrStackSize、設定・除去・clear等。結果生成・取得・閉鎖へ接続 | 同じItemStack依存。既存クラフト管理はまだ原本のクラス階層ではない |
-| `C08PacketPlayerBlockPlacement` | `network/play/client/C08PacketPlayerBlockPlacement.{c,h}` | 空・使用・配置のコンストラクタ、stackコピー、read/write/getters、processPacket。クライアント送信とサーバー受信へ接続 | BlockPosとPacketBufferは既存コーデックのアダプター。NBT付きstackは所有コピー。Cではメモリ／入力失敗をboolで返し、出力を保持する |
-| `MapData`と`MapInfo` | `world/storage/MapData.{c,h}` | getMapInfo、updateVisiblePlayers、updateDecorations、updateMapData、getMapPacket。初回全体・変更矩形・5回ごとのアイコン通知、更新カウンタとdirty範囲 | ItemFrame依存未移植。中心計算とNBT読書きは既存`world/map.c`のアダプター。基底WorldSavedDataや一般的なJava collection APIは未移植 |
-| `ItemMap` | `item/ItemMap.{c,h}` | getMapData、updateMapData、onUpdate、createMapDataPacket。主所持品36枠を原本順で更新し、選択中だけ測量。装備も含む40枠へMapInfoのパケットを要求 | World/Chunk/Block/MapColor/EntityPlayerは既存の依存アダプター。onCreated、tooltip、クラス継承全体は未移植 |
+| NBTBase/Primitive/SizeTracker、各NBTTag | nbt/NBT*.{c,h} | 数値変換、read/write、equals/hash、copy、Compound/List/arrayの直接参照、live keySet、UTF-16 String | Java文字列表現・浮動小数の文字変換、HashMap tree-bin列挙順、一般的JDK collection |
+| ItemStack | item/ItemStack.{c,h} | signed int32 count/damage、nullable Item/tag、constructor/copy/split/equality、直接tag、所持品NBT、表示名・repair cost等 | Itemは337登録identityのnative adapter。SkullOwner文字列のGameProfile解決は明示unsupported。戦闘・使用・属性・tooltip・frame/cache等 |
+| InventoryPlayer | entity/player/InventoryPlayer.{c,h} | main36/armor4/cursor参照、元順の挿入・減算・設定・取得・clear、NBT、copyInventory等 | EntityPlayer/capabilities、戦闘/drop/stats/NBTUtil matching等 |
+| InventoryCrafting/Result | inventory/InventoryCraft*.{c,h} | ItemStack直接参照、signed減算、set/decr直後のmatrix通知、remove/clear通知なし、結果全体のdecr、name/field等 | IChatComponentは翻訳キーadapter。旧ゲーム経路は別名crafting/value_inventoryを使う |
+| Slot/SlotCrafting | inventory/Slot*.{c,h} | 元field/virtual dispatch/decr/dirty、craft amount、stats→achievement→remaining→decr→set/insert/dropの順 | World/EntityPlayer/Item/achievement/dropの必須dispatch |
+| Container/Player/Workbench | inventory/Container*.{c,h} | 元45/46枠配置・armor、mode0–6/drag/merge/transfer、listener差分copy、close/canInteract | Containerはabstract。collection/identity hashはnative管理。GUI/controller/handler、他container |
+| RecipeBookCloning | item/crafting/RecipeBookCloning.{c,h} | matches/result/size/output/remaining、tag copy/generation、元入力そのものの残材参照 | Item表示名/localization |
+| CraftingManager/ShapedRecipes/ShapelessRecipes | item/craftingの同名C/H | 直接mutable recipe list、元matching/result/remainder、365登録factで元classを構築、実物1830static vectors一致 | Java varargs/helper登録・singletonはnative依存。実runtimeへのmanager接続は未完了 |
+| MapCloning/MapExtending/Repair、ArmorDyes/Fireworks、Banners Add/Duplicate | item/craftingの元名C/H | 元5method、ShapedRecipes継承、花火cache/Explosion共有、色混合、修理signed32式、バナー39enumのmutable getter/static root | ItemArmor材質/色、染料の数値fact、TileEntityBanner static methodは移植。完全なItem/TileEntity/Worldは未移植 |
+| PacketBuffer | network/PacketBuffer.{c,h} | ItemStack/NBTの4method、signed byte/short、負ID/null、unknown非負ID/null Item object、count0/NBT、直接tag、UTF-16↔Java UTF-8 replacement、原版VarIntの5byte overflow/6byte例外 | 一時ByteBuf/IO adapter。旧packet経路には旧VarInt codecが残る。Netty全体とJava例外の完全一致 |
+| C0D/C0E/C0F/C10 | network/play/clientの同名C/H | 全field/constructor/copy/read/write/getter/processPacket | INetHandlerPlayServerの4dispatch。実handlerへの接続は未完了 |
+| S2E/S2F/S30/S32 | network/play/serverの同名C/H | 全field/constructor/read/write/getter/process、slotごとの独立copy、unsigned/signed window差 | INetHandlerPlayClientの4dispatch。実clientへの接続は未完了 |
+| DataWatcher/WatchableObject、S1CPacketEntityMetadata | entity/DataWatcher、network/play/server/S1C | 同じWatchableObject/ItemStack参照、dirty flag、通知とreset順、型0–7のIO、元Integer-key HashMap bucket/tree列挙、S1Cのlist直接保持 | boxed cache、BlockPos/Rotations、Entity・crash text・JDK locksはnative依存。EntityItemのwatchedItem所有をこのクラスへ置換する作業は未完了 |
+| NetHandlerPlayServerのinventory4method | network/NetHandlerPlayServer | 元処理順、mismatch後のlock、accepted値を使わないACK、creative検証前TileNBT、drop throttle | thread/EntityPlayerMP/TileEntity/packet effectの必須dispatch。全server階層と旧live経路は未置換 |
+| NetHandlerPlayClientのinventory4method、handleEntityMetadata | client/network/NetHandlerPlayClient | 元window/creative判定、hotbar animation、SP close、負confirmのC0F、thread→clientWorldController→entity→DataWatcherの通知、world直接参照 | Minecraft/GUI/SP/WorldClient/Entityの必須dispatch。GameplayPacketRouterは作業graph内で完全payload確認後に元packet.processPacketを呼ぶnative登録処理。旧live client未置換 |
+| EntityPlayerMPのwindow method | entity/player/EntityPlayerMPWindows | S30→cursor S2F、SlotCrafting/quantity suppression、close通知→元container.close、listener player参照 | 元S packet constructorとnative deferred queueへ接続。SP画面/controller、その他MP/実socketは未接続 |
+| StatBase/Achievement/StatFileWriter、StatCrafting/StatList、FurnaceRecipes | stats・item/craftingの同名C/H | subclass+UTF16 ID等価、signed counter、直接progress参照、親条件・祖先距離、registerStat順、26精錬登録・live identity map、レシピ/精錬からcraft統計の初期化・dual-block統合 | chat/criteria・完全なstatic init・JDK列挙はnative依存。native factoryは全373レシピ、232非NULL craft統計、34achievement identityをWorldへ接続 |
+| StatisticsFileのdirty/同期method、EntityPlayerMP.addStat/reset | stats/StatisticsFile、entity/player/EntityPlayerMPStats | 共通StatFileWriter counter、dirty set、achievement flag/chat順、300tickのsync、Scoreboard→criteria→objective→Score順、NULL statの元no-op | FileUtils/Gson/JSON/IJsonSerializable、S37本体、Scoreboard全クラス、sendAchievementsと実server接続は未完了。必須依存は空成功にしない |
+| EntityItem | entity/item/EntityItem.{c,h} | native watcher slot10の直接ref、元constructor本体・get/set/combine/onCollideWithPlayer、owner/thrower/age/pickup delay、write/readEntityFromNBT | nativeNewは確保のみ。Entity/DataWatcher/World/base constructor/physics/random/stats/sound/tracker |
+| EntityPlayerのdrop2method、MathHelper.sin/cos | entity/player/EntityPlayerDrops、util/MathHelper | 元乱数呼び出し順・float式、65536 sine table、40tick delay、同じstackでEntityItem生成・spawn・stat順 | inherited Entity ctor、Random、World spawn、JDK double sin/cos、statsは必須dispatch。完全なEntityPlayer/MathHelper未移植 |
+| ItemStack.onCrafting/ItemMap.onCreated/getMapData | item/ItemStackCrafting、ItemMapCreated、ItemMapData | addStat→Item.onCreated、共有tag scaling、同じstackのdamage、元short ID wrap・center int overflow・MapData作成/差し替え順 | MapDataは既存native store viewで完全なmanaged MapDataではない。全StatList/EntityPlayerMP/scoreboard同期と実socket接続は未完了 |
+| C08PacketPlayerBlockPlacement | network/play/client/C08*.{c,h} | constructor/read/write/getter/process。旧client/serverへ接続 | BlockPos・stack・PacketBufferは旧codec adapter。参照型への置換は未完了 |
+| MapData/MapInfo、ItemMapの追跡・測量 | world/storage/MapData、item/ItemMap | viewer/counter/visiblePlayers/decorations/dirty、初回全体・矩形・5回ごとのicons、held-map更新。native runtimeへ接続 | WorldSavedData/World/Chunk/Block/MapColor/EntityPlayer/ItemFrame・完全な継承 |
 
-Cの所有管理、既存の所持品へのattach、原子的な出力、ソケット、Win32/OpenGL、保存ジャーナルは環境接続処理です。原本にある空メソッドは、その意味を保持します。必要な処理が未実装の場合は、空メソッドを追加して完成扱いにしません。
+native actor/world ownerは元InventoryPlayer/ContainerPlayer、stats、shared stack、owned map snapshotを保持し、クラス試験で接続済みです。必須処理に原本にない空の成功callbackを置きません。原本にある空メソッドはその意味を保ちます。
 
-原本の処理順による差も維持します。InventoryCraftingのremove/clearは通知せず、decr/setは直後に通知します。MapInfoの更新カウンタとパケットカウンタはプレイヤーごとの状態で、NBTには保存しません。保存不要のtickでも、この状態を破棄しません。C08の空コンストラクタは位置を未設定のままにし、読み込みまたは明示的な構築前には送信できません。位置のYは符号付き12bit、向きと接触点はunsigned byteとして読み、浮動小数からbyteへの変換はJavaのint飽和・下位8bit化に合わせます。
+MCGameplayStorageは正規graphの参照から原版InventoryPlayer/ItemStack/EntityItem NBTメソッドを呼ぶnative保存境界です。未知タグ・UTF-16ルート名、旧保存の作業台入力復旧を保持し、V3 journalの全player/item/mapと送信packet検証へ接続します。失敗したloadは元順の部分変更を含むため、作業graph全体を破棄します。Entityの位置・Motion envelopeはnative依存であり、全Entity.readFromNBT/physicsではありません。統計JSONはStatisticsFile側の未移植依存として残し、player NBTへ独自形式を追加しません。旧serverの保存経路はまだこのencoderへ置換されていません。
 
-差分が残る依存先も記録します。値型ItemStackでは、原本の書籍複製レシピが返す入力参照とcount=0の残材共有を表現できません。地図色の同率投票は既存アダプターが最初の出現色を選び、原本Guavaのidentity-hash由来の順序をまだ移植していません。未読み込みチャンクの生成、完全な各次元、ItemFrameは未対応です。地図96件、viewer64件、装飾256件・キー128byte、非負のSlot地図ID32767という現在の上限も原本と異なります。
+util/MCObjectHeapはJavaの参照寿命を接続するC側の環境処理です。同一性・循環・借用中のGC/adopt禁止・全rootを同じmemoで複製するsnapshotを提供します。元copy()は辺ごとの複製、transaction cloneは共有関係の保存です。util/MCGameplayはworld/player/entityの直接参照を保持し、全登録player/items/任意mapsをversion3の単一manifestで保存してから全graphをadoptします。借用中の処理・nested durable transactionを拒否し、確定後のcheckpoint失敗ではadoptした状態で停止・復旧します。MCGameplayPacketsは実S packetを参照のまま保持し、native commit fenceで未確定graphからの送信を止めます。encoder内のpacket preflightを必要とし、成功送信のprefixのみ除去します。再入・送信中のqueue変更も拒否します。これらの試験成功だけで実ゲームへの接続済みとは扱いません。
 
-次の移植対象はItemStack、Slot、Containerとcraftingの原本クラスです。その後もGUI・コントローラー・クライアント／サーバーハンドラー、ワールド、各ブロック・エンティティなどの原本クラスを順に置換します。クラス名とメソッド名の対応、呼び出し接続、原本で実行した差分検証、依存先の差を確認してから移植範囲を広げます。
+実ゲームで残るのは全player inventory/container/cursor/entity/effects、client authoritative/predicted/pendingの参照所有への置換です。wireと保存は意図的に独立した参照を復元し、alias IDは保存しません。描画は本体の参照から読みます。毎操作で値型へ戻して本体を再構築し、共有関係を失わせる実装にはしません。
 
-公開対象はC/C++側とテスト・文書です。Java原本、MCP本体・マッピング、ゲームJAR、画像・音声・モデル、非公開の差分検証ハーネスと出力はGitに含めません。公開前にはGit indexの実際のblobを監査します。検証結果は[検証記録](verification.md)に記載します。
+原本との差も残ります。地図同率投票はnative adapterが最初の出現色を選び、元Guava identity-hash列挙順は未移植です。地図96件/viewer64件/装飾256件/entities1024件、旧live Slotの地図ID上限等も元と異なります。新ItemMapData/onCreatedは元short counterのwrapと負damageのconstructor/setter clampを保ち、旧live allocatorとは別の経路です。未読chunk生成、全次元・World/Entity/GUI、online認証等は未完了です。
+
+公開対象は翻訳したC/C++・native接続・テスト・文書です。Java原本、MCP本体/mapping、JAR、画像/音声/model、private差分harnessと出力はGitへ含めません。公開前はindexの実blobを監査します。[検証記録](verification.md)に実行済みの範囲を記録します。

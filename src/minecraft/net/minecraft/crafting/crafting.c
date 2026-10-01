@@ -1,14 +1,14 @@
 #include "crafting.h"
-#include "inventory/InventoryCrafting.h"
-#include "inventory/InventoryCraftResult.h"
+#include "crafting/value_inventory.h"
+
 #include "item/item.h"
 #include "world/map.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-typedef struct { int16_t id,damage; } ingredient;
-typedef struct { uint8_t width,height,count; ingredient input[9]; int16_t output; uint8_t amount; int16_t damage; } recipe;
+typedef mc_crafting_ingredient_fact ingredient;
+typedef mc_crafting_recipe_fact recipe;
 /* Numeric behavioral facts for player and workbench recipes in Java 1.8.9.
    Matching and transaction code below are original implementations. */
 static const recipe recipes[] = {
@@ -479,6 +479,11 @@ static unsigned durability(int id) {
 static bool ingredient_matches(const ingredient *expected,const mc_slot *actual) {
     return expected->id==actual->item_id && (expected->id==-1 || expected->damage==32767 || expected->damage==actual->damage);
 }
+size_t mc_crafting_static_recipe_count(void) { return sizeof(recipes)/sizeof(recipes[0]); }
+bool mc_crafting_static_recipe(size_t index,mc_crafting_recipe_fact *output) {
+    if (!output || index>=mc_crafting_static_recipe_count()) return false;
+    *output=recipes[index]; return true;
+}
 static bool recipe_matches(const recipe *rule,const mc_slot *grid,unsigned width,unsigned height) {
     if (rule->width) {
         if (rule->width>width || rule->height>height) return false;
@@ -744,14 +749,14 @@ bool mc_crafting_match(const mc_slot *grid,unsigned width,unsigned height,mc_slo
 }
 bool mc_crafting_update(mc_inventory *inventory) {
     if (!inventory) return false;
-    InventoryCrafting matrix; InventoryCraftResult result;
-    if (!InventoryCrafting_attach(&matrix,&inventory->slots[1],NULL,NULL,2,2)) return false;
-    InventoryCraftResult_attach(&result,&inventory->slots[0]);
+    mc_value_crafting matrix; mc_value_result result;
+    if (!mc_value_crafting_attach(&matrix,&inventory->slots[1],NULL,NULL,2,2)) return false;
+    mc_value_result_attach(&result,&inventory->slots[0]);
     mc_slot output,left[4]; mc_slot_init(&output); for (unsigned i=0;i<4;i++) mc_slot_init(&left[i]);
-    bool ok=mc_crafting_match(matrix.stackList,(unsigned)InventoryCrafting_getWidth(&matrix),
-        (unsigned)InventoryCrafting_getHeight(&matrix),&output,left);
-    if (ok) ok=InventoryCraftResult_setInventorySlotContents(&result,0,&output);
-    InventoryCrafting_free(&matrix); InventoryCraftResult_free(&result);
+    bool ok=mc_crafting_match(matrix.stackList,(unsigned)mc_value_crafting_getWidth(&matrix),
+        (unsigned)mc_value_crafting_getHeight(&matrix),&output,left);
+    if (ok) ok=mc_value_result_setInventorySlotContents(&result,0,&output);
+    mc_value_crafting_free(&matrix); mc_value_result_free(&result);
     mc_slot_free(&output); for (unsigned i=0;i<4;i++) mc_slot_free(&left[i]); return ok;
 }
 
@@ -807,26 +812,26 @@ static bool unknown_map(const mc_slot *grid,unsigned width,const mc_crafting_con
     return !info || !info->metadata_known;
 }
 static bool derive_output(mc_inventory *player,mc_container *container,mc_crafting_context *context) {
-    InventoryCrafting matrix; InventoryCraftResult result;
+    mc_value_crafting matrix; mc_value_result result;
     int dimension=container->kind==MC_CONTAINER_PLAYER ? 2 : 3;
-    if (!InventoryCrafting_attach(&matrix,grid_slots(player,container),NULL,NULL,dimension,dimension)) return false;
-    InventoryCraftResult_attach(&result,result_slot(player,container));
+    if (!mc_value_crafting_attach(&matrix,grid_slots(player,container),NULL,NULL,dimension,dimension)) return false;
+    mc_value_result_attach(&result,result_slot(player,container));
     mc_slot *grid=matrix.stackList,*output=result.stackResult;
-    unsigned width=(unsigned)InventoryCrafting_getWidth(&matrix),count=(unsigned)InventoryCrafting_getSizeInventory(&matrix);
+    unsigned width=(unsigned)mc_value_crafting_getWidth(&matrix),count=(unsigned)mc_value_crafting_getSizeInventory(&matrix);
     if (context && context->authoritative && map_extension_grid(grid,width,width)) {
         if (!context->maps || !mc_maps_resolve(context->maps,&grid[4],context->spawn_x,context->spawn_z,context->dimension)) return false;
     }
     /* S34 lacks authoritative center/dimension data. A remote server's
        supplied map result is retained, never manufactured from missing data. */
     if (unknown_map(grid,width,context)) {
-        if (output->item_id>=0 && (output->item_id!=358 || output->damage!=grid[4].damage)) InventoryCraftResult_clear(&result);
-        InventoryCrafting_free(&matrix); InventoryCraftResult_free(&result);
+        if (output->item_id>=0 && (output->item_id!=358 || output->damage!=grid[4].damage)) mc_value_result_clear(&result);
+        mc_value_crafting_free(&matrix); mc_value_result_free(&result);
         return true;
     }
     mc_slot next,left[9]; mc_slot_init(&next); for (unsigned i=0;i<count;i++) mc_slot_init(&left[i]);
     bool ok=mc_crafting_match_context(grid,width,width,context,&next,left);
-    if (ok) ok=InventoryCraftResult_setInventorySlotContents(&result,0,&next);
-    InventoryCrafting_free(&matrix); InventoryCraftResult_free(&result);
+    if (ok) ok=mc_value_result_setInventorySlotContents(&result,0,&next);
+    mc_value_crafting_free(&matrix); mc_value_result_free(&result);
     mc_slot_free(&next); for (unsigned i=0;i<count;i++) mc_slot_free(&left[i]); return ok;
 }
 static bool state_fits(const mc_inventory *player,const mc_container *container) {
@@ -890,30 +895,30 @@ typedef struct {
     mc_container *container;
     mc_crafting_context *context;
 } crafting_event_handler;
-static bool on_matrix_changed(void *event_handler,InventoryCrafting *matrix) {
+static bool on_matrix_changed(void *event_handler,mc_value_crafting *matrix) {
     crafting_event_handler *handler=event_handler;
     (void)matrix;
     return derive_output(handler->player,handler->container,handler->context);
 }
 static bool take_output(mc_inventory *player,mc_container *container,int count,mc_slot *taken) {
-    InventoryCraftResult result; InventoryCraftResult_attach(&result,result_slot(player,container));
-    bool ok=InventoryCraftResult_decrStackSize(&result,0,count,taken);
-    InventoryCraftResult_free(&result); return ok;
+    mc_value_result result; mc_value_result_attach(&result,result_slot(player,container));
+    bool ok=mc_value_result_decrStackSize(&result,0,count,taken);
+    mc_value_result_free(&result); return ok;
 }
 static bool consume_recipe(mc_inventory *player,mc_container *container,mc_crafting_context *context,bool remote_map,mc_crafting_effects *effects) {
     unsigned count=grid_size(container),width=count==4 ? 2u : 3u;
-    crafting_event_handler handler={player,container,context}; InventoryCrafting matrix;
-    if (!InventoryCrafting_attach(&matrix,grid_slots(player,container),&handler,on_matrix_changed,(int)width,(int)width)) return false;
+    crafting_event_handler handler={player,container,context}; mc_value_crafting matrix;
+    if (!mc_value_crafting_attach(&matrix,grid_slots(player,container),&handler,on_matrix_changed,(int)width,(int)width)) return false;
     mc_slot *grid=matrix.stackList;
     mc_slot result,left[9]; mc_slot_init(&result); for (unsigned i=0;i<count;i++) mc_slot_init(&left[i]);
     bool ok=mc_crafting_match_context(grid,width,width,context,&result,left) && (result.item_id!=-1 || remote_map);
     if (ok) for (unsigned i=0;i<count && ok;i++) {
         mc_slot removed; mc_slot_init(&removed);
-        if (InventoryCrafting_getStackInSlot(&matrix,(int)i)) ok=InventoryCrafting_decrStackSize(&matrix,(int)i,1,&removed);
+        if (mc_value_crafting_getStackInSlot(&matrix,(int)i)) ok=mc_value_crafting_decrStackSize(&matrix,(int)i,1,&removed);
         mc_slot_free(&removed); if (!ok) break;
-        mc_slot *input=InventoryCrafting_getStackInSlot(&matrix,(int)i);
+        mc_slot *input=mc_value_crafting_getStackInSlot(&matrix,(int)i);
         if (left[i].item_id==-1) continue;
-        if (!input) ok=InventoryCrafting_setInventorySlotContents(&matrix,(int)i,&left[i]);
+        if (!input) ok=mc_value_crafting_setInventorySlotContents(&matrix,(int)i,&left[i]);
         else if (mc_slot_can_stack(input,&left[i]) && (unsigned)input->count+left[i].count<=127) {
             /* Legacy ItemStack value adapter. SlotCrafting's aliased book
                remainder and non-null zero-count stack await its source port. */
@@ -925,7 +930,7 @@ static bool consume_recipe(mc_inventory *player,mc_container *container,mc_craft
         }
     }
     if (ok) ok=derive_output(player,container,context);
-    InventoryCrafting_free(&matrix);
+    mc_value_crafting_free(&matrix);
     mc_slot_free(&result); for (unsigned i=0;i<count;i++) mc_slot_free(&left[i]); return ok;
 }
 static bool output_action(mc_inventory *player,mc_container *container,mc_crafting_context *context,int button,int mode,mc_slot *returned,mc_crafting_effects *effects) {
@@ -962,7 +967,7 @@ static bool output_action(mc_inventory *player,mc_container *container,mc_crafti
             if (!ok) { mc_slot_free(&crafted); mc_slot_free(&hook); return false; }
             if (crafted.count==before) { mc_slot_free(&crafted); mc_slot_free(&hook); return true; }
             if (first) { if (!mc_slot_copy(returned,output)) { mc_slot_free(&crafted); mc_slot_free(&hook); return false; } first=false; }
-            InventoryCraftResult result; InventoryCraftResult_attach(&result,output); InventoryCraftResult_clear(&result); InventoryCraftResult_free(&result);
+            mc_value_result result; mc_value_result_attach(&result,output); mc_value_result_clear(&result); mc_value_result_free(&result);
             /* Legacy placement precedes map onCreated: Shift targets keep the
                old map ID, while the newly allocated MapData still persists. */
             ok=on_crafted(&hook,context); mc_slot_free(&crafted); mc_slot_free(&hook);
@@ -1035,24 +1040,24 @@ bool mc_container_close(mc_inventory *player,mc_container *container,mc_crafting
     mc_inventory next; mc_inventory_init(&next); mc_container window; mc_container_init(&window,container->kind);
     mc_crafting_effects pending; mc_crafting_effects_init(&pending);
     bool ok=mc_inventory_copy(&next,player) && mc_container_copy(&window,container) && append_drop(&pending,&next.cursor);
-    int width=window.kind==MC_CONTAINER_PLAYER ? 2 : 3; InventoryCrafting matrix={0}; InventoryCraftResult result;
-    if (ok) ok=InventoryCrafting_attach(&matrix,grid_slots(&next,&window),NULL,NULL,width,width);
-    InventoryCraftResult_attach(&result,result_slot(&next,&window));
+    int width=window.kind==MC_CONTAINER_PLAYER ? 2 : 3; mc_value_crafting matrix={0}; mc_value_result result;
+    if (ok) ok=mc_value_crafting_attach(&matrix,grid_slots(&next,&window),NULL,NULL,width,width);
+    mc_value_result_attach(&result,result_slot(&next,&window));
     unsigned inputs=grid_size(&window);
     for (unsigned i=0;i<inputs && ok;i++) {
         mc_slot removed; mc_slot_init(&removed);
-        ok=InventoryCrafting_removeStackFromSlot(&matrix,(int)i,&removed) && append_drop(&pending,&removed);
+        ok=mc_value_crafting_removeStackFromSlot(&matrix,(int)i,&removed) && append_drop(&pending,&removed);
         mc_slot_free(&removed);
     }
     if (ok) {
-        InventoryCraftResult_clear(&result);
+        mc_value_result_clear(&result);
         mc_slot_free(&next.cursor); mc_container_reset_drag(&window);
         next.drag_active=false; next.drag_mode=0; next.drag_slots=0;
         mc_inventory_free(player); *player=next; mc_inventory_init(&next);
         mc_container_free(container); *container=window; mc_container_init(&window,window.kind);
         mc_crafting_effects_free(effects); *effects=pending; mc_crafting_effects_init(&pending);
     }
-    InventoryCrafting_free(&matrix); InventoryCraftResult_free(&result);
+    mc_value_crafting_free(&matrix); mc_value_result_free(&result);
     mc_inventory_free(&next); mc_container_free(&window); mc_crafting_effects_free(&pending); return ok;
 }
 static void legacy_container(mc_container *container,const mc_inventory *player) {

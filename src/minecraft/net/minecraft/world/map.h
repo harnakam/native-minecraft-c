@@ -15,6 +15,7 @@ struct mc_map_info {
     uint8_t scale;
     /* S34 supplies colors, scale and icons, but no center or dimension. */
     bool metadata_known;
+    bool dirty; /* Native storage for WorldSavedData's transient dirty state. */
     uint8_t colors[MC_MAP_PIXELS];
     mc_map_icon icons[MC_MAX_MAP_ICONS];
     size_t icon_count;
@@ -26,6 +27,8 @@ typedef struct mc_maps {
     mc_map_info *entries;
     size_t count, capacity;
     int32_t next_id;
+    /* Unsigned 16-bit next-counter bits for source MapStorage allocation.
+       Legacy mc_slot allocation still enforces its own nonnegative short cap. */
     mc_nbt original_nbt;
 } mc_maps;
 

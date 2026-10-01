@@ -1,45 +1,23 @@
-#include "InventoryCraftResult.h"
-#include <string.h>
-void InventoryCraftResult_init(InventoryCraftResult *inventory) {
-    memset(inventory,0,sizeof(*inventory)); mc_slot_init(&inventory->ownedResult);
-    inventory->stackResult=&inventory->ownedResult; inventory->ownsStackResult=true;
-}
-void InventoryCraftResult_attach(InventoryCraftResult *inventory,mc_slot *storage) {
-    InventoryCraftResult_init(inventory); inventory->stackResult=storage; inventory->ownsStackResult=false;
-}
-void InventoryCraftResult_free(InventoryCraftResult *inventory) {
-    if (inventory->ownsStackResult) mc_slot_free(&inventory->ownedResult);
-    memset(inventory,0,sizeof(*inventory));
-}
-int InventoryCraftResult_getSizeInventory(const InventoryCraftResult *inventory) { (void)inventory; return 1; }
-mc_slot *InventoryCraftResult_getStackInSlot(InventoryCraftResult *inventory,int index) {
-    (void)index; return inventory->stackResult->item_id>=0 ? inventory->stackResult : NULL;
-}
-const char *InventoryCraftResult_getName(const InventoryCraftResult *inventory) { (void)inventory; return "Result"; }
-bool InventoryCraftResult_hasCustomName(const InventoryCraftResult *inventory) { (void)inventory; return false; }
-InventoryDisplayName InventoryCraftResult_getDisplayName(const InventoryCraftResult *inventory) {
-    return (InventoryDisplayName){InventoryCraftResult_getName(inventory),!InventoryCraftResult_hasCustomName(inventory)};
-}
-bool InventoryCraftResult_removeStackFromSlot(InventoryCraftResult *inventory,int index,mc_slot *removed) {
-    (void)index; if (!removed || removed==inventory->stackResult) return false;
-    mc_slot_free(removed); *removed=*inventory->stackResult; mc_slot_init(inventory->stackResult); return true;
-}
-bool InventoryCraftResult_decrStackSize(InventoryCraftResult *inventory,int index,int count,mc_slot *removed) {
-    (void)count; return InventoryCraftResult_removeStackFromSlot(inventory,index,removed);
-}
-bool InventoryCraftResult_setInventorySlotContents(InventoryCraftResult *inventory,int index,const mc_slot *stack) {
-    (void)index;
-    if (stack) return mc_slot_copy(inventory->stackResult,stack);
-    mc_slot_free(inventory->stackResult); return true;
-}
-int InventoryCraftResult_getInventoryStackLimit(const InventoryCraftResult *inventory) { (void)inventory; return 64; }
-/* The source intentionally has no dirty/viewer/field behavior for this slot. */
-void InventoryCraftResult_markDirty(InventoryCraftResult *inventory) { (void)inventory; }
-bool InventoryCraftResult_isUseableByPlayer(const InventoryCraftResult *inventory,const void *player) { (void)inventory; (void)player; return true; }
-void InventoryCraftResult_openInventory(InventoryCraftResult *inventory,const void *player) { (void)inventory; (void)player; }
-void InventoryCraftResult_closeInventory(InventoryCraftResult *inventory,const void *player) { (void)inventory; (void)player; }
-bool InventoryCraftResult_isItemValidForSlot(const InventoryCraftResult *inventory,int index,const mc_slot *stack) { (void)inventory; (void)index; (void)stack; return true; }
-int InventoryCraftResult_getField(const InventoryCraftResult *inventory,int id) { (void)inventory; (void)id; return 0; }
-void InventoryCraftResult_setField(InventoryCraftResult *inventory,int id,int value) { (void)inventory; (void)id; (void)value; }
-int InventoryCraftResult_getFieldCount(const InventoryCraftResult *inventory) { (void)inventory; return 0; }
-void InventoryCraftResult_clear(InventoryCraftResult *inventory) { mc_slot_free(inventory->stackResult); }
+#include "inventory/InventoryCraftResult.h"
+static void trace(MCObject *o,MCObjectVisitor visit,void *ctx) { InventoryCraftResult *r=(InventoryCraftResult *)o; r->stackResult=(ItemStackArray *)visit((MCObject *)r->stackResult,ctx); }
+static const MCObjectClass klass={"InventoryCraftResult",MCObjectHeap_plainClone,trace,NULL};
+InventoryCraftResult *InventoryCraftResult_new(MCObjectHeap *h) { InventoryCraftResult *r=(InventoryCraftResult *)MCObjectHeap_alloc(h,sizeof(*r),&klass); if (r) { r->stackResult=ItemStackArray_new(h,1); if (!r->stackResult) return NULL; } return r; }
+int32_t InventoryCraftResult_getSizeInventory(const InventoryCraftResult *r) { (void)r; return 1; }
+ItemStack *InventoryCraftResult_getStackInSlot(const InventoryCraftResult *r,int32_t index) { (void)index; return r->stackResult->items[0]; }
+const char *InventoryCraftResult_getName(const InventoryCraftResult *r) { (void)r; return "Result"; }
+bool InventoryCraftResult_hasCustomName(const InventoryCraftResult *r) { (void)r; return false; }
+InventoryDisplayName InventoryCraftResult_getDisplayName(const InventoryCraftResult *r) { InventoryDisplayName d={InventoryCraftResult_getName(r),!InventoryCraftResult_hasCustomName(r)}; return d; }
+ItemStack *InventoryCraftResult_removeStackFromSlot(InventoryCraftResult *r,int32_t index) { (void)index; ItemStack *s=r->stackResult->items[0]; if (s) { r->stackResult->items[0]=NULL; MCObjectHeap_touch(r->object.heap); } return s; }
+ItemStack *InventoryCraftResult_decrStackSize(InventoryCraftResult *r,int32_t index,int32_t count) { (void)count; return InventoryCraftResult_removeStackFromSlot(r,index); }
+bool InventoryCraftResult_setInventorySlotContents(InventoryCraftResult *r,int32_t index,ItemStack *s) { (void)index; if (s&&s->object.heap!=r->object.heap) { MCObjectHeap_fail(r->object.heap); return false; } r->stackResult->items[0]=s; MCObjectHeap_touch(r->object.heap); return true; }
+int32_t InventoryCraftResult_getInventoryStackLimit(const InventoryCraftResult *r) { (void)r; return 64; }
+/* Original IInventory methods intentionally empty or constant. */
+void InventoryCraftResult_markDirty(InventoryCraftResult *r) { (void)r; }
+bool InventoryCraftResult_isUseableByPlayer(const InventoryCraftResult *r,const MCObject *p) { (void)r; (void)p; return true; }
+void InventoryCraftResult_openInventory(InventoryCraftResult *r,MCObject *p) { (void)r; (void)p; }
+void InventoryCraftResult_closeInventory(InventoryCraftResult *r,MCObject *p) { (void)r; (void)p; }
+bool InventoryCraftResult_isItemValidForSlot(const InventoryCraftResult *r,int32_t i,const ItemStack *s) { (void)r; (void)i; (void)s; return true; }
+int32_t InventoryCraftResult_getField(const InventoryCraftResult *r,int32_t id) { (void)r; (void)id; return 0; }
+void InventoryCraftResult_setField(InventoryCraftResult *r,int32_t id,int32_t value) { (void)r; (void)id; (void)value; }
+int32_t InventoryCraftResult_getFieldCount(const InventoryCraftResult *r) { (void)r; return 0; }
+void InventoryCraftResult_clear(InventoryCraftResult *r) { r->stackResult->items[0]=NULL; MCObjectHeap_touch(r->object.heap); }

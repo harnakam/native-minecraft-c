@@ -1,7 +1,16 @@
 #ifndef C919_CRAFTING_H
 #define C919_CRAFTING_H
-#include "inventory/container.h"
+#include "inventory/container_runtime.h"
 #define MC_CRAFTING_MAX_EFFECTS 1024u
+typedef struct { int16_t id,damage; } mc_crafting_ingredient_fact;
+typedef struct {
+    uint8_t width,height,count;
+    mc_crafting_ingredient_fact input[9];
+    int16_t output; uint8_t amount; int16_t damage;
+} mc_crafting_recipe_fact;
+/* Read-only numeric registration facts; no live ItemStack/grid ownership. */
+size_t mc_crafting_static_recipe_count(void);
+bool mc_crafting_static_recipe(size_t index,mc_crafting_recipe_fact *output);
 typedef struct { size_t count, capacity, bytes; mc_slot *dropped; } mc_crafting_effects;
 typedef struct mc_maps mc_maps;
 typedef struct {

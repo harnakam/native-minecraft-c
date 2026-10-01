@@ -21,4 +21,18 @@ bool mc_transfer_prepare_all(const char *base, const char *uuid, const mc_nbt *p
     const mc_nbt *items, const mc_nbt *maps, bool *committed, char *error, size_t error_size);
 bool mc_transfer_commit_all(const char *base, const char *uuid, const mc_nbt *player,
     const mc_nbt *items, const mc_nbt *maps, bool *committed, char *error, size_t error_size);
+/* Version 3 extends the same commit point to every affected player. UUIDs and
+   snapshots are borrowed through the synchronous call; canonical UUIDs must
+   be unique. Items are required, maps are optional, and each snapshot is at
+   most 2MiB. Recovery validates all snapshots before writing any destination.
+   Staging paths are derived from base and UUID; the journal accepts no paths.
+   The same single-writer and committed-failure rules above apply. */
+#define MC_TRANSFER_MAX_PLAYERS 64u
+typedef struct { const char *uuid; const mc_nbt *snapshot; } mc_transfer_player;
+bool mc_transfer_prepare_group(const char *base, const mc_transfer_player *players,
+    size_t player_count, const mc_nbt *items, const mc_nbt *maps,
+    bool *committed, char *error, size_t error_size);
+bool mc_transfer_commit_group(const char *base, const mc_transfer_player *players,
+    size_t player_count, const mc_nbt *items, const mc_nbt *maps,
+    bool *committed, char *error, size_t error_size);
 #endif

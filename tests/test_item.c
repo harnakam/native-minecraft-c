@@ -20,8 +20,11 @@ int main(void) {
     CHECK(!mc_item_from_resource_name("32768", &resolved) && !mc_item_from_resource_name("", &resolved));
     unsigned registered = 0;
     for (int id = 1; id <= 2267; ++id) if (mc_item_valid((int16_t)id)) ++registered;
-    CHECK(registered == 336);
+    CHECK(registered == 337);
+    CHECK(mc_item_valid(62) && mc_item_stack_limit(62)==64 && !mc_item_has_subtypes(62));
+    CHECK(mc_item_from_resource_name("minecraft:lit_furnace", &resolved) && resolved==62);
     uint16_t state = 12345;
+    CHECK(mc_item_block_state(62,0,&state) && state==62*16);
     CHECK(mc_item_block_state(35, 14, &state) && state == (35 * 16 + 14));
     CHECK(mc_item_block_state(17, 3, &state) && state == (17 * 16 + 3));
     CHECK(!mc_item_block_state(17, 4, &state));

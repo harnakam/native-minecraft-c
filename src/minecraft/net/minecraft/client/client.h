@@ -4,7 +4,7 @@
 #include "../world/world.h"
 #include "world/map.h"
 #include "inventory/inventory.h"
-#include "inventory/container.h"
+#include "inventory/container_runtime.h"
 #include "item/item.h"
 #include "entity/item/item_entity.h"
 

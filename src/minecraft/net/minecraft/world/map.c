@@ -30,7 +30,7 @@ void mc_maps_free(mc_maps *m) {
 }
 static bool shape(const mc_maps *m) {
     return m && m->count<=m->capacity && m->capacity<=MC_MAX_MAPS &&
-        (!m->capacity ? !m->entries : m->entries!=NULL) && m->next_id>=0 && m->next_id<=INT16_MAX+1 && compound(&m->original_nbt);
+        (!m->capacity ? !m->entries : m->entries!=NULL) && m->next_id>=0 && m->next_id<=UINT16_MAX && compound(&m->original_nbt);
 }
 mc_map_info *mc_maps_find(mc_maps *m,int32_t id) {
     if (!shape(m)) return NULL;
@@ -289,7 +289,7 @@ bool mc_maps_decode(const mc_nbt *input,mc_maps *out) {
     if (!out || !compound(input) || !input->size) return false;
     mc_nbt_view root,list,v; int64_t version,next;
     if (!mc_nbt_root(input,&root) || !mc_nbt_find(&root,"Version",&v) || v.type!=3 || !integer(&root,"Version",&version) || version!=1 ||
-        !mc_nbt_find(&root,"NextId",&v) || v.type!=3 || !integer(&root,"NextId",&next) || next<0 || next>INT16_MAX+1 ||
+        !mc_nbt_find(&root,"NextId",&v) || v.type!=3 || !integer(&root,"NextId",&next) || next<0 || next>UINT16_MAX ||
         !mc_nbt_find(&root,"Maps",&list) || list.type!=9 || list.size<5 || list.data[0]!=10) return false;
     mc_buf b={0}; b.data=(uint8_t *)list.data; b.len=list.size; b.pos=1;
     int32_t count=mc_get_i32(&b); if (count<0 || (unsigned)count>MC_MAX_MAPS) return false;

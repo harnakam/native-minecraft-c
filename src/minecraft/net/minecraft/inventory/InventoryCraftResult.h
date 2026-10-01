@@ -1,26 +1,24 @@
 #ifndef C919_INVENTORY_CRAFT_RESULT_H
 #define C919_INVENTORY_CRAFT_RESULT_H
-#include "InventoryCrafting.h"
-typedef struct { mc_slot *stackResult; mc_slot ownedResult; bool ownsStackResult; } InventoryCraftResult;
-void InventoryCraftResult_init(InventoryCraftResult *inventory);
-void InventoryCraftResult_attach(InventoryCraftResult *inventory, mc_slot *storage);
-void InventoryCraftResult_free(InventoryCraftResult *inventory);
-int InventoryCraftResult_getSizeInventory(const InventoryCraftResult *inventory);
-mc_slot *InventoryCraftResult_getStackInSlot(InventoryCraftResult *inventory,int index);
-const char *InventoryCraftResult_getName(const InventoryCraftResult *inventory);
-bool InventoryCraftResult_hasCustomName(const InventoryCraftResult *inventory);
-InventoryDisplayName InventoryCraftResult_getDisplayName(const InventoryCraftResult *inventory);
-bool InventoryCraftResult_decrStackSize(InventoryCraftResult *inventory,int index,int count,mc_slot *removed);
-bool InventoryCraftResult_removeStackFromSlot(InventoryCraftResult *inventory,int index,mc_slot *removed);
-bool InventoryCraftResult_setInventorySlotContents(InventoryCraftResult *inventory,int index,const mc_slot *stack);
-int InventoryCraftResult_getInventoryStackLimit(const InventoryCraftResult *inventory);
-void InventoryCraftResult_markDirty(InventoryCraftResult *inventory);
-bool InventoryCraftResult_isUseableByPlayer(const InventoryCraftResult *inventory,const void *player);
-void InventoryCraftResult_openInventory(InventoryCraftResult *inventory,const void *player);
-void InventoryCraftResult_closeInventory(InventoryCraftResult *inventory,const void *player);
-bool InventoryCraftResult_isItemValidForSlot(const InventoryCraftResult *inventory,int index,const mc_slot *stack);
-int InventoryCraftResult_getField(const InventoryCraftResult *inventory,int id);
-void InventoryCraftResult_setField(InventoryCraftResult *inventory,int id,int value);
-int InventoryCraftResult_getFieldCount(const InventoryCraftResult *inventory);
-void InventoryCraftResult_clear(InventoryCraftResult *inventory);
+#include "inventory/InventoryCrafting.h"
+typedef struct InventoryCraftResult { MCObject object; ItemStackArray *stackResult; } InventoryCraftResult;
+InventoryCraftResult *InventoryCraftResult_new(MCObjectHeap *);
+int32_t InventoryCraftResult_getSizeInventory(const InventoryCraftResult *);
+ItemStack *InventoryCraftResult_getStackInSlot(const InventoryCraftResult *,int32_t);
+const char *InventoryCraftResult_getName(const InventoryCraftResult *);
+bool InventoryCraftResult_hasCustomName(const InventoryCraftResult *);
+InventoryDisplayName InventoryCraftResult_getDisplayName(const InventoryCraftResult *);
+ItemStack *InventoryCraftResult_decrStackSize(InventoryCraftResult *,int32_t,int32_t);
+ItemStack *InventoryCraftResult_removeStackFromSlot(InventoryCraftResult *,int32_t);
+bool InventoryCraftResult_setInventorySlotContents(InventoryCraftResult *,int32_t,ItemStack *);
+int32_t InventoryCraftResult_getInventoryStackLimit(const InventoryCraftResult *);
+void InventoryCraftResult_markDirty(InventoryCraftResult *);
+bool InventoryCraftResult_isUseableByPlayer(const InventoryCraftResult *,const MCObject *);
+void InventoryCraftResult_openInventory(InventoryCraftResult *,MCObject *);
+void InventoryCraftResult_closeInventory(InventoryCraftResult *,MCObject *);
+bool InventoryCraftResult_isItemValidForSlot(const InventoryCraftResult *,int32_t,const ItemStack *);
+int32_t InventoryCraftResult_getField(const InventoryCraftResult *,int32_t);
+void InventoryCraftResult_setField(InventoryCraftResult *,int32_t,int32_t);
+int32_t InventoryCraftResult_getFieldCount(const InventoryCraftResult *);
+void InventoryCraftResult_clear(InventoryCraftResult *);
 #endif

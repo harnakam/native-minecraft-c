@@ -62,6 +62,7 @@ static const item_definition items[] = {
     {58, 64, "Crafting Table", "minecraft:crafting_table", 1, {0}},
     {60, 64, "Farmland", "minecraft:farmland", 1, {0}},
     {61, 64, "Furnace", "minecraft:furnace", 1, {0}},
+    {62, 64, "Furnace", "minecraft:lit_furnace", 0, {0}},
     {65, 64, "Ladder", "minecraft:ladder", 1, {0}},
     {66, 64, "Rail", "minecraft:rail", 1, {0}},
     {67, 64, "Cobblestone Stairs", "minecraft:stone_stairs", 1, {0}},
@@ -419,7 +420,9 @@ bool mc_item_block_state(int16_t id, int16_t damage, uint16_t *state) {
     unsigned metadata = 0;
     if (id < 198) {
         const item_definition *item = definition(id);
-        bool valid = false;
+        /* Registry-only lit_furnace has no creative-tab entry, but its
+           ItemBlock still accepts the base metadata when supplied by a slot. */
+        bool valid = id==62 && damage==0;
         for (unsigned i = 0; i < item->variants; ++i)
             if (item->metadata[i] == damage) valid = true;
         if (!valid) return false;
