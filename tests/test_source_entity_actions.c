@@ -108,6 +108,8 @@ static void handler_sneaking(void) {
     MCGameplay base = {0};
     mc_world terrain;
     mc_world_init(&terrain, 919);
+    /* Real loaded air chunks close the SourceMP top-solid/collision dependency. */
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&terrain,cx,cz,true));
     CHECK(mc_server_graph_init(&base, &terrain, 0, 0, 1));
     MCGameplayTransaction tx = {0};
     CHECK(MCGameplay_begin(&base, &tx));
@@ -118,7 +120,7 @@ static void handler_sneaking(void) {
                                           0, 80, 0, true));
     MCGameplayPlayer *p = mc_server_graph_player(game, 0);
     CHECK(p);
-    NetHandlerPlayServer *h = (NetHandlerPlayServer *)p->handler;
+    NetHandlerPlayServer *h = (NetHandlerPlayServer *)MCGameplayPlayer_handler(p);
     CHECK(h && h->hasMoved);
     C0BPacketEntityAction *packet = C0BPacketEntityAction_new(
         game->heap, &p->living.entity, C0BPacketEntityAction_nativeAction(0));
@@ -226,6 +228,7 @@ typedef struct {
 static void fixture(Fixture *f, int32_t action) {
     memset(f, 0, sizeof(*f));
     mc_world_init(&f->terrain, 919);
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&f->terrain,cx,cz,true));
     CHECK(mc_server_graph_init(&f->base, &f->terrain, 0, 0, 1));
     CHECK(MCGameplay_begin(&f->base, &f->tx));
     MCGameplay *game = &f->tx.working;
@@ -236,7 +239,7 @@ static void fixture(Fixture *f, int32_t action) {
                                           80, 0, true));
     f->p = mc_server_graph_player(game, 0);
     f->q = mc_server_graph_player(game, 1);
-    f->h = (NetHandlerPlayServer *)f->p->handler;
+    f->h = (NetHandlerPlayServer *)MCGameplayPlayer_handler(f->p);
     f->effects = (Effects *)MCObjectHeap_alloc(game->heap, sizeof(Effects), &effectsClass);
     CHECK(f->effects);
     Effects *e = f->effects;

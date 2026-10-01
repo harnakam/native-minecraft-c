@@ -1,6 +1,7 @@
 """Independent full Slot/NBT and window-0 transaction interoperability tests."""
 import gzip
 import hashlib
+import math
 from pathlib import Path
 import struct
 import tempfile
@@ -562,9 +563,10 @@ class InventoryNetworkTests(SlotAssertions, unittest.TestCase):
             peer = self.peer(port, "WoolMetadata")
             tag = metadata()
             peer.creative(36, 35, 31, 11, tag)
-            ground = int(peer.spawn[1]) - 2
-            peer.send(8, position(8, ground, 8) + b"\x01" + wire_slot(35, 31, 11, tag) + bytes([8, 16, 8]))
-            target = position(8, ground + 1, 8)
+            x, z = math.floor(peer.spawn[0]), math.floor(peer.spawn[2])
+            ground = math.floor(peer.spawn[1]) - 1
+            peer.send(8, position(x, ground, z) + b"\x01" + wire_slot(35, 31, 11, tag) + bytes([8, 16, 8]))
+            target = position(x, ground + 1, z)
             change = peer.wait(0x23, lambda payload: payload[:8] == target)
             self.assertEqual(read_vint(change, 8)[0], (35 << 4) | 11)
 

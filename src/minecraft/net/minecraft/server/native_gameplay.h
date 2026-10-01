@@ -3,12 +3,14 @@
 #include "util/MCGameplayStorage.h"
 #include "util/MCGameplayCrafting.h"
 #include "network/NetHandlerPlayServer.h"
+#include "world/WorldSettingsGameType.h"
 
-/* Single canonical server graph. These are native runtime bindings, not a
-   translation of MinecraftServer/World/EntityPlayerMP constructors. No callback
+/* Single canonical server graph. Source EntityPlayerMP constructs the actual
+   player once. MinecraftServer/World providers remain native bindings. No callback
    carries a cached actor/stack pointer from another snapshot or sends sockets. */
 bool mc_server_graph_init(MCGameplay *, const mc_world *terrain, int32_t spawnX, int32_t spawnZ,
                           uint64_t seed);
+bool mc_server_graph_set_world_game_type(MCGameplay *,const WorldSettingsGameType *);
 MCGameplayWorld *mc_server_graph_world(MCGameplay *);
 MCGameplayPlayer *mc_server_graph_player(MCGameplay *, size_t index);
 const mc_crafting_dispatch *mc_server_graph_crafting(void);
@@ -17,9 +19,12 @@ const EntityItemConstructorDependencies *mc_server_graph_item_constructors(void)
 /* Calls below operate only on disposable working graphs under a RootScope. */
 bool mc_server_graph_add_player(MCGameplay *, size_t index, const char *uuid, const char *name,
                                 int32_t entityId, double x, double y, double z, bool creative);
-/* Live admission retains the global Entity constructor ID; zero is valid.
-   The explicit-ID overload above remains a native fixture/import adapter. */
+/* Native position import adapters run Source MP construction, then set the
+   requested position. The explicit-ID overload also imports an Entity ID. */
 bool mc_server_graph_add_player_auto(MCGameplay *,size_t,const char *,const char *,double,double,double,bool);
+/* Live admission retains both Source MP spawn position and global Entity
+   constructor ID (including zero). No independent player spawn is selected. */
+bool mc_server_graph_create_player(MCGameplay *,size_t,const char *,const char *,bool);
 int32_t mc_server_graph_allocate_entity(MCGameplayWorld *);
 bool mc_server_graph_drop(MCGameplayPlayer *, bool all);
 bool mc_server_graph_use_item(MCGameplayPlayer *);

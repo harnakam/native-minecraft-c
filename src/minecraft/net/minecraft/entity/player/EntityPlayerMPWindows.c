@@ -40,7 +40,7 @@ bool EntityPlayerMPWindows_sendSlotContents(MCGameplayPlayer *player,Container *
     if (!same_heap(player,(MCObject *)container) || (stack && !same_heap(player,(MCObject *)stack))) return fail(player);
     Slot *slot=Container_getSlot(container,index);
     if (!active(player)) return false;
-    if (!SlotCrafting_isInstance(slot) && !player->isChangingQuantityOnly) {
+    if (!SlotCrafting_isInstance(slot) && !MCGameplayPlayer_isChangingQuantityOnly(player)) {
         if (!bound(player)) return false;
         return effect(player,player->windowDependencies->sendSetSlot(player,container->windowId,index,stack));
     }
@@ -62,7 +62,7 @@ bool EntityPlayerMPWindows_sendContainerToPlayer(MCGameplayPlayer *player,Contai
 }
 bool EntityPlayerMPWindows_updateHeldItem(MCGameplayPlayer *player) {
     if (!active(player)) return false;
-    if (!player->isChangingQuantityOnly) {
+    if (!MCGameplayPlayer_isChangingQuantityOnly(player)) {
         if (!bound(player)) return false;
         if (!same_heap(player,(MCObject *)player->inventory)) return fail(player);
         return effect(player,player->windowDependencies->sendSetSlot(player,-1,-1,InventoryPlayer_getItemStack(player->inventory)));

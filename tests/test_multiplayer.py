@@ -59,6 +59,19 @@ def slot(item):
     return struct.pack(">hbhb", item, 1, 0, 0)
 
 
+def flat_world(path, state=2 << 4, height=32):
+    """Author native C919WRL1 terrain, with a real block plane and air above."""
+    coordinates = [(x, z) for z in range(-3, 4) for x in range(-3, 4)]
+    data = bytearray(b"C919WRL1" + struct.pack("<II", 919, len(coordinates)))
+    runs = ((height * 256, 1 << 4), (256, state),
+            ((255 - height) * 256, 0))
+    for x, z in coordinates:
+        data.extend(struct.pack("<iiI", x, z, len(runs)))
+        for count, block in runs:
+            data.extend(struct.pack("<IH", count, block))
+    Path(path).write_bytes(data)
+
+
 class Peer:
     def __init__(self, port):
         self.socket = socket.create_connection(("127.0.0.1", port), timeout=3)
@@ -152,6 +165,9 @@ class Peer:
         offset = preceding * 8192 + ((y % 16) * 256 + (z % 16) * 16 + x % 16) * 2
         return struct.unpack_from("<H", data, offset)[0]
 
+    def surface(self, x, z):
+        return next(y for y in range(255, -1, -1) if self.block(x, y, z))
+
 
 @contextlib.contextmanager
 def running_server(world, crash=False, gamemode=1):
@@ -234,18 +250,45 @@ class MultiplayerTests(unittest.TestCase):
             self.assertEqual(response["version"]["protocol"], 47)
 
     def test_tower_at_original_spawn_does_not_break_new_logins(self):
+        flat_world(self.world)
         with running_server(self.world) as port:
             builder = self.peer(port).login("TowerBuilder")
-            ground = int(builder.spawn[1]) - 2
+            ground = builder.surface(8, 8)
             for y in range(ground + 1, 256):
                 builder.send(6, struct.pack(">dddffB", 8.5, min(y + 1.0, 254.0), 8.5, 0, 0, 0))
                 builder.send(8, position(8, y - 1, 8) + bytes([1]) + slot(1) + bytes([8, 16, 8]))
                 changed = builder.wait(0x23, lambda p: p[:8] == position(8, y, 8))
                 self.assertEqual(read_vint(changed, 8)[0], 16)
             newcomer = self.peer(port).login("TowerVisitor")
-            self.assertLess(newcomer.spawn[1], 255)
-            self.assertNotEqual(newcomer.spawn[::2][:2], (8.5, 8.5))
-            self.assertEqual(newcomer.block(int(newcomer.spawn[0]), int(newcomer.spawn[1]), int(newcomer.spawn[2])), 0)
+            x, y, z = newcomer.spawn[:3]
+            # The actual MP constructor may legitimately select the tower's
+            # column. Its top-solid result is then y=256, rather than a native
+            # spawn search choosing another column.
+            self.assertTrue(all(math.isfinite(value) for value in (x, y, z)))
+            self.assertEqual(y, newcomer.surface(math.floor(x), math.floor(z)) + 1)
+            self.assertEqual(newcomer.block(math.floor(x), math.floor(y), math.floor(z)), 0)
+
+    def test_source_mp_ordinary_admission_uses_random_column_and_top_solid_height(self):
+        flat_world(self.world)
+        with running_server(self.world) as port:
+            first = self.peer(port).login("SourceSpawnA")
+            second = self.peer(port).login("SourceSpawnB")
+            self.assertNotEqual(first.entity, second.entity)
+            for peer in (first, second):
+                x, y, z = peer.spawn[:3]
+                # Native World spawn=(8,8), protection16: original MP uses
+                # nextInt(20)-10 for each axis, and centers the resulting block.
+                self.assertTrue(-2 <= math.floor(x) <= 17)
+                self.assertTrue(-2 <= math.floor(z) <= 17)
+                self.assertEqual((x - math.floor(x), z - math.floor(z)), (0.5, 0.5))
+                self.assertEqual(y, 33.0)
+                self.assertEqual(peer.block(math.floor(x), 32, math.floor(z)), 2 << 4)
+                self.assertEqual(peer.block(math.floor(x), 33, math.floor(z)), 0)
+            spawn = next(payload for kind, payload in second.initial if kind == 0x0c)
+            entity, offset = read_vint(spawn)
+            self.assertEqual(entity, first.entity)
+            self.assertEqual(struct.unpack_from(">iii", spawn, offset + 16),
+                             tuple(math.floor(v * 32) for v in first.spawn[:3]))
 
     def test_source_action_authority_and_movement_packet_decoders(self):
         with tempfile.TemporaryDirectory() as folder, running_server(Path(folder) / "world.c919") as port:
@@ -292,23 +335,26 @@ class MultiplayerTests(unittest.TestCase):
             self.assertIn(japanese, read_string(alice.wait(2))[0])
             self.assertIn(japanese, read_string(bob.wait(2))[0])
             # Select glass, then place on the ground under the spawn column.
-            ground = int(y) - 2
-            self.assertNotEqual(alice.block(8, ground, 8), 0)
+            block_x, block_z = math.floor(x), math.floor(z)
+            ground = math.floor(y) - 1
+            self.assertNotEqual(alice.block(block_x, ground, block_z), 0)
             alice.send(9, struct.pack(">h", 5))
             alice.send(0x10, struct.pack(">h", 41) + slot(20))
             inventory = alice.wait(0x2F, lambda p: struct.unpack_from(">h", p, 1)[0] == 41)
             self.assertEqual(struct.unpack_from(">h", inventory, 3)[0], 20)
-            alice.send(8, position(8, ground, 8) + bytes([1]) + slot(20) + bytes([8, 16, 8]))
-            expected = position(8, ground + 1, 8)
+            alice.send(8, position(block_x, ground, block_z) + bytes([1]) + slot(20) + bytes([8, 16, 8]))
+            expected = position(block_x, ground + 1, block_z)
             change = bob.wait(0x23, lambda p: p[:8] == expected)
             self.assertEqual(read_vint(change, 8)[0], 20 << 4)
             alice.wait(0x23, lambda p: p[:8] == expected)
             alice.send(7, vint(0) + expected + bytes([1]))
             self.assertEqual(read_vint(bob.wait(0x23, lambda p: p[:8] == expected), 8)[0], 0)
             # Crossing the initial window loads the world border for this player.
-            alice.send(6, struct.pack(">dddffB", 48.5, y, z, 0, 0, 0))
-            border = alice.wait(0x21, lambda p: struct.unpack_from(">ii", p) == (3, 0))
-            self.assertEqual(struct.unpack_from(">ii", border), (3, 0))
+            new_chunk = (-3 if block_x // 16 == 1 else 3, block_z // 16)
+            self.assertNotIn(new_chunk, alice.chunks)
+            alice.send(6, struct.pack(">dddffB", new_chunk[0] * 16 + 0.5, y, z, 0, 0, 0))
+            border = alice.wait(0x21, lambda p: struct.unpack_from(">ii", p) == new_chunk)
+            self.assertEqual(struct.unpack_from(">ii", border), new_chunk)
             bob.close()
             removed = alice.wait(0x13)
             count, offset = read_vint(removed)
@@ -318,21 +364,20 @@ class MultiplayerTests(unittest.TestCase):
     def test_edit_is_durable_and_invalid_reach_is_corrected(self):
         with running_server(self.world) as port:
             alice = self.peer(port).login("Builder")
-            y = int(alice.spawn[1]) - 2
-            alice.send(8, position(8, y, 8) + bytes([1]) + slot(1) + bytes([8, 16, 8]))
-            edited = position(8, y + 1, 8)
+            x, y, z = math.floor(alice.spawn[0]), math.floor(alice.spawn[1]) - 1, math.floor(alice.spawn[2])
+            alice.send(8, position(x, y, z) + bytes([1]) + slot(1) + bytes([8, 16, 8]))
+            edited = position(x, y + 1, z)
             self.assertEqual(read_vint(alice.wait(0x23, lambda p: p[:8] == edited), 8)[0], 16)
             self.assertTrue(self.world.is_file())
-            far = position(40, y, 40)
-            original = alice.block(40, y, 40) if (2, 2) in alice.chunks else None
+            far = position(x + 16, y, z)
+            original = alice.block(x + 16, y, z)
             alice.send(7, vint(0) + far + bytes([1]))
             correction = alice.wait(0x23, lambda p: p[:8] == far)
-            if original is not None:
-                self.assertEqual(read_vint(correction, 8)[0], original)
+            self.assertEqual(read_vint(correction, 8)[0], original)
             alice.close()
         with running_server(self.world) as port:
             restored = self.peer(port).login("Reader")
-            self.assertEqual(restored.block(8, y + 1, 8), 16)
+            self.assertEqual(restored.block(x, y + 1, z), 16)
 
     def test_invalid_players_and_nonfinite_movement_disconnect(self):
         with running_server(self.world) as port:
@@ -358,8 +403,8 @@ class MultiplayerTests(unittest.TestCase):
             # A directory at the temporary filename reliably prevents writing,
             # including when the test runs with administrative privileges.
             Path(str(self.world) + ".tmp").mkdir()
-            y = int(alice.spawn[1]) - 2
-            alice.send(8, position(8, y, 8) + bytes([1]) + slot(1) + bytes([8, 16, 8]))
+            x, y, z = math.floor(alice.spawn[0]), math.floor(alice.spawn[1]) - 1, math.floor(alice.spawn[2])
+            alice.send(8, position(x, y, z) + bytes([1]) + slot(1) + bytes([8, 16, 8]))
             self.assertIn("rolled back", read_string(alice.wait(0x40))[0])
             self.assertEqual(self.world.read_bytes(), committed)
 

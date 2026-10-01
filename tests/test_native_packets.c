@@ -111,6 +111,8 @@ typedef struct {
 } Fixture;
 static MCGameplayPlayer *setup(Fixture *f, MCObjectRootScope *scope) {
     mc_world_init(&f->terrain, 919);
+    /* SourceMP performs real terrain queries before native imported position. */
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&f->terrain,cx,cz,true));
     CHECK(mc_server_graph_init(&f->parent, &f->terrain, 0, 0, 919));
     CHECK(MCGameplay_begin(&f->parent, &f->tx));
     CHECK(MCObjectRootScope_begin(scope, f->tx.working.heap));

@@ -101,7 +101,10 @@ static void controller_receiver_order(void) {
     MCObjectRootScope_end(&scope);CHECK(MCGameplay_free(&g));mc_world_free(&terrain);
 }
 static void server_authority(void) {
-    mc_world terrain;mc_world_init(&terrain,0);MCGameplay g={0};CHECK(mc_server_graph_init(&g,&terrain,0,0,0));
+    mc_world terrain;mc_world_init(&terrain,0);MCGameplay g={0};
+    /* Real loaded air chunks close the SourceMP top-solid/collision dependency. */
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&terrain,cx,cz,true));
+    CHECK(mc_server_graph_init(&g,&terrain,0,0,0));
     MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx));
     MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
     CHECK(mc_server_graph_add_player_auto(&tx.working,0,"00000000-0000-0000-0000-000000000001","AbilityServer",0,20,0,true));
@@ -128,12 +131,13 @@ static MCPacketThreadResult foreign_after_thread(MCObject *context,NetHandlerPla
 }
 static void foreign_player_after_thread_is_rejected(void) {
     mc_world terrain;mc_world_init(&terrain,0);MCGameplay server={0},external={0};
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&terrain,cx,cz,true));
     CHECK(mc_server_graph_init(&server,&terrain,0,0,0));CHECK(mc_client_graph_init(&external,&terrain,"ForeignAbility"));
     foreignPlayer=mc_client_graph_player(&external);foreignPlayer->capabilities->allowFlying=true;
     MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&server,&tx));
     MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
     CHECK(mc_server_graph_add_player_auto(&tx.working,0,"00000000-0000-0000-0000-000000000001","OwnerGuard",0,20,0,true));
-    NetHandlerPlayServer *handler=(NetHandlerPlayServer *)mc_server_graph_player(&tx.working,0)->handler;
+    NetHandlerPlayServer *handler=(NetHandlerPlayServer *)MCGameplayPlayer_handler(mc_server_graph_player(&tx.working,0));
     NetHandlerPlayServerDependencies replacement=*handler->dependencies;replacement.checkThreadAndEnqueue=foreign_after_thread;handler->dependencies=&replacement;
     C13PacketPlayerAbilities *packet=C13PacketPlayerAbilities_new_empty(tx.working.heap);CHECK(packet);packet->flying=true;
     CHECK(!NetHandlerPlayServer_processPlayerAbilities(handler,packet)&&MCObjectHeap_failed(tx.working.heap));

@@ -1,4 +1,5 @@
 #include "network/NetHandlerPlayServer.h"
+#include "entity/player/EntityPlayerMP.h"
 #include <limits.h>
 #include <string.h>
 
@@ -115,7 +116,8 @@ NetHandlerPlayServer_nativeNew(MCGameplayPlayer *player, MCObject *context,
         handler->field_147372_n = (NativeRejectedTransactions *)MCObjectHeap_alloc(
             heap, sizeof(NativeRejectedTransactions), &mapClass);
         if (handler->field_147372_n) {
-            player->handler = (MCObject *)handler;
+            if(EntityPlayerMP_isInstance((MCObject *)player))((EntityPlayerMP *)player)->playerNetServerHandler=handler;
+            else player->handler = (MCObject *)handler;
             MCObjectHeap_touch(heap);
         } else
             handler = NULL;
@@ -347,12 +349,12 @@ bool NetHandlerPlayServer_processClickWindow(NetHandlerPlayServer *handler,
                                          C0EPacketClickWindow_getWindowId(packet),
                                          C0EPacketClickWindow_getActionNumber(packet), true)))
                     return end(handler, &scope, false);
-                player->isChangingQuantityOnly = true;
+                MCGameplayPlayer_setChangingQuantityOnly(player,true);
                 container = open_container(handler);
                 if (!container || !Container_detectAndSendChanges(container) ||
                     !completed(heap, d->updateHeldItem(handler->dependencyContext, player)))
                     return end(handler, &scope, false);
-                player->isChangingQuantityOnly = false;
+                MCGameplayPlayer_setChangingQuantityOnly(player,false);
             } else {
                 container = open_container(handler);
                 if (!container || !map_put(handler->field_147372_n, container->windowId,

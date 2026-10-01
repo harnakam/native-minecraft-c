@@ -1,5 +1,6 @@
 #include "server/native_gameplay.h"
 #include "entity/player/EntityPlayer.h"
+#include "entity/player/EntityPlayerMP.h"
 #include "server/management/ItemInWorldManagerUse.h"
 #include "util/MCGameplayPackets.h"
 #include "entity/player/EntityPlayerDrops.h"
@@ -17,6 +18,10 @@
 #include "util/MathHelper.h"
 #include "world/WorldSettingsGameType.h"
 #include "entity/item/NativeItemMotion.h"
+#include "world/border/WorldBorder.h"
+#include "util/NativeReferenceList.h"
+#include "util/NativeWallClock.h"
+#include "block/block.h"
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -95,18 +100,35 @@ typedef struct {
     MCObject *values[128];
     size_t count, index;
 } RuntimeIterator;
+typedef struct RuntimeServer RuntimeServer;
+typedef struct RuntimeConfiguration RuntimeConfiguration;
 typedef struct {
     MCObject object;
     RuntimeThread thread;
     RuntimeScoreboard *scoreboard;
     bool announceAchievements;
+    const WorldSettingsGameType *gameType;
+    WorldBorder *border;
+    RuntimeServer *server;
 } RuntimeWorld;
+struct RuntimeServer {
+    MCObject object;
+    RuntimeConfiguration *configuration;
+    int32_t spawnProtectionSize;
+};
+struct RuntimeConfiguration {
+    MCObject object;
+    MCGameplayWorld *world;
+    NativeReferenceList *playerStatFiles;
+};
+typedef struct {
+    MCObject object;
+    NativeJavaUUID *id;
+    StatisticsFile *file;
+} RuntimePlayerStat;
 typedef struct {
     MCObject object;
     MCGameplayPlayer *actor;
-    int32_t currentWindowId;
-    int64_t lastActiveTick;
-    bool managerCreative, managerSpectator, usingItem;
 } RuntimeActor;
 static bool fail(MCObjectHeap *heap) {
     MCObjectHeap_fail(heap);
@@ -127,6 +149,20 @@ static void trace_iterator(MCObject *o, MCObjectVisitor v, void *c) {
 static void trace_world(MCObject *o, MCObjectVisitor v, void *c) {
     RuntimeWorld *w = (RuntimeWorld *)o;
     w->scoreboard = (RuntimeScoreboard *)v((MCObject *)w->scoreboard, c);
+    w->border=(WorldBorder *)v((MCObject *)w->border,c);
+    w->server=(RuntimeServer *)v((MCObject *)w->server,c);
+}
+static void trace_server(MCObject *o,MCObjectVisitor v,void *c) {
+    RuntimeServer *s=(RuntimeServer *)o;s->configuration=(RuntimeConfiguration *)v((MCObject *)s->configuration,c);
+}
+static void trace_configuration(MCObject *o,MCObjectVisitor v,void *c) {
+    RuntimeConfiguration *s=(RuntimeConfiguration *)o;
+    s->world=(MCGameplayWorld *)v((MCObject *)s->world,c);
+    s->playerStatFiles=(NativeReferenceList *)v((MCObject *)s->playerStatFiles,c);
+}
+static void trace_player_stat(MCObject *o,MCObjectVisitor v,void *c) {
+    RuntimePlayerStat *s=(RuntimePlayerStat *)o;
+    s->id=(NativeJavaUUID *)v((MCObject *)s->id,c);s->file=(StatisticsFile *)v((MCObject *)s->file,c);
 }
 static void trace_actor(MCObject *o, MCObjectVisitor v, void *c) {
     RuntimeActor *a = (RuntimeActor *)o;
@@ -147,6 +183,9 @@ static const MCObjectClass actorClass = {"C919.native.ServerActorBindings", MCOb
                                          trace_actor, NULL};
 static const MCObjectClass scoreClass = {"C919.native.ScoreState", MCObjectHeap_plainClone,
                                          trace_score, NULL};
+static const MCObjectClass serverClass={"C919.native.MinecraftServerView",MCObjectHeap_plainClone,trace_server,NULL};
+static const MCObjectClass configurationClass={"C919.native.ServerConfigurationState",MCObjectHeap_plainClone,trace_configuration,NULL};
+static const MCObjectClass playerStatClass={"C919.native.PlayerStatEntry",MCObjectHeap_plainClone,trace_player_stat,NULL};
 static RuntimeWorld *bindings(MCGameplayWorld *w) {
     if (!w || !w->nativeContext || w->nativeContext->klass != &worldClass) {
         fail(w ? w->object.heap : NULL);
@@ -322,8 +361,9 @@ static bool add_stat(MCGameplayPlayer *p, StatBase *stat, int32_t amount) {
     return EntityPlayerMP_addStat(p, stat, amount, (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)), &statDependencies);
 }
 static bool announcing(MCObject *ctx, MCObject *server) {
-    (void)ctx;
-    return ((RuntimeWorld *)server)->announceAchievements;
+    RuntimeWorld *world=MCGameplayWorld_isInstance(ctx)?bindings((MCGameplayWorld *)ctx):NULL;
+    if(!world||server!=(MCObject *)world->server)return fail(ctx?ctx->heap:NULL);
+    return world->announceAchievements;
 }
 static bool announcement(MCObject *ctx, MCObject *server, MCObject *p, StatBase *stat, bool taken) {
     (void)server;
@@ -618,12 +658,7 @@ static MCPacketThreadResult packet_thread(MCObject *ctx, NetHandlerPlayServer *h
 }
 static bool active(MCObject *ctx, MCGameplayPlayer *p) {
     (void)ctx;
-    RuntimeActor *a = actor_bindings(p);
-    if (!a)
-        return false;
-    a->lastActiveTick = ((MCGameplayWorld *)(p->living.entity.worldObj))->worldTime;
-    MCObjectHeap_touch(p->living.entity.object.heap);
-    return true;
+    return EntityPlayerMP_isInstance((MCObject *)p)&&EntityPlayerMP_markPlayerActive((EntityPlayerMP *)p);
 }
 static bool close_container(MCObject *ctx, MCGameplayPlayer *p) {
     (void)ctx;
@@ -669,6 +704,190 @@ static const NetHandlerPlayServerDependencies handlerDependencies = {
 static NBTString *display_name(MCObject *ctx, const ItemStack *stack) {
     return NBTString_fromUTF8(ctx->heap, mc_item_name((int16_t)ItemStack_registryId(stack->item)));
 }
+/* These are native views for the still untranslated World/Server providers.
+   They own real graph state and read loaded terrain; they never replace the
+   Source MP constructor's branch, Random, clock, position or collision loop. */
+static MCObject *mp_new_list(MCObject *context) {
+    return (MCObject *)NativeReferenceList_new(context->heap);
+}
+static BlockPos *mp_spawn(MCObject *context,MCObject *world) {
+    (void)context;
+    if(!MCGameplayWorld_isInstance(world))return fail(world?world->heap:NULL),NULL;
+    MCGameplayWorld *w=(MCGameplayWorld *)world;
+    return DataWatcher_blockPos(world->heap,w->spawnX,w->spawnY,w->spawnZ);
+}
+static MCObject *mp_provider(MCObject *context,MCObject *world) {
+    (void)context;
+    if(!MCGameplayWorld_isInstance(world))return fail(world?world->heap:NULL),NULL;
+    return world;
+}
+static bool mp_no_sky(MCObject *context,MCObject *provider,bool *out) {
+    (void)context;
+    if(!MCGameplayWorld_isInstance(provider)||!out)return fail(provider?provider->heap:NULL);
+    *out=((MCGameplayWorld *)provider)->hasNoSky;return true;
+}
+static MCObject *mp_world_info(MCObject *context,MCObject *world) {
+    (void)context;
+    return (MCObject *)bindings((MCGameplayWorld *)world);
+}
+static bool mp_world_type(MCObject *context,MCObject *info,const WorldSettingsGameType **out) {
+    (void)context;
+    if(!info||info->klass!=&worldClass||!out)return fail(info?info->heap:NULL);
+    *out=((RuntimeWorld *)info)->gameType;return true;
+}
+static bool mp_protection(MCObject *context,MCObject *server,int32_t *out) {
+    (void)context;
+    if(!server||server->klass!=&serverClass||!out)return fail(server?server->heap:NULL);
+    *out=((RuntimeServer *)server)->spawnProtectionSize;return true;
+}
+static MCObject *mp_border(MCObject *context,MCObject *world) {
+    (void)context;RuntimeWorld *r=bindings((MCGameplayWorld *)world);
+    return r?(MCObject *)r->border:NULL;
+}
+static bool mp_border_distance(MCObject *context,MCObject *border,double x,double z,double *out) {
+    (void)context;return WorldBorder_getClosestDistance((WorldBorder *)border,x,z,out);
+}
+static bool mp_next_int(MCObject *context,NativeJavaRandom *random,int32_t bound,int32_t *out) {
+    (void)context;return NativeJavaRandom_nextIntBound(random,bound,out);
+}
+static const mc_chunk *loaded_chunk(const mc_world *world,int32_t x,int32_t z) {
+    if(!world)return NULL;
+    int32_t cx=mc_floor_div16(x),cz=mc_floor_div16(z);
+    for(int i=0;i<world->count;i++)
+        if(world->chunks[i].x==cx&&world->chunks[i].z==cz)return &world->chunks[i];
+    return NULL;
+}
+static uint16_t chunk_state(const mc_chunk *chunk,int32_t x,int32_t y,int32_t z) {
+    if(y<0||y>=MC_CHUNK_HEIGHT)return 0;
+    return chunk->blocks[((size_t)y<<8)|((size_t)(z&15)<<4)|(size_t)(x&15)];
+}
+static BlockPos *mp_top_solid(MCObject *context,MCObject *world,BlockPos *position) {
+    (void)context;
+    if(!MCGameplayWorld_isInstance(world)||!BlockPos_isInstance((MCObject *)position))
+        return fail(world?world->heap:NULL),NULL;
+    const mc_chunk *chunk=loaded_chunk(((MCGameplayWorld *)world)->terrain,position->x,position->z);
+    if(!chunk||!chunk->blocks)return fail(world->heap),NULL;
+    /* Dense native chunks do not retain ExtendedBlockStorage allocation
+       metadata. A highest non-air segment is sufficient for this scan's result;
+       Chunk/World construction and block registry classes remain dependencies. */
+    int32_t top=0;
+    for(int32_t y=MC_CHUNK_HEIGHT-1;y>=0;y--) {
+        bool present=false;
+        for(size_t i=(size_t)y<<8;i<((size_t)y+1)<<8;i++)
+            if((chunk->blocks[i]>>4)!=0){present=true;break;}
+        if(present){top=(y/16)*16;break;}
+    }
+    BlockPos *pos=DataWatcher_blockPos(world->heap,position->x,top+16,position->z);
+    while(pos&&pos->y>=0) {
+        BlockPos *below=BlockPos_add(pos,0,-1,0);
+        bool movement=false,leaves=false;
+        if(!below||!mc_block_material_flags(chunk_state(chunk,below->x,below->y,below->z),&movement,&leaves))
+            return fail(world->heap),NULL;
+        if(movement&&!leaves)break;
+        pos=below;
+    }
+    return pos;
+}
+static MCObject *mp_configuration(MCObject *context,MCObject *server) {
+    (void)context;
+    if(!server||server->klass!=&serverClass)return fail(server?server->heap:NULL),NULL;
+    return (MCObject *)((RuntimeServer *)server)->configuration;
+}
+static StatisticsFile *mp_statistics(MCObject *context,MCObject *configuration,EntityPlayerMP *player) {
+    (void)context;
+    if(!configuration||configuration->klass!=&configurationClass||!EntityPlayerMP_isInstance((MCObject *)player))
+        return fail(configuration?configuration->heap:NULL),NULL;
+    RuntimeConfiguration *c=(RuntimeConfiguration *)configuration;
+    NativeJavaUUID *id=Entity_getUniqueID(&player->player.living.entity);
+    if(!id||!NativeReferenceList_isInstance((MCObject *)c->playerStatFiles))return fail(configuration->heap),NULL;
+    for(int32_t i=0;i<NativeReferenceList_size(c->playerStatFiles);i++) {
+        RuntimePlayerStat *entry=(RuntimePlayerStat *)NativeReferenceList_get(c->playerStatFiles,i);
+        if(!entry||entry->object.klass!=&playerStatClass)return fail(configuration->heap),NULL;
+        if(entry->id->mostSignificantBits==id->mostSignificantBits&&entry->id->leastSignificantBits==id->leastSignificantBits)
+            return entry->file;
+    }
+    RuntimeWorld *world=bindings(c->world);
+    RuntimePlayerStat *entry=world?(RuntimePlayerStat *)MCObjectHeap_alloc(configuration->heap,sizeof(*entry),&playerStatClass):NULL;
+    if(!entry)return NULL;
+    entry->id=id;
+    entry->file=StatisticsFile_nativeNew(configuration->heap,(MCObject *)world->server,
+        NBTString_literalASCII(configuration->heap,""),(MCObject *)c->world,&statisticsDependencies);
+    if(!entry->file||!NativeReferenceList_add(c->playerStatFiles,(MCObject *)entry))return NULL;
+    return entry->file;
+}
+static bool mp_move(MCObject *context,EntityPlayerMP *p,BlockPos *position,float yaw,float pitch) {
+    (void)context;return Entity_moveToBlockPosAndAngles(&p->player.living.entity,position,yaw,pitch);
+}
+static AxisAlignedBB *mp_box(MCObject *context,EntityPlayerMP *p) {
+    (void)context;return Entity_getEntityBoundingBox(&p->player.living.entity);
+}
+static MCObject *mp_collisions(MCObject *context,MCObject *world,EntityPlayerMP *p,AxisAlignedBB *box) {
+    (void)context;
+    if(!MCGameplayWorld_isInstance(world)||!AxisAlignedBB_isInstance((MCObject *)box))return fail(world?world->heap:NULL),NULL;
+    MCGameplayWorld *w=(MCGameplayWorld *)world;RuntimeWorld *r=bindings(w);
+    if(!r||!w->terrain||!isfinite(box->minX)||!isfinite(box->maxX)||!isfinite(box->minY)||
+       !isfinite(box->maxY)||!isfinite(box->minZ)||!isfinite(box->maxZ))return fail(world->heap),NULL;
+    int32_t minX=MathHelper_floor_double(box->minX),maxX=MathHelper_floor_double(box->maxX+1.0);
+    int32_t minY=MathHelper_floor_double(box->minY),maxY=MathHelper_floor_double(box->maxY+1.0);
+    int32_t minZ=MathHelper_floor_double(box->minZ),maxZ=MathHelper_floor_double(box->maxZ+1.0);
+    /* Explicit bounds of the native dense-world dependency. Full arbitrary
+       World collision shapes/entity subclasses are not represented here. */
+    if(minX<-30000000||maxX>30000000||minZ<-30000000||maxZ>30000000||
+       maxX<minX||maxZ<minZ||(int64_t)maxX-minX>32||(int64_t)maxZ-minZ>32)
+        return fail(world->heap),NULL;
+    double borderMinX,borderMinZ,borderMaxX,borderMaxZ;
+    if(!WorldBorder_minX(r->border,&borderMinX)||!WorldBorder_minZ(r->border,&borderMinZ)||
+       !WorldBorder_maxX(r->border,&borderMaxX)||!WorldBorder_maxZ(r->border,&borderMaxZ))return NULL;
+    Entity *entity=&p->player.living.entity;
+    bool outside=entity->isOutsideBorder;
+    double adjustment=outside?1.0:-1.0;
+    bool inside=entity->posX>borderMinX+adjustment&&entity->posX<borderMaxX-adjustment&&
+        entity->posZ>borderMinZ+adjustment&&entity->posZ<borderMaxZ-adjustment;
+    NativeReferenceList *list=NativeReferenceList_new(world->heap);
+    if(!list)return NULL;
+    int32_t startY=minY<=0?0:minY-1,endY=maxY>MC_CHUNK_HEIGHT?MC_CHUNK_HEIGHT:maxY;
+    for(int32_t x=minX;x<maxX;x++)for(int32_t z=minZ;z<maxZ;z++) {
+        const mc_chunk *chunk=loaded_chunk(w->terrain,x,z);
+        /* isBlockLoaded is a real property of this native collection. */
+        if(!chunk)continue;
+        if(!chunk->blocks)return fail(world->heap),NULL;
+        for(int32_t y=startY;y<endY;y++) {
+            if(outside&&inside)entity->isOutsideBorder=false;
+            else if(!outside&&!inside)entity->isOutsideBorder=true;
+            uint16_t state=(x+1.0>borderMinX&&x<borderMaxX&&z+1.0>borderMinZ&&z<borderMaxZ)||!inside
+                ?chunk_state(chunk,x,y,z):(uint16_t)(1<<4);
+            mc_box boxes[3];unsigned count=mc_block_collision(state,boxes);
+            for(unsigned i=0;i<count;i++) {
+                double bx=x+(double)boxes[i].min_x,by=y+(double)boxes[i].min_y,bz=z+(double)boxes[i].min_z;
+                double ex=x+(double)boxes[i].max_x,ey=y+(double)boxes[i].max_y,ez=z+(double)boxes[i].max_z;
+                if(ex>box->minX&&bx<box->maxX&&ey>box->minY&&by<box->maxY&&ez>box->minZ&&bz<box->maxZ) {
+                    AxisAlignedBB *collision=AxisAlignedBB_new(world->heap,bx,by,bz,ex,ey,ez);
+                    if(!collision||!NativeReferenceList_add(list,(MCObject *)collision))return NULL;
+                }
+            }
+        }
+    }
+    MCObjectHeap_touch(world->heap);return (MCObject *)list;
+}
+static bool mp_empty(MCObject *context,MCObject *list,bool *out) {
+    (void)context;
+    if(!NativeReferenceList_isInstance(list)||!out)return fail(list?list->heap:NULL);
+    *out=NativeReferenceList_size((NativeReferenceList *)list)==0;return true;
+}
+static bool mp_position(MCObject *context,EntityPlayerMP *p,double x,double y,double z) {
+    (void)context;return Entity_setPosition(&p->player.living.entity,x,y,z);
+}
+static const WorldBorderDependencies borderDependencies={.currentTimeMillis=NativeWallClock_currentTimeMillis};
+static const EntityPlayerMPConstructorDependencies mpConstructors={
+    .player=&MCGameplayPlayer_nativeConstructorBindings,
+    .newLinkedList=mp_new_list,.currentTimeMillis=NativeWallClock_currentTimeMillis,
+    .getSpawnPoint=mp_spawn,.getProvider=mp_provider,.getHasNoSky=mp_no_sky,.getWorldInfo=mp_world_info,
+    .getWorldGameType=mp_world_type,.getSpawnProtectionSize=mp_protection,.getWorldBorder=mp_border,
+    .getClosestDistance=mp_border_distance,.nextInt=mp_next_int,.getTopSolidOrLiquidBlock=mp_top_solid,
+    .getConfigurationManager=mp_configuration,.getPlayerStatsFile=mp_statistics,
+    .moveToBlockPosAndAngles=mp_move,.getEntityBoundingBox=mp_box,.getCollidingBoundingBoxes=mp_collisions,
+    .isCollisionListEmpty=mp_empty,.setPosition=mp_position
+};
 bool mc_server_graph_init(MCGameplay *game, const mc_world *terrain, int32_t spawnX, int32_t spawnZ,
                           uint64_t seed) {
     if (!MCGameplay_init(game, 256u * 1024u * 1024u))
@@ -685,7 +904,17 @@ bool mc_server_graph_init(MCGameplay *game, const mc_world *terrain, int32_t spa
     if (r)
         r->scoreboard = (RuntimeScoreboard *)MCObjectHeap_alloc(game->heap, sizeof(*r->scoreboard),
                                                                 &boardClass);
-    ok = r && r->scoreboard;
+    if(r&&r->scoreboard)r->server=(RuntimeServer *)MCObjectHeap_alloc(game->heap,sizeof(*r->server),&serverClass);
+    if(r&&r->server)r->server->configuration=(RuntimeConfiguration *)MCObjectHeap_alloc(game->heap,sizeof(RuntimeConfiguration),&configurationClass);
+    if(r&&r->server&&r->server->configuration) {
+        r->server->spawnProtectionSize=16;
+        r->server->configuration->world=w;
+        r->server->configuration->playerStatFiles=NativeReferenceList_new(game->heap);
+        r->border=WorldBorder_new(game->heap,&borderDependencies,(MCObject *)w);
+        r->gameType=&WorldSettingsGameType_SURVIVAL;
+    }
+    ok = r && r->scoreboard&&r->server&&r->server->configuration&&
+        r->server->configuration->playerStatFiles&&r->border;
     if (ok) {
         r->thread = current_thread();
         w->nativeContext = (MCObject *)r;
@@ -702,9 +931,14 @@ bool mc_server_graph_init(MCGameplay *game, const mc_world *terrain, int32_t spa
     MCObjectRootScope_end(&scope);
     return ok && !MCObjectHeap_failed(game->heap);
 }
+bool mc_server_graph_set_world_game_type(MCGameplay *game,const WorldSettingsGameType *type) {
+    MCGameplayWorld *world=mc_server_graph_world(game);RuntimeWorld *r=bindings(world);
+    if(!r||!WorldSettingsGameType_isCanonical(type))return fail(game?game->heap:NULL);
+    r->gameType=type;MCObjectHeap_touch(game->heap);return true;
+}
 static bool add_player(MCGameplay *game, size_t index, const char *uuid,
                                 const char *nameText, int32_t entityId, double x, double y,
-                                double z, bool creative,bool preserveSourceID) {
+                                double z, bool creative,bool preserveSourceID,bool preserveSourcePosition) {
     MCGameplayWorld *w = mc_server_graph_world(game);
     MCObjectHeap *heap = game->heap;
     if (!w || !game->snapshot || index >= MC_TRANSFER_MAX_PLAYERS || w->owners->players[index])
@@ -714,21 +948,23 @@ static bool add_player(MCGameplay *game, size_t index, const char *uuid,
     NativeJavaUUID *id=idText?NativeJavaUUID_fromString(heap,idText):NULL;
     NativeGameProfile *profile=id&&n?NativeGameProfile_new(heap,id,n):NULL;
     RuntimeWorld *r = bindings(w);
-    StatisticsFile *stats =
-        r ? StatisticsFile_nativeNew(heap, (MCObject *)r, NBTString_literalASCII(heap, ""),
-                                     (MCObject *)w, &statisticsDependencies)
-          : NULL;
-    MCGameplayPlayer *p=stats&&profile?MCGameplayPlayer_newWithProfile(w,profile,(StatFileWriter *)stats,&craftingDispatch):NULL;
+    ItemInWorldManager *manager=r&&profile?ItemInWorldManager_new(heap,(MCObject *)w):NULL;
+    EntityPlayerMP *mp=manager?EntityPlayerMP_nativeAllocate(heap):NULL;
+    if(!mp||!EntityPlayerMP_construct(mp,(MCObject *)r->server,(MCObject *)w,profile,manager,
+        &mpConstructors,&craftingDispatch,(MCObject *)mp,w->randomRuntime,NativeEntityIDRuntime_process()))return false;
+    MCGameplayPlayer *p=EntityPlayerMP_asPlayer(mp);
+    if(!MCGameplayPlayer_nativeAttachEnvironment(p,NULL))return false;
     RuntimeActor *a = p ? (RuntimeActor *)MCObjectHeap_alloc(heap, sizeof(*a), &actorClass) : NULL;
     if (!a)
         return false;
     a->actor = p;
     p->effects = (MCObject *)a;
     if (!WorldSettingsGameType_configurePlayerCapabilities(creative?&WorldSettingsGameType_CREATIVE:&WorldSettingsGameType_SURVIVAL,p->capabilities)) return false;
-    a->managerCreative = creative;
+    /* Full initializeGameType/setGameType broadcast bodies remain unported.
+       This native admission binding owns the actual manager enum reference. */
+    manager->gameType=creative?&WorldSettingsGameType_CREATIVE:&WorldSettingsGameType_SURVIVAL;
     if (!preserveSourceID) p->living.entity.entityId = entityId;
-    if(!Entity_setPosition(&p->living.entity,x,y,z))return false;
-    p->living.entity.dimension = w->dimension;
+    if(!preserveSourcePosition&&!Entity_setPosition(&p->living.entity,x,y,z))return false;
     if (!MCGameplay_setPlayer(game, index, uuid, (MCObject *)p) || !MCGameplayPackets_bind(p) ||
         !NetHandlerPlayServer_nativeNew(p, (MCObject *)w, &handlerDependencies))
         return false;
@@ -736,11 +972,14 @@ static bool add_player(MCGameplay *game, size_t index, const char *uuid,
 }
 bool mc_server_graph_add_player(MCGameplay *game,size_t index,const char *uuid,const char *name,
     int32_t id,double x,double y,double z,bool creative) {
-    return add_player(game,index,uuid,name,id,x,y,z,creative,false);
+    return add_player(game,index,uuid,name,id,x,y,z,creative,false,false);
 }
 bool mc_server_graph_add_player_auto(MCGameplay *game,size_t index,const char *uuid,const char *name,
     double x,double y,double z,bool creative) {
-    return add_player(game,index,uuid,name,0,x,y,z,creative,true);
+    return add_player(game,index,uuid,name,0,x,y,z,creative,true,false);
+}
+bool mc_server_graph_create_player(MCGameplay *game,size_t index,const char *uuid,const char *name,bool creative) {
+    return add_player(game,index,uuid,name,0,0,0,0,creative,true,true);
 }
 bool mc_server_graph_drop(MCGameplayPlayer *p, bool all) {
     EntityPlayer_dropOneItem(p, all, &dropDependencies, (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)));
@@ -776,10 +1015,13 @@ static bool item_right_click(MCObject *ctx, const Item *item, ItemStack *stack, 
     return fail(stack->object.heap);
 }
 static bool manager_spectator(MCObject *ctx) {
-    return ((RuntimeActor *)ctx)->managerSpectator;
+    RuntimeActor *a=(RuntimeActor *)ctx;
+    return EntityPlayerMP_isInstance((MCObject *)a->actor)&&EntityPlayerMP_isSpectator((EntityPlayerMP *)a->actor);
 }
 static bool manager_creative(MCObject *ctx) {
-    return ((RuntimeActor *)ctx)->managerCreative;
+    RuntimeActor *a=(RuntimeActor *)ctx;
+    if(!EntityPlayerMP_isInstance((MCObject *)a->actor))return fail(ctx->heap);
+    return ItemInWorldManager_isCreative(((EntityPlayerMP *)a->actor)->theItemInWorldManager);
 }
 static int32_t item_duration(MCObject *ctx, ItemStack *stack) {
     (void)ctx;
@@ -789,8 +1031,7 @@ static int32_t item_duration(MCObject *ctx, ItemStack *stack) {
     return 0;
 }
 static bool using_item(MCObject *ctx, MCGameplayPlayer *p) {
-    (void)p;
-    return ((RuntimeActor *)ctx)->usingItem;
+    (void)ctx;return p->itemInUse!=NULL;
 }
 static bool send_container(MCObject *ctx, MCGameplayPlayer *p, Container *c) {
     (void)ctx;
@@ -818,13 +1059,12 @@ bool mc_server_graph_close(MCGameplayPlayer *p, bool sendClose) {
 bool mc_server_graph_open_workbench(MCGameplayPlayer *p, int32_t x, int32_t y, int32_t z) {
     if (p->openContainer != p->inventoryContainer && !mc_server_graph_close(p, true))
         return false;
-    RuntimeActor *a = actor_bindings(p);
-    if (!a)
-        return false;
-    a->currentWindowId = a->currentWindowId % 100 + 1;
+    if(!EntityPlayerMP_isInstance((MCObject *)p))return fail(((MCObject *)p)->heap);
+    EntityPlayerMP *mp=(EntityPlayerMP *)p;
+    mp->currentWindowId = mp->currentWindowId % 100 + 1;
     mc_buf open;
     start(&open, 0x2d);
-    mc_put_u8(&open, (uint8_t)a->currentWindowId);
+    mc_put_u8(&open, (uint8_t)mp->currentWindowId);
     mc_put_string(&open, "minecraft:crafting_table");
     mc_put_string(&open, "{\"translate\":\"tile.workbench.name\"}");
     mc_put_u8(&open, 0);
@@ -837,7 +1077,7 @@ bool mc_server_graph_open_workbench(MCGameplayPlayer *p, int32_t x, int32_t y, i
     if (!bench)
         return false;
     p->openContainer = &bench->container;
-    bench->container.windowId = a->currentWindowId;
+    bench->container.windowId = mp->currentWindowId;
     MCObjectHeap_touch(p->living.entity.object.heap);
     return Container_onCraftGuiOpened(&bench->container, EntityPlayerMPWindows_listener(p));
 }

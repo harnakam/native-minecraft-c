@@ -38,6 +38,15 @@ double MathHelper_clamp_double(double value,double minimum,double maximum) {
 float MathHelper_clamp_float(float value,float minimum,float maximum) {
     return value<minimum ? minimum : (value>maximum ? maximum : value);
 }
+int32_t MathHelper_floor_double(double value) {
+    int32_t integer=isnan(value)?0:value>=(double)INT32_MAX?INT32_MAX:
+        value<=(double)INT32_MIN?INT32_MIN:(int32_t)value;
+    if(value<(double)integer) {
+        uint32_t bits=(uint32_t)integer-1u;
+        return bits<=INT32_MAX?(int32_t)bits:-1-(int32_t)(UINT32_MAX-bits);
+    }
+    return integer;
+}
 
 NativeJavaUUID *MathHelper_getRandomUuid(NativeJavaRandom *random) {
     if (!random) return NULL;

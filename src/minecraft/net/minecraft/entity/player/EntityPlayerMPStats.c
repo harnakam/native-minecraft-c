@@ -5,10 +5,10 @@ static bool execute(MCGameplayPlayer *p,StatBase *stat,int32_t amount,bool reset
     if(!stat)return true;
     MCObjectHeap *h=p?p->living.entity.object.heap:stat->object.heap;
     if(!MCGameplayPlayer_isInstance((MCObject *)p)||stat->object.heap!=h||!ready(d)||
-        !ref(h,context,true)||!StatisticsFile_isInstance((MCObject *)p->stats)||((MCObject *)p->stats)->heap!=h) {MCObjectHeap_fail(h);return false;}
+        !ref(h,context,true)||!StatisticsFile_isInstance((MCObject *)MCGameplayPlayer_statFile(p))||((MCObject *)MCGameplayPlayer_statFile(p))->heap!=h) {MCObjectHeap_fail(h);return false;}
     MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,h))return false;
     bool ok=MCObjectRootScope_pin(&scope,(MCObject *)p)&&MCObjectRootScope_pin(&scope,(MCObject *)stat)&&MCObjectRootScope_pin(&scope,context);
-    if(ok)ok=reset?StatFileWriter_unlockAchievement(p->stats,(MCObject *)p,stat,0):StatFileWriter_increaseStat(p->stats,(MCObject *)p,stat,amount);
+    if(ok)ok=reset?StatFileWriter_unlockAchievement(MCGameplayPlayer_statFile(p),(MCObject *)p,stat,0):StatFileWriter_increaseStat(MCGameplayPlayer_statFile(p),(MCObject *)p,stat,amount);
     MCObject *board=ok?d->getWorldScoreboard(context,p):NULL;if(ok)ok=ref(h,board,false);
     MCObject *criteria=ok?d->getCriteria(context,stat):NULL;if(ok)ok=ref(h,criteria,true);
     MCObject *collection=ok?d->getObjectivesFromCriteria(context,board,criteria):NULL;if(ok)ok=ref(h,collection,false);
@@ -22,7 +22,7 @@ static bool execute(MCGameplayPlayer *p,StatBase *stat,int32_t amount,bool reset
         if(ok)ok=reset?d->setScorePoints(context,score,0):d->increseScore(context,score,amount);
         ok=ok&&!MCObjectHeap_failed(h);
     }
-    if(ok&&StatisticsFile_func_150879_e((StatisticsFile *)p->stats))ok=StatisticsFile_func_150876_a((StatisticsFile *)p->stats,(MCObject *)p);
+    if(ok&&StatisticsFile_func_150879_e((StatisticsFile *)MCGameplayPlayer_statFile(p)))ok=StatisticsFile_func_150876_a((StatisticsFile *)MCGameplayPlayer_statFile(p),(MCObject *)p);
     if(!ok)MCObjectHeap_fail(h);
     MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(h);
 }

@@ -76,7 +76,9 @@ class WorkbenchTests(unittest.TestCase):
         return peer
 
     def place_table(self, peer):
-        table = (8, math.floor(peer.spawn[1]) - 1, 10)
+        x, z = math.floor(peer.spawn[0]) + 2, math.floor(peer.spawn[2])
+        table = (x, peer.surface(x, z) + 1, z)
+        move(peer, x - 0.5, table[1] + 1, z + 0.5)
         peer.creative(36, 58, 1)
         below = (table[0], table[1] - 1, table[2])
         peer.send(8, position(*below) + b"\x01" + wire_slot(58, 1) + b"\x08\x10\x08")
@@ -178,6 +180,7 @@ class WorkbenchTests(unittest.TestCase):
             owner.open_table(table)
             owner.table_click(10, 0, 1, expected=wire_slot(264, 3))
             owner.table_click(9, 0, 2)
+            move(other, table[0] - 0.5, table[1] + 1, table[2] + 0.5)
             other.send(7, vint(0) + position(*table) + b"\x01")
             self.assertEqual(owner.wait(0x2e), bytes([owner.window]))
             owner.window = 0
@@ -271,6 +274,9 @@ class WorkbenchTests(unittest.TestCase):
         Path(str(self.world) + ".maps.dat").write_bytes(gzip.compress(data))
         with running_server(self.world) as port:
             peer = self.peer(port, "MapMarker")
+            # Marker rounding is tested at a deliberate player position; the
+            # SourceMP constructor's random admission column is independent.
+            move(peer, 8.5, peer.spawn[1], 8.5)
             peer.creative(36, 358, 1)
             packet = peer.wait(0x34)
             _, offset = read_vint(packet)

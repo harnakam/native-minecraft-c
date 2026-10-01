@@ -481,10 +481,6 @@ static bool select_spawn(mc_server *server, server_peer *peer) {
     return false;
 }
 static void join_game(mc_server *server, server_peer *peer) {
-    if (!select_spawn(server, peer)) {
-        disconnect_peer(peer, "No clear spawn is available.");
-        return;
-    }
     peer->gamemode = server->defaultGamemode;
     mc_offline_uuid(peer->name, peer->uuid);
     char uuid[37];
@@ -496,8 +492,8 @@ static void join_game(mc_server *server, server_peer *peer) {
     }
     MCObjectRootScope scope = {0};
     bool ok = MCObjectRootScope_begin(&scope, tx.working.heap);
-    ok = ok && mc_server_graph_add_player_auto(&tx.working,peer->ownerIndex,uuid,peer->name,
-        peer->x,peer->y,peer->z,peer->gamemode==1);
+    ok = ok && mc_server_graph_create_player(&tx.working,peer->ownerIndex,uuid,peer->name,
+        peer->gamemode==1);
     MCGameplayPlayer *p=ok?mc_server_graph_player(&tx.working,peer->ownerIndex):NULL;
     int32_t id=p?p->living.entity.entityId:0;
     char directory[4096], path[4096], error[256] = "Could not load source player";
@@ -527,6 +523,7 @@ static void join_game(mc_server *server, server_peer *peer) {
     if (ok)
         ok = Container_onCraftGuiOpened(p->inventoryContainer,
                                         EntityPlayerMPWindows_listener(p));
+    double playerX=ok?p->living.entity.posX:0,playerY=ok?p->living.entity.posY:0,playerZ=ok?p->living.entity.posZ:0;
     MCObjectRootScope_end(&scope);
     if (!ok) {
         MCGameplay_abort(&tx);
@@ -537,6 +534,7 @@ static void join_game(mc_server *server, server_peer *peer) {
     if (!commit_graph(server, peer, &tx))
         return;
     peer->entity = id;
+    peer->x=playerX;peer->y=playerY;peer->z=playerZ;
     peer->keepalive_at = mc_time_ms();
     mc_buf packet;
     packet_start(&packet, 2);
@@ -1216,7 +1214,7 @@ static int advance_idle_tick(mc_server *server) {
         for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS && !MCObjectHeap_failed(server->gameplay.heap); i++) {
             MCGameplayPlayer *p = (MCGameplayPlayer *)objects->players[i];
             if (p) {
-                NetHandlerPlayServer *handler = (NetHandlerPlayServer *)p->handler;
+                NetHandlerPlayServer *handler = (NetHandlerPlayServer *)MCGameplayPlayer_handler(p);
                 if (handler->itemDropThreshold > 0)
                     --handler->itemDropThreshold;
                 if (!mc_server_graph_tick_inventory(p))
@@ -1254,7 +1252,7 @@ static void tick_items(mc_server *server, uint64_t now) {
             MCGameplayPlayer *p = (MCGameplayPlayer *)o->players[i];
             if (!p)
                 continue;
-            NetHandlerPlayServer *h = (NetHandlerPlayServer *)p->handler;
+            NetHandlerPlayServer *h = (NetHandlerPlayServer *)MCGameplayPlayer_handler(p);
             if (h->itemDropThreshold > 0)
                 --h->itemDropThreshold;
             /* Original InventoryPlayer.decrementAnimations updates main36
@@ -1457,7 +1455,8 @@ int mc_server_main(int argc, char **argv) {
     }
     if (!mc_transfer_recover(path, error, sizeof error) ||
         !mc_server_graph_init(&server->gameplay, &server->world, server->spawn_x, server->spawn_z,
-                              (uint64_t)seed ^ mc_time_ms())) {
+                              (uint64_t)seed ^ mc_time_ms()) ||
+        !mc_server_graph_set_world_game_type(&server->gameplay,gamemode==1?&WorldSettingsGameType_CREATIVE:&WorldSettingsGameType_SURVIVAL)) {
         fprintf(stderr, "Source world initialization/recovery failed: %s\n", error);
         free_world_state(server);
         return 1;

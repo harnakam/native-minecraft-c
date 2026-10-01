@@ -1,6 +1,7 @@
 #include "util/MCGameplayPlayer.h"
 #include "entity/player/EntityPlayer.h"
 #include "client/entity/EntityPlayerSP.h"
+#include "entity/player/EntityPlayerMP.h"
 #include <math.h>
 
 void MCGameplayPlayer_traceFields(MCGameplayPlayer *p,MCObjectVisitor visit,void *context) {
@@ -17,8 +18,26 @@ static void trace(MCObject *object,MCObjectVisitor visit,void *context) {
 }
 static const MCObjectClass klass={"C919.native.GameplayPlayer",MCObjectHeap_plainClone,trace,NULL};
 bool MCGameplayPlayer_isInstance(const MCObject *object) {
-    return object&&(object->klass==&klass||EntityPlayerSP_isInstance(object))&&
+    return object&&(object->klass==&klass||EntityPlayerSP_isInstance(object)||EntityPlayerMP_isInstance(object))&&
         MCObjectHeap_objectSize(object)>=sizeof(MCGameplayPlayer);
+}
+StatFileWriter *MCGameplayPlayer_statFile(MCGameplayPlayer *p) {
+    if(!MCGameplayPlayer_isInstance((MCObject *)p)){MCObjectHeap_fail(p?((MCObject *)p)->heap:NULL);return NULL;}
+    return EntityPlayerMP_isInstance((MCObject *)p)?(StatFileWriter *)((EntityPlayerMP *)p)->statsFile:p?p->stats:NULL;
+}
+MCObject *MCGameplayPlayer_handler(MCGameplayPlayer *p) {
+    if(!MCGameplayPlayer_isInstance((MCObject *)p)){MCObjectHeap_fail(p?((MCObject *)p)->heap:NULL);return NULL;}
+    return EntityPlayerMP_isInstance((MCObject *)p)?(MCObject *)((EntityPlayerMP *)p)->playerNetServerHandler:p?p->handler:NULL;
+}
+bool MCGameplayPlayer_isChangingQuantityOnly(MCGameplayPlayer *p) {
+    if(!MCGameplayPlayer_isInstance((MCObject *)p)){MCObjectHeap_fail(p?((MCObject *)p)->heap:NULL);return false;}
+    return EntityPlayerMP_isInstance((MCObject *)p)?((EntityPlayerMP *)p)->isChangingQuantityOnly:p&&p->isChangingQuantityOnly;
+}
+bool MCGameplayPlayer_setChangingQuantityOnly(MCGameplayPlayer *p,bool value) {
+    if(!MCGameplayPlayer_isInstance((MCObject *)p)){MCObjectHeap_fail(p?((MCObject *)p)->heap:NULL);return false;}
+    if(EntityPlayerMP_isInstance((MCObject *)p))((EntityPlayerMP *)p)->isChangingQuantityOnly=value;
+    else p->isChangingQuantityOnly=value;
+    MCObjectHeap_touch(((MCObject *)p)->heap);return !MCObjectHeap_failed(((MCObject *)p)->heap);
 }
 MCGameplayPlayer *MCGameplayPlayer_nativeAllocate(MCObjectHeap *heap) {
     return (MCGameplayPlayer *)MCObjectHeap_alloc(heap,sizeof(MCGameplayPlayer),&klass);
@@ -64,12 +83,12 @@ static const EntityLivingBaseDependencies living_dependencies={
     .applyEntityAttributes=attributes,.getAttributeMap=attribute_map,.getEntityAttribute=attribute,
     .setHealth=health,.mathRandom=math_random
 };
-static const EntityPlayerDependencies player_dependencies={
+const EntityPlayerDependencies MCGameplayPlayer_nativeConstructorBindings={
     .entity=&entity_dependencies,.living=&living_dependencies,.isRemote=remote,
     .getSpawnPoint=spawn_point,.setLocationAndAngles=player_location
 };
 const EntityPlayerDependencies *MCGameplayPlayer_nativeConstructorDependencies(void) {
-    return &player_dependencies;
+    return &MCGameplayPlayer_nativeConstructorBindings;
 }
 bool MCGameplayPlayer_nativeAttachEnvironment(MCGameplayPlayer *p,StatFileWriter *stats) {
     MCObjectHeap *heap=p?p->living.entity.object.heap:NULL;
@@ -102,7 +121,7 @@ MCGameplayPlayer *MCGameplayPlayer_newWithProfile(MCGameplayWorld *world,NativeG
         MCObjectRootScope_pin(&scope,(MCObject *)stats);
     MCGameplayPlayer *p=ok?MCGameplayPlayer_nativeAllocate(heap):NULL;
     if(p) {
-        ok=EntityPlayer_construct(p,(MCObject *)world,profile,&player_dependencies,crafting,(MCObject *)p,
+        ok=EntityPlayer_construct(p,(MCObject *)world,profile,&MCGameplayPlayer_nativeConstructorBindings,crafting,(MCObject *)p,
             world->randomRuntime,NativeEntityIDRuntime_process());
         if(ok)ok=MCGameplayPlayer_nativeAttachEnvironment(p,stats);
     } else ok=false;

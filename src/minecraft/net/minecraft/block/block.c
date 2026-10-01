@@ -116,3 +116,24 @@ bool mc_block_opaque(uint16_t state) {
         default: return true;
     }
 }
+
+/* Immutable native registry view of the original Block Material references.
+   Metadata does not select a different material. Full Block/Material classes
+   and their constructor/virtual dispatch are separate ports. */
+bool mc_block_material_flags(uint16_t state,bool *movement,bool *leaves) {
+    static const uint8_t flags[198]={
+        0,1,1,1,1,1,0,1,0,0,0,0,1,1,1,1,1,1,
+        3,1,1,1,1,1,1,1,1,0,0,1,0,0,0,1,1,1,
+        1,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,1,1,
+        1,0,1,1,1,0,1,1,1,1,1,0,0,1,1,0,1,1,
+        1,1,1,0,0,0,0,1,1,1,1,0,1,1,1,1,1,1,
+        0,1,1,0,0,1,1,1,1,1,1,1,1,1,0,0,0,1,
+        1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,1,1,1,
+        1,0,1,1,1,0,0,1,1,1,1,1,1,1,0,0,0,0,
+        0,1,1,1,1,0,0,1,1,1,1,1,1,0,1,1,1,3,
+        1,1,1,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+    };
+    if(!movement||!leaves||!mc_block_valid(state))return false;
+    *movement=(flags[state>>4]&1)!=0;*leaves=(flags[state>>4]&2)!=0;return true;
+}

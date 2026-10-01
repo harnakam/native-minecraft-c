@@ -20,6 +20,7 @@ void MCGameplayPlayer_traceFields(MCGameplayPlayer *,MCObjectVisitor,void *conte
    Source subtypes invoke the parent constructor once with these bindings,
    passing the actual same-address Player receiver as its managed context. */
 const EntityPlayerDependencies *MCGameplayPlayer_nativeConstructorDependencies(void);
+extern const EntityPlayerDependencies MCGameplayPlayer_nativeConstructorBindings;
 /* Post-constructor native storage/stat attachment only; it never reruns the
    source parent or validates a profile before a subtype's original getter. */
 bool MCGameplayPlayer_nativeAttachEnvironment(MCGameplayPlayer *,StatFileWriter *);
@@ -30,6 +31,12 @@ bool MCGameplayPlayer_nativeAttachEnvironment(MCGameplayPlayer *,StatFileWriter 
 MCGameplayPlayer *MCGameplayPlayer_new(MCGameplayWorld *,NBTString *,StatFileWriter *,const mc_crafting_dispatch *);
 MCGameplayPlayer *MCGameplayPlayer_newWithProfile(MCGameplayWorld *,NativeGameProfile *,StatFileWriter *,const mc_crafting_dispatch *);
 bool MCGameplayPlayer_isInstance(const MCObject *);
+/* Actual MP source fields take precedence over the native concrete-base tail.
+   These views introduce no independently mutable stat/handler/window mirror. */
+StatFileWriter *MCGameplayPlayer_statFile(MCGameplayPlayer *);
+MCObject *MCGameplayPlayer_handler(MCGameplayPlayer *);
+bool MCGameplayPlayer_isChangingQuantityOnly(MCGameplayPlayer *);
+bool MCGameplayPlayer_setChangingQuantityOnly(MCGameplayPlayer *,bool);
 InventoryPlayer *MCGameplayPlayer_inventory(MCObject *);
 MCObject *MCGameplayPlayer_world(MCObject *);
 PlayerCapabilities *MCGameplayPlayer_capabilities(const MCObject *);

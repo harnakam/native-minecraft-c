@@ -325,6 +325,8 @@ static void callback_failure_stops_source_flow(void) {
 static void native_map_and_drop_bindings(void) {
     mc_world terrain;
     mc_world_init(&terrain, 919);
+    /* Real loaded air chunks close the SourceMP top-solid/collision dependency. */
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&terrain,cx,cz,true));
     for (int count = 0; count < 3; count++)
         for (int creativeMode = 0; creativeMode < 2; creativeMode++) {
             MCGameplay parent = {0};
@@ -434,6 +436,8 @@ static void native_eye_height_and_drop_position(void) {
                                          UINT64_C(0x4050147ae1400000)};
     mc_world terrain;
     mc_world_init(&terrain, 919);
+    /* Real loaded air chunks close the SourceMP top-solid/collision dependency. */
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&terrain,cx,cz,true));
     for (unsigned state = 0; state < 4; ++state) {
         MCGameplay parent = {0};
         CHECK(mc_server_graph_init(&parent, &terrain, 0, 0, 919));

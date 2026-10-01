@@ -16,7 +16,7 @@ from test_client import CLIENT, read_frame, send_frame
 from test_client_inventory import EMPTY, TOOL, TOOL_NBT
 from test_inventory_network import wire_slot, player_file, compound, named, nbt_string, item_metadata
 from test_workbench_network import WorkbenchPeer
-from test_multiplayer import running_server, position, read_vint
+from test_multiplayer import running_server, position, read_vint, flat_world
 from test_multiplayer import string, vint
 
 
@@ -431,6 +431,10 @@ class ClientContainerTests(unittest.TestCase):
     def test_real_server_empty_hand_use_three_by_three_craft_and_close_drop(self):
         with tempfile.TemporaryDirectory(prefix="c919-client-table-") as directory:
             world = Path(directory)/"world.c919"
+            # Real workbench plane covers every ordinary SourceMP spawn column.
+            # A deep aim point makes the actual native raycast hit a nearby
+            # table, without assuming or replacing the random spawn position.
+            flat_world(world, state=58 << 4, height=64)
             saved = player_file(world, "NativeTable")
             saved.parent.mkdir()
             wood = compound(named(1, "Slot", b"\x09"), named(8, "id", nbt_string("minecraft:planks")),
@@ -439,15 +443,21 @@ class ClientContainerTests(unittest.TestCase):
             with running_server(world) as port:
                 witness = WorkbenchPeer(port).login("TableWitness")
                 try:
-                    table = (8, math.floor(witness.spawn[1])-1, 10)
-                    witness.creative(36, 58, 1)
-                    witness.send(8, position(table[0], table[1]-1, table[2])+b"\1"+wire_slot(58, 1)+b"\x08\x10\x08")
-                    witness.wait(0x23, lambda p: p[:8] == position(*table))
-                    witness.creative(36)
+                    self.assertEqual(witness.spawn[1], 65)
+                    self.assertTrue(-2 <= math.floor(witness.spawn[0]) <= 17)
+                    self.assertTrue(-2 <= math.floor(witness.spawn[2]) <= 17)
                     script = "10:0:0,"+",".join(f"{i}:1:0" for i in [1, 2, 3, 4, 6, 7, 8, 9])+",0:0:0"
-                    result, output = self.client(port, "--name", "NativeTable", "--use-block", ",".join(map(str, table)),
+                    result, output = self.client(port, "--name", "NativeTable", "--use-block", "8,0,10",
                                                  "--inventory-actions", script, "--close-inventory", "--run-seconds", "1.5")
                     self.assertEqual(result.returncode, 0, output)
+                    self.assertIn("gamemode=1", output)
+                    x, y, z = map(float, output.split(" position=", 1)[1].split()[0].split(","))
+                    self.assertTrue(-2 <= math.floor(x) <= 17)
+                    self.assertTrue(-2 <= math.floor(z) <= 17)
+                    # Final native physics uses a 1 mm foot collision inset;
+                    # the initial Source S08 height remains checked above.
+                    self.assertGreaterEqual(y, 65 - 0.001)
+                    self.assertLessEqual(y, 65)
                     self.assertIn("inventory_rejections=0 inventory_pending=0", output)
                     self.assertIn("CLIENT_WINDOW id=0", output)
                     self.assertIn("CLIENT_CURSOR id=-1 count=0", output)

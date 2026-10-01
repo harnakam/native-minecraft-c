@@ -28,10 +28,10 @@ GameplayPacketResult GameplayPacketRouter_server(MCGameplay *game, size_t index,
     if (id != 0x0b && id != 0x0d && id != 0x0e && id != 0x0f && id != 0x10 && id != 0x13)
         return MC_GAMEPLAY_PACKET_NOT_HANDLED;
     MCGameplayPlayer *player = actor(game, index, payload);
-    if (!player || !NetHandlerPlayServer_isInstance(player->handler) ||
-        player->handler->heap != game->heap)
+    MCObject *handlerObject=player?MCGameplayPlayer_handler(player):NULL;
+    if (!NetHandlerPlayServer_isInstance(handlerObject) || handlerObject->heap != game->heap)
         return MC_GAMEPLAY_PACKET_FAILED;
-    NetHandlerPlayServer *handler = (NetHandlerPlayServer *)player->handler;
+    NetHandlerPlayServer *handler = (NetHandlerPlayServer *)handlerObject;
     if (handler->playerEntity != player)
         return MC_GAMEPLAY_PACKET_FAILED;
     MCObjectRootScope scope = {0};

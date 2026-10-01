@@ -391,6 +391,8 @@ static void native_registry_identity_is_not_pointer_arithmetic(void) {
 static void actual_server_binding_updates_shared_source_refs(void) {
     mc_world terrain;
     mc_world_init(&terrain, 919);
+    /* Real loaded air chunks close the SourceMP top-solid/collision dependency. */
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&terrain,cx,cz,true));
     MCGameplay parent = {0};
     CHECK(mc_server_graph_init(&parent, &terrain, 0, 0, 919));
     MCGameplayTransaction transaction = {0};

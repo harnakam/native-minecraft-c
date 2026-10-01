@@ -140,6 +140,8 @@ static void constructor_results_and_graph_lifetime(void) {
 }
 static void actual_server_drop_and_client_spawn(void) {
     mc_world terrain;mc_world_init(&terrain,919);MCGameplay game={0};
+    /* Real loaded air chunks close the SourceMP top-solid/collision dependency. */
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&terrain,cx,cz,true));
     CHECK(mc_server_graph_init(&game,&terrain,0,0,919));MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));
     MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
     Clock clock;NativeJavaRandomRuntime *service=runtime(&clock,100);
@@ -191,6 +193,8 @@ static void actual_server_drop_and_client_spawn(void) {
 static void source_pickup_silent_byte(void) {
     static const int8_t values[]={0,1,2,4,-1};
     mc_world terrain;mc_world_init(&terrain,919);MCGameplay game={0};
+    /* Real loaded air chunks close the SourceMP top-solid/collision dependency. */
+    for(int cz=-1;cz<=1;cz++)for(int cx=-1;cx<=1;cx++)CHECK(mc_world_chunk(&terrain,cx,cz,true));
     CHECK(mc_server_graph_init(&game,&terrain,0,0,919));
     for(size_t i=0;i<sizeof values/sizeof *values;i++) {
         MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));

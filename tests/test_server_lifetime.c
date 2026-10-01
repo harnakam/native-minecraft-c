@@ -8,7 +8,9 @@ static unsigned checks;
 
 static mc_server *fixture(void) {
     mc_server *server=(mc_server *)calloc(1,sizeof(*server));CHECK(server);
-    mc_world_init(&server->world,919);CHECK(mc_server_graph_init(&server->gameplay,&server->world,0,0,1));
+    mc_world_init(&server->world,919);
+    for(int z=-1;z<=1;z++)for(int x=-1;x<=1;x++)CHECK(mc_world_chunk(&server->world,x,z,true));
+    CHECK(mc_server_graph_init(&server->gameplay,&server->world,0,0,1));
     MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&server->gameplay,&tx));
     MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
     CHECK(mc_server_graph_add_player_auto(&tx.working,0,"00000000-0000-0000-0000-000000000001","Alice",.5,80,.5,true));
