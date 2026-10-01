@@ -65,6 +65,7 @@ MCObject *DataWatcher_boxFloat(MCObjectHeap *h, float n) {
         v->value.real = n;
     return (MCObject *)v;
 }
+bool DataWatcher_blockPosIsInstance(const MCObject *o) { return o && o->klass == &posClass; }
 DataWatcherBlockPos *DataWatcher_blockPos(MCObjectHeap *h, int32_t x, int32_t y, int32_t z) {
     DataWatcherBlockPos *p = (DataWatcherBlockPos *)MCObjectHeap_alloc(h, sizeof(*p), &posClass);
     if (p) {

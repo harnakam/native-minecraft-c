@@ -1,4 +1,5 @@
 #include "util/MCGameplayWorld.h"
+#include "world/storage/MapData.h"
 
 static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
     MCGameplayWorld *world=(MCGameplayWorld *)object;
@@ -7,8 +8,11 @@ static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
     world->furnace=(FurnaceRecipes *)visitor((MCObject *)world->furnace,context);
     world->statList=(StatList *)visitor((MCObject *)world->statList,context);
     world->itemDisplayContext=visitor(world->itemDisplayContext,context);
+    world->nativeContext=visitor(world->nativeContext,context);
+    world->emptyMapUseStat=(StatBase *)visitor((MCObject *)world->emptyMapUseStat,context);
     world->savedItemFields=(NBTTagCompound *)visitor((MCObject *)world->savedItemFields,context);
     world->savedItemRootName=(NBTString *)visitor((MCObject *)world->savedItemRootName,context);
+    MapData_traceReferences(&world->maps,visitor,context);
     for (size_t i=0;i<MC_GAMEPLAY_CRAFT_STAT_COUNT;i++)
         world->craftStats[i]=(StatBase *)visitor((MCObject *)world->craftStats[i],context);
 }

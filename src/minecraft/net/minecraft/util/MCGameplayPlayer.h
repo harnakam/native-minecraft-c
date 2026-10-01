@@ -23,6 +23,10 @@ typedef struct MCGameplayPlayer {
     float rotationYaw,rotationPitch;
     int32_t entityId;
     bool creative,spectator,silent,isChangingQuantityOnly;
+    /* Native inherited Entity state, shared by the translated map dependencies. */
+    bool isDead;
+    bool sleeping,sneaking;
+    int32_t dimension;
     MCObject *handler,*effects,*pendingPackets;
     const EntityPlayerMPWindowsDependencies *windowDependencies;
 } MCGameplayPlayer;

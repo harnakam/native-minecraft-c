@@ -7,6 +7,7 @@ struct S1CPacketEntityMetadata {
     int32_t entityId;
     WatchableObjectList *field_149378_b;
 };
+bool S1CPacketEntityMetadata_isInstance(const MCObject *);
 S1CPacketEntityMetadata *S1CPacketEntityMetadata_new_empty(MCObjectHeap *);
 S1CPacketEntityMetadata *S1CPacketEntityMetadata_new(MCObjectHeap *, int32_t, DataWatcher *,
                                                      bool all);

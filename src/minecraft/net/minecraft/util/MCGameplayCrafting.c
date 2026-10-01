@@ -60,10 +60,18 @@ bool MCGameplayCrafting_configureWorld(MCGameplayWorld *world, ItemStackDisplayN
          StatList_initAchievementIdentities(stats) &&
          StatList_fillCraftStats(stats, craftStats, MC_GAMEPLAY_CRAFT_STAT_COUNT) &&
          !MCObjectHeap_failed(h);
+    /* Native constructor/registration adapter for this needed StatList use
+       entry. The ID and Item reference are the original empty-map identity. */
+    StatCrafting *mapUse = ok ? StatCrafting_newIdentity(h,
+        NBTString_literalASCII(h,"stat.useItem."),NBTString_literalASCII(h,"minecraft.map"),
+        ItemStack_registryItem(395)) : NULL;
+    if (ok)
+        ok = mapUse && StatList_registerStat(stats,(StatBase *)mapUse);
     if (ok) {
         world->manager = manager;
         world->furnace = furnace;
         world->statList = stats;
+        world->emptyMapUseStat = (StatBase *)mapUse;
         for (size_t i = 0; i < MC_GAMEPLAY_CRAFT_STAT_COUNT; i++)
             world->craftStats[i] = craftStats[i];
         world->itemDisplayName = display;

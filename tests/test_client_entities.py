@@ -15,7 +15,7 @@ from test_client import CLIENT, read_frame, send_frame
 from test_client_inventory import EMPTY, TOOL, TOOL_NBT
 from test_multiplayer import string, vint
 from test_multiplayer import running_server, read_vint
-from test_inventory_network import InventoryPeer, compound, named, nbt_string, player_file, parse_slot, wire_slot, inventory_payload
+from test_inventory_network import InventoryPeer, compound, named, nbt_string, player_file, wire_slot, item_metadata
 
 
 def spawn(eid, x=8, y=7, z=8):
@@ -79,6 +79,12 @@ def entity_peer(kind="lifecycle", inventory=None, cursor=EMPTY, ack_snapshot=Non
                     send_frame(sock, 0x1c, vint(20)+extra, True)
                 elif kind == "malformed_destroy":
                     send_frame(sock, 0x13, vint(2)+vint(20), True)
+                elif kind == "outer_position":
+                    send_frame(sock, 0x18, vint(20)+struct.pack(">iiiBBB", 40000000*32, 224, 256, 0, 0, 0), True)
+                elif kind == "unsupported_spawn":
+                    send_frame(sock, 0x0e, spawn(99, x=67108833), True)
+                elif kind == "unsupported_teleport":
+                    send_frame(sock, 0x18, vint(20)+struct.pack(">iiiBBB", 67108833*32, 224, 256, 0, 0, 0), True)
                 elif kind == "aggregate":
                     large = named(10, "", named(7, "unknown", struct.pack(">i", 1100000)+bytes(1100000))+b"\0")
                     slot = wire_slot(387, 1, tag=large)
@@ -164,7 +170,7 @@ class ClientEntityTests(unittest.TestCase):
         self.assertRegex(output, r"CLIENT_ITEM eid=20 ready=0 id=-1 count=0")
         self.assertRegex(output, r"CLIENT_ITEM eid=21 ready=0 id=-1 count=0")
 
-    def test_all_metadata_types_and_atomic_destroy_and_nbt_aggregate_limit(self):
+    def test_all_metadata_types_atomic_destroy_and_cumulative_large_tags(self):
         with entity_peer("all_metadata") as (port, _):
             result, output = self.client(port)
         self.assertEqual(result.returncode, 0, output)
@@ -175,9 +181,9 @@ class ClientEntityTests(unittest.TestCase):
         self.assertIn("item_entities=3", output)
         with entity_peer("aggregate") as (port, _):
             result, output = self.client(port)
-        self.assertNotEqual(result.returncode, 0, output)
+        self.assertEqual(result.returncode, 0, output)
         self.assertRegex(output, r"CLIENT_ITEM eid=20 ready=1 id=387 count=1 damage=0 nbt_size=1100018")
-        self.assertRegex(output, r"CLIENT_ITEM eid=21 ready=1 id=276 count=1 damage=7")
+        self.assertRegex(output, r"CLIENT_ITEM eid=21 ready=1 id=387 count=1 damage=0 nbt_size=1100018")
 
     def test_chunk_unload_and_respawn_remove_entities(self):
         for kind in ["unload", "respawn"]:
@@ -188,6 +194,20 @@ class ClientEntityTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, output)
             self.assertIn("item_entities=0", output)
 
+    def test_native_item_coordinate_envelope_is_consistent_and_atomic(self):
+        with entity_peer("outer_position") as (port, _):
+            result, output = self.client(port)
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("server_position=40000000.000,7.000,8.000", output)
+        for kind in ["unsupported_spawn", "unsupported_teleport"]:
+            with entity_peer(kind) as (port, _):
+                result, output = self.client(port)
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("Malformed", output)
+            self.assertIn("item_entities=3 item_spawns=3", output)
+            self.assertIn("server_position=8.000,7.000,8.000", output)
+            self.assertNotIn("CLIENT_ITEM eid=99", output)
+
     def test_q_and_control_q_emit_real_digging_drop_actions(self):
         slots = [EMPTY]*45
         slots[36] = struct.pack(">hBhB", 1, 3, 0, 0)
@@ -196,7 +216,9 @@ class ClientEntityTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, output)
         drops = [packet for kind, packet in observed if kind == 7]
         self.assertEqual(drops, [b"\4"+bytes(9), b"\3"+bytes(9)])
-        self.assertNotIn("CLIENT_SLOT index=36", output)
+        # Original EntityPlayerSP.dropOneItem only sends C07. Inventory changes
+        # arrive from the server, and this independent peer sends none.
+        self.assertIn("CLIENT_SLOT index=36 id=1 count=3", output)
 
     def test_invalid_drop_and_signed_click_scripts_fail_before_connect(self):
         for options in [["--drop-actions", "one,"], ["--drop-actions", "many"],
@@ -322,10 +344,9 @@ class ClientEntityTests(unittest.TestCase):
                     expected = {(266, 9, 0), (1, 1, 0), (1, 2, 0)}
                     while expected:
                         packet = witness.wait(0x1c)
-                        _, offset = read_vint(packet)
-                        if packet[offset] == 0xaa:
-                            slot, _ = parse_slot(packet, offset+1)
-                            expected.discard(slot[:3])
+                        item = item_metadata(packet)
+                        if item is not None:
+                            expected.discard(item[1][:3])
                 finally:
                     witness.close()
 
@@ -369,8 +390,8 @@ class ClientEntityTests(unittest.TestCase):
                                 self.assertEqual(collector, witness.entity)
                                 collected = True
                     self.assertTrue(collected, "walking witness did not collect the delayed drop")
-                    inventory = next(packet for kind, packet in reversed(witness.observed) if kind == 0x30)
-                    self.assertTrue(any(slot[:3] == (1, 3, 0) for slot in inventory_payload(inventory)))
+                    inventory, _ = witness.snapshot()
+                    self.assertTrue(any(slot[:3] == (1, 3, 0) for slot in inventory))
                     worker.join(8)
                     self.assertFalse(worker.is_alive())
                     result, output = results[0]
@@ -379,7 +400,9 @@ class ClientEntityTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, output)
             self.assertNotIn("CLIENT_SLOT index=36 ", output)
             self.assertIn("item_entities=0", output)
-            self.assertRegex(output, r"item_spawns=1 item_metadata=1 item_collects=1")
+            # Initial getAllWatched does not clear dirty flags; the following
+            # getChanged emission is a second actual S1C for the same entity.
+            self.assertRegex(output, r"item_spawns=1 item_metadata=2 item_collects=1")
 
 
 if __name__ == "__main__":

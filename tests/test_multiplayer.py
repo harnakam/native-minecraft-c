@@ -132,7 +132,7 @@ class Peer:
             self.initial.append((packet_id, payload))
             if packet_id == 1:
                 self.entity = struct.unpack_from(">i", payload)[0]
-                assert payload[4] == 1, "server must join in creative mode"
+                assert payload[4] == getattr(self, "expected_gamemode", 1), "unexpected server gamemode"
             elif packet_id == 8:
                 self.spawn = struct.unpack_from(">dddffB", payload)
                 self.send(6, struct.pack(">dddffB", *self.spawn[:5], 0))
@@ -154,13 +154,14 @@ class Peer:
 
 
 @contextlib.contextmanager
-def running_server(world, crash=False):
+def running_server(world, crash=False, gamemode=1):
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port = reserve.getsockname()[1]
     log = tempfile.TemporaryFile(mode="w+b")
     process = subprocess.Popen([str(SERVER), "--bind", "127.0.0.1", "--port", str(port),
-                                "--world", str(world), "--run-seconds", "30"], stdout=log, stderr=log)
+                                "--world", str(world), "--gamemode", str(gamemode),
+                                "--run-seconds", "30"], stdout=log, stderr=log)
     try:
         deadline = time.monotonic() + 5
         while True:

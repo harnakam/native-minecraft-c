@@ -218,7 +218,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
                     else r->inventory_focus=inventory_neighbor(r,(int)wparam);
                 } else if (wparam>= '1' && wparam<='9') {
                     if (r->creative_open) r->pending.select_slot=(int)(wparam-'1');
-                    else {
+                    else if (!r->cursor_present && !r->inventory_blocked) {
                         int hit=inventory_hit(r,r->mouse_x,r->mouse_y); if (hit<0 || hit>=inventory_slots(r)) hit=r->inventory_focus;
                         r->pending.inventory_click=true; r->pending.inventory_slot=hit; r->pending.inventory_button=(int)(wparam-'1'); r->pending.inventory_mode=2;
                     }
@@ -540,25 +540,33 @@ static void block_icon(int x, int y, int id) {
     }
 }
 
-static void slot_icon(mc_renderer *r,const mc_slot *slot,int x,int y,int width,bool focused,bool blocked) {
+typedef struct { bool present,tagged; int32_t id,count,damage; } slot_render;
+static slot_render render_stack(const ItemStack *s) {
+    return (slot_render){s!=NULL,s && s->stackTagCompound,s ? ItemStack_registryId(s->item) : -1,s ? s->stackSize : 0,s ? s->itemDamage : 0};
+}
+static void slot_icon_view(mc_renderer *r,slot_render slot,int x,int y,int width,bool focused,bool blocked) {
     if (focused) panel((float)(x-2),(float)(y-2),(float)(width+4),(float)(width+4),0.75f,0.87f,0.78f,1);
     panel((float)x,(float)y,(float)width,(float)width,blocked ? 0.10f : 0.13f,blocked ? 0.12f : 0.18f,blocked ? 0.13f : 0.20f,1);
-    if (slot->item_id<0) return;
+    if (!slot.present) return;
     uint16_t state;
-    if (mc_item_block_state(slot->item_id,slot->damage,&state)) block_icon(x+width/2,y+width/2,(int)(state>>4));
+    if (mc_item_block_state(slot.id,slot.damage,&state)) block_icon(x+width/2,y+width/2,(int)(state>>4));
     else {
-        const char *name=mc_item_name(slot->item_id),*last=strrchr(name,' '); if (last) name=last+1;
+        const char *name=mc_item_name(slot.id),*last=strrchr(name,' '); if (last) name=last+1;
         char caption[6]; size_t count=strlen(name); if (count>5) count=5;
         while (count && ((unsigned char)name[count]&0xc0u)==0x80u) --count;
         memcpy(caption,name,count); caption[count]=0;
         text_line(r,x+5,y+width/2-11,width-10,caption,0.87f,0.91f,0.95f);
     }
-    if (slot->nbt.size) panel((float)(x+width-8),(float)(y+5),3,3,0.93f,0.74f,0.34f,1);
-    if (slot->count>1) {
-        char number[8]; snprintf(number,sizeof(number),"%u",(unsigned)slot->count); int pixels=0;
+    if (slot.tagged) panel((float)(x+width-8),(float)(y+5),3,3,0.93f,0.74f,0.34f,1);
+    if (slot.count!=1) {
+        char number[16]; snprintf(number,sizeof(number),"%d",slot.count); int pixels=0;
         for (const char *p=number;*p;p++) { glyph_cache *glyph=get_glyph(r,(WCHAR)*p); if (glyph) pixels+=glyph->width; }
-        text_line(r,x+width-3-pixels,y+width-22,pixels,number,1,1,0.94f);
+        text_line(r,x+width-3-pixels,y+width-22,pixels,number,1,slot.count<1 ? 0.3f : 1,slot.count<1 ? 0.3f : 0.94f);
     }
+}
+
+static void slot_icon(mc_renderer *r,const ItemStack *slot,int x,int y,int width,bool focused,bool blocked) {
+    slot_icon_view(r,render_stack(slot),x,y,width,focused,blocked);
 }
 
 static void draw_inventory(mc_renderer *r,const mc_client *c) {
@@ -573,8 +581,8 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
         text(r,g.x+g.width-170,g.y+17,101,r->creative_open ? "Inventory (C)" : "Creative (C)",0.91f,0.96f,0.92f);
     }
     int hover=inventory_hit(r,r->mouse_x,r->mouse_y);
-    const mc_slot *tooltip=NULL; mc_slot creative; mc_slot_init(&creative);
-    bool blocked=!mc_client_inventory_ready(c) || c->inventory_pending || c->inventory_sync || r->paused || !r->focused;
+    ItemStack *tooltip=NULL; slot_render creative={0};
+    bool blocked=!mc_client_inventory_ready(c) || r->paused || !r->focused;
     if (r->creative_open) {
         text(r,g.x+g.width/2-73,g.y+74,150,"Page Up / Down",0.76f,0.84f,0.84f);
         panel((float)(g.x+18),(float)(g.y+68),70,32,0.16f,0.23f,0.25f,1); text(r,g.x+28,g.y+74,50,"Prev",r->creative_page ? 0.94f : 0.46f,0.86f,0.81f);
@@ -583,13 +591,12 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
         text(r,g.x+18,g.y+103,g.width-36,line,0.71f,0.80f,0.80f);
         for (int i=0;i<36;i++) {
             unsigned index=r->creative_page*36u+(unsigned)i; int16_t id,damage;
-            mc_slot item; mc_slot_init(&item);
-            if (mc_item_creative_at(index,&id,&damage)) (void)mc_slot_set(&item,id,(uint8_t)mc_item_stack_limit(id),damage);
+            slot_render item={0};
+            if (mc_item_creative_at(index,&id,&damage)) item=(slot_render){true,false,id,mc_item_stack_limit(id),damage};
             int x=g.x+18+(i%9)*g.cell,y=g.grid_y+(i/9)*g.cell;
-            slot_icon(r,&item,x,y,g.cell-4,r->creative_focus==i || hover==1000+(int)index,blocked);
-            if (item.item_id>=0 && damage) { snprintf(line,sizeof(line),"%d",damage); text(r,x+3,y+1,24,line,0.78f,0.85f,0.95f); }
-            if (hover==1000+(int)index || (hover<0 && r->creative_focus==i)) { (void)mc_slot_copy(&creative,&item); tooltip=&creative; }
-            mc_slot_free(&item);
+            slot_icon_view(r,item,x,y,g.cell-4,r->creative_focus==i || hover==1000+(int)index,blocked);
+            if (item.present && damage) { snprintf(line,sizeof(line),"%d",damage); text(r,x+3,y+1,24,line,0.78f,0.85f,0.95f); }
+            if (hover==1000+(int)index || (hover<0 && r->creative_focus==i)) creative=item;
         }
     } else {
         if (r->workbench) {
@@ -603,7 +610,7 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
         text_line(r,g.x+18,g.grid_y-24,g.width-36,"Storage   |   Shift transfer / 1-9 swap / Q drop",0.69f,0.81f,0.81f);
         for (int slot=0;slot<(r->workbench ? 37 : 36);slot++) {
             int x,y; inventory_slot_position(&g,slot,&x,&y);
-            const mc_slot *item=mc_client_window_slot(c,slot);
+            ItemStack *item=mc_client_window_slot(c,slot);
             slot_icon(r,item,x,y,g.cell-4,slot==r->inventory_focus || slot==hover,blocked);
             if (slot==hover || (hover<0 && slot==r->inventory_focus)) tooltip=item;
         }
@@ -611,16 +618,17 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
     int hotbar_start=r->workbench ? 37 : 36;
     for (int slot=hotbar_start;slot<inventory_slots(r);slot++) {
         int x,y; inventory_slot_position(&g,slot,&x,&y);
-        bool focus=r->creative_open ? slot-36==c->selected || r->creative_focus==slot : slot==r->inventory_focus;
-        const mc_slot *item=mc_client_window_slot(c,slot);
+        bool focus=r->creative_open ? slot-36==mc_client_selected(c) || r->creative_focus==slot : slot==r->inventory_focus;
+        ItemStack *item=mc_client_window_slot(c,slot);
         slot_icon(r,item,x,y,g.cell-4,focus || slot==hover,blocked);
         snprintf(line,sizeof(line),"%d",slot-hotbar_start+1); text(r,x+3,y+1,20,line,0.80f,0.87f,0.84f);
         if (slot==hover || (hover<0 && focus)) tooltip=item;
     }
-    if (tooltip && tooltip->item_id>=0) {
-        char name[256]; mc_client_slot_name(tooltip,name,sizeof(name));
+    if (tooltip || creative.present) {
+        char name[256]; if (tooltip) mc_client_slot_name(tooltip,name,sizeof name); else snprintf(name,sizeof name,"%s",mc_item_name((int16_t)creative.id));
         text_line(r,g.x+18,g.y+g.height-81,g.width-36,name,0.91f,0.92f,0.86f);
-        snprintf(line,sizeof(line),"Count %u  |  damage / variant %d%s",(unsigned)tooltip->count,tooltip->damage,tooltip->nbt.size ? "  |  custom data" : "");
+        slot_render info=tooltip ? render_stack(tooltip) : creative;
+        snprintf(line,sizeof(line),"Count %d  |  damage / variant %d%s",info.count,info.damage,info.tagged ? "  |  custom data" : "");
         text_line(r,g.x+18,g.y+g.height-60,g.width-36,line,0.75f,0.83f,0.83f);
     } else {
         text_line(r,g.x+18,g.y+g.height-81,g.width-36,"Enter: left click   Space: right click",0.80f,0.86f,0.83f);
@@ -628,11 +636,10 @@ static void draw_inventory(mc_renderer *r,const mc_client *c) {
     }
     const char *status=r->paused ? "Controls paused: Esc resumes inventory interaction" : c->inventory_status[0] ? c->inventory_status : "Waiting for server inventory";
     text_line(r,g.x+18,g.y+g.height-34,g.width-36,status,blocked ? 0.96f : 0.64f,blocked ? 0.77f : 0.83f,blocked ? 0.53f : 0.76f);
-    if (c->inventory.cursor.item_id>=0) {
+    if (mc_client_cursor(c)) {
         int x=r->mouse_x+12,y=r->mouse_y+12; if (x+52>r->width) x=r->width-52; if (y+52>r->height) y=r->height-52;
-        slot_icon(r,&c->inventory.cursor,x,y,48,true,false);
+        slot_icon(r,mc_client_cursor(c),x,y,48,true,false);
     }
-    mc_slot_free(&creative);
 }
 
 static void draw_players(mc_renderer *r, const mc_client *c) {
@@ -667,36 +674,37 @@ static void draw_target(const mc_client *c) {
 }
 static void draw_items(mc_renderer *r,const mc_client *c) {
     double time=mc_time_ms()/1000.0;
-    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) {
-        const mc_client_item *entry=&c->items[i]; const mc_item_entity *e=&entry->entity;
-        if (!entry->active || !entry->metadata_ready) continue;
-        double dx=e->x-c->x,dz=e->z-c->z; if (dx*dx+dz*dz>96*96) continue;
-        glPushMatrix(); glTranslated(e->x,e->y+0.16+sin(time*2+e->eid)*0.025,e->z); glRotated(time*55+(double)e->eid*13,0,1,0);
-        uint16_t state; unsigned count=e->item.count>48 ? 5 : e->item.count>32 ? 4 : e->item.count>16 ? 3 : e->item.count>1 ? 2 : 1;
-        if (mc_item_block_state(e->item.item_id,e->item.damage,&state)) {
+    for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) {
+        const mc_client_item *entry=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,entry->eid);
+        if (!entry->active || !entry->metadata_ready || !e) continue;
+        ItemStack *stack=EntityItem_getEntityItem(e); if (!stack) continue;
+        double dx=e->posX-c->x,dz=e->posZ-c->z; if (dx*dx+dz*dz>96*96) continue;
+        glPushMatrix(); glTranslated(e->posX,e->posY+0.16+sin(time*2+e->entityId)*0.025,e->posZ); glRotated(time*55+(double)e->entityId*13,0,1,0);
+        uint16_t state; unsigned count=stack->stackSize>48 ? 5 : stack->stackSize>32 ? 4 : stack->stackSize>16 ? 3 : stack->stackSize>1 ? 2 : 1;
+        if (mc_item_block_state(ItemStack_registryId(stack->item),stack->itemDamage,&state)) {
             float red,green,blue; material_color(state>>4,1,0,&red,&green,&blue);
             for (unsigned n=0;n<count;n++) { double offset=n*0.035; box(-0.12+offset,-0.12,-0.12+offset,0.12+offset,0.12,0.12+offset,red,green,blue); }
         } else {
-            unsigned color=(unsigned)e->item.item_id*2654435761u;
+            unsigned color=(unsigned)ItemStack_registryId(stack->item)*2654435761u;
             float red=0.4f+(color&255)/640.0f,green=0.4f+((color>>8)&255)/640.0f,blue=0.4f+((color>>16)&255)/640.0f;
             for (unsigned n=0;n<count;n++) { double offset=n*0.025; box(-0.13+offset,-0.13,-0.025+offset,0.13+offset,0.13,0.025+offset,red,green,blue); }
         }
-        if (e->item.nbt.size) box(-0.025,0.10,-0.025,0.025,0.16,0.025,0.95f,0.73f,0.30f);
+        if (stack->stackTagCompound) box(-0.025,0.10,-0.025,0.025,0.16,0.025,0.95f,0.73f,0.30f);
         glPopMatrix();
         if (dx*dx+dz*dz<12*12) {
-            const char *name=mc_item_name(e->item.item_id); glColor3f(0.97f,0.98f,0.91f); glRasterPos3d(e->x-0.15,e->y+0.5,e->z);
+            const char *name=mc_item_name(ItemStack_registryId(stack->item)); glColor3f(0.97f,0.98f,0.91f); glRasterPos3d(e->posX-0.15,e->posY+0.5,e->posZ);
             for (unsigned n=0;n<12 && name[n];n++) { glyph_cache *glyph=get_glyph(r,(WCHAR)(unsigned char)name[n]); if (glyph) glCallList(glyph->list); }
         }
     }
 }
 
 static void draw_held_map(mc_renderer *r,const mc_client *c) {
-    const mc_slot *held=&c->inventory.slots[MC_HOTBAR_START+c->selected];
-    if (held->item_id!=358 || c->inventory_open) return;
-    const mc_map_info *map=mc_maps_find_const(&c->maps,held->damage);
+    ItemStack *held=mc_client_player_slot(c,36+mc_client_selected(c));
+    if (!held || ItemStack_registryId(held->item)!=358 || c->inventory_open) return;
+    const mc_map_info *map=mc_maps_find_const(mc_client_maps(c),held->itemDamage);
     int left=r->width-184,top=16; float pixel=1.125f; char label[64];
     panel((float)left,(float)top,168,194,0.055f,0.08f,0.09f,0.94f);
-    snprintf(label,sizeof(label),"Map %d%s",held->damage,map ? "" : " | waiting");
+    snprintf(label,sizeof(label),"Map %d%s",held->itemDamage,map ? "" : " | waiting");
     text_line(r,left+12,top+8,144,label,0.96f,0.96f,0.89f);
     if (!map) { text_line(r,left+12,top+70,144,"Waiting for server pixels",0.76f,0.83f,0.81f); return; }
     panel((float)(left+12),(float)(top+34),144,144,0.73f,0.72f,0.67f,1);
@@ -742,14 +750,14 @@ static void draw_hud(mc_renderer *r, const mc_client *c) {
     panel((float)(bar_x-8),(float)(bar_y-7),(float)(9*slot_width+16),63,0.055f,0.08f,0.09f,0.90f);
     for (int i=0;i<9;++i) {
         int x=bar_x+i*slot_width;
-        if (i==c->selected) {
+        if (i==mc_client_selected(c)) {
             panel((float)x,(float)bar_y,(float)(slot_width-3),49,0.35f,0.65f,0.63f,0.96f);
             panel((float)(x+2),(float)(bar_y+2),(float)(slot_width-7),45,0.10f,0.20f,0.20f,1);
         } else panel((float)x,(float)bar_y,(float)(slot_width-3),49,0.14f,0.19f,0.20f,0.95f);
-        slot_icon(r,&c->inventory.slots[36+i],x+3,bar_y+3,slot_width-9,false,false);
+        slot_icon(r,mc_client_player_slot(c,36+i),x+3,bar_y+3,slot_width-9,false,false);
         snprintf(line,sizeof(line),"%d",i+1); text(r,x+5,bar_y+1,20,line,0.81f,0.86f,0.83f);
     }
-    char selected_name[256]; mc_client_slot_name(&c->inventory.slots[36+c->selected],selected_name,sizeof(selected_name));
+    char selected_name[256]; mc_client_slot_name(mc_client_player_slot(c,36+mc_client_selected(c)),selected_name,sizeof(selected_name));
     snprintf(line,sizeof(line),"%s  |  %s",selected_name,c->gamemode==1?(c->flying?"Creative / flying":"Creative / walking"):"Server game mode");
     text(r,bar_x,bar_y-31,9*slot_width,line,0.98f,0.97f,0.89f);
     text_line(r,16,r->height-27,r->width-32,"WASD move   Q / Ctrl-Q drop   E inventory   Mouse edit   T chat   Esc cursor",0.90f,0.93f,0.92f);
@@ -785,9 +793,37 @@ static void draw_hud(mc_renderer *r, const mc_client *c) {
     glDisable(GL_BLEND); glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE);
 }
 
+static void draw_graph_error(mc_renderer *r,const mc_client *c) {
+    /* This native error surface must remain usable without borrowing a failed
+       graph. It reads only the client's scalar status and window state. */
+    r->inventory_open=false; r->creative_open=false; r->creative_allowed=false; r->catalog_allowed=false;
+    r->drag_capture=false; r->cursor_present=false; r->inventory_blocked=true; r->chat_open=false; r->paused=true;
+    ReleaseCapture(); release_cursor(r);
+    bool quit=r->pending.quit; memset(&r->pending,0,sizeof r->pending);
+    r->pending.quit=quit; r->pending.select_slot=-1; r->pending.creative_pick=-1;
+    const char *status=c->failed ? c->status : "Cannot borrow source client graph";
+    char title[512]; WCHAR wide[512];
+    snprintf(title,sizeof title,"C919 | %s | %.180s:%u",status,c->host,(unsigned)c->port);
+    MultiByteToWideChar(CP_UTF8,0,title,-1,wide,512); SetWindowTextW(r->window,wide);
+    snprintf(r->title,sizeof r->title,"%s",title);
+    glViewport(0,0,r->width,r->height); glClearColor(0.035f,0.06f,0.075f,1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glDisable(GL_FOG); glEnable(GL_BLEND);
+    glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0,r->width,r->height,0,-1,1);
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    int width=r->width<600 ? r->width-48 : 560,x=(r->width-width)/2,y=r->height/2-76;
+    panel((float)x,(float)y,(float)width,156,0.06f,0.10f,0.115f,1);
+    text(r,x+25,y+20,width-50,"Connection error",0.97f,0.98f,0.94f);
+    text_line(r,x+25,y+55,width-50,status,1.0f,0.65f,0.57f);
+    text(r,x+25,y+112,width-50,"Close the window to leave the server.",0.59f,0.71f,0.72f);
+    glDisable(GL_BLEND); glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE); glFlush();
+    if (!r->hidden) SwapBuffers(r->dc);
+}
+
 void mc_renderer_draw(mc_renderer *r, const mc_client *c) {
     if (r->width<1||r->height<1) return;
-    r->selected=c->selected;
+    MCObjectRootScope frame={0};
+    if (!MCObjectRootScope_begin(&frame,c->gameplay.heap)) { draw_graph_error(r,c); return; }
+    r->selected=mc_client_selected(c);
     if (r->window_generation!=c->window_generation) {
         r->drag_capture=false; ReleaseCapture(); r->pending.inventory_click=false; r->pending.inventory_drag=false;
         r->pending.creative_pick=-1; r->pending.toggle_creative=false; r->inventory_focus=c->window_id ? 10 : 9;
@@ -796,8 +832,8 @@ void mc_renderer_draw(mc_renderer *r, const mc_client *c) {
     r->workbench=c->window_id!=0;
     r->inventory_open=c->inventory_open; r->creative_open=c->creative_open; r->creative_allowed=c->gamemode==1;
     r->catalog_allowed=c->gamemode==1 && !c->window_id;
-    r->inventory_blocked=!mc_client_inventory_ready(c) || c->inventory_pending || c->inventory_sync || c->inventory_queue_index<c->inventory_queue_count;
-    r->cursor_present=c->inventory.cursor.item_id>=0;
+    r->inventory_blocked=!mc_client_inventory_ready(c);
+    r->cursor_present=mc_client_cursor(c)!=NULL;
     char title[512]; snprintf(title,sizeof(title),"C919 | %s | %.180s:%u",c->status,c->host,(unsigned)c->port);
     if (strcmp(title,r->title)) { WCHAR wide[512]; MultiByteToWideChar(CP_UTF8,0,title,-1,wide,512); SetWindowTextW(r->window,wide); snprintf(r->title,sizeof(r->title),"%s",title); }
     glViewport(0,0,r->width,r->height); glClearColor(0.65f,0.80f,0.84f,1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
@@ -810,6 +846,7 @@ void mc_renderer_draw(mc_renderer *r, const mc_client *c) {
     draw_hud(r,c);
     glFlush();
     if (!r->hidden) SwapBuffers(r->dc);
+    MCObjectRootScope_end(&frame);
 }
 
 bool mc_renderer_screenshot(mc_renderer *r, const char *path, char *error, size_t error_size) {

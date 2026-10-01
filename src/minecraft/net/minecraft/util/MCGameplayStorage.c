@@ -4,6 +4,7 @@
 #include "inventory/inventory_dispatch.h"
 #include "nbt/NBTTagString.h"
 #include "nbt/NBTTagDouble.h"
+#include "entity/item/NativeItemMotion.h"
 #include <limits.h>
 #include <math.h>
 
@@ -115,6 +116,7 @@ static bool vector_write(NBTTagCompound *root,const char *name,double x,double y
 }
 static bool entity_write(EntityItem *e,NBTTagList *list) {
     MCObjectHeap *heap=e->object.heap;NBTTagCompound *root=copy_fields(heap,e->savedFields);
+    if (!NativeItemMotion_positionSupported(e->posX,e->posY,e->posZ))return fail(heap);
     if (!root||!NBTTagCompound_setString_ascii(root,"id",NBTString_literalASCII(heap,"Item"))||
         !NBTTagCompound_setInteger_ascii(root,"C919EntityId",e->entityId)||
         !vector_write(root,"Pos",e->posX,e->posY,e->posZ)||
@@ -223,6 +225,7 @@ bool MCGameplayStorage_loadItems(MCGameplayWorld *w,const mc_nbt *input,MCObject
         NBTTagCompound *tag=NBTTagList_getCompoundTagAt(list,i);double pos[3],motion[3];
         ok=tag&&NBTTagCompound_hasKeyType_ascii(tag,"id",8)&&NBTString_equalsASCII(NBTTagCompound_getString_ascii(tag,"id"),"Item")&&
             NBTTagCompound_hasKeyType_ascii(tag,"C919EntityId",3)&&vector_read(tag,"Pos",pos)&&vector_read(tag,"Motion",motion);
+        if (ok)ok=NativeItemMotion_positionSupported(pos[0],pos[1],pos[2]);
         if (!ok)break;
         EntityItem *e=EntityItem_new_world(heap,(MCObject *)w,context,d,constructors);if (!e) {ok=false;break;}
         /* Native restoration of the inherited envelope follows the source

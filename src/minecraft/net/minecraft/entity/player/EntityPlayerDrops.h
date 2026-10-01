@@ -23,5 +23,10 @@ EntityItem *EntityPlayer_dropPlayerItemWithRandomChoice(MCGameplayPlayer *,ItemS
     const EntityPlayerDropsDependencies *,MCObject *context);
 EntityItem *EntityPlayer_dropItem(MCGameplayPlayer *,ItemStack *,bool dropAround,bool traceItem,
     const EntityPlayerDropsDependencies *,MCObject *context);
+EntityItem *EntityPlayer_dropOneItem(MCGameplayPlayer *,bool dropAll,
+    const EntityPlayerDropsDependencies *,MCObject *context);
+/* Original body; sleeping and the inherited sneaking flag are native field
+   bindings until the complete EntityPlayer/DataWatcher hierarchy is ported. */
+float EntityPlayer_getEyeHeight(const MCGameplayPlayer *);
 /* The rest of EntityPlayer and inherited Entity remain separate ports. */
 #endif

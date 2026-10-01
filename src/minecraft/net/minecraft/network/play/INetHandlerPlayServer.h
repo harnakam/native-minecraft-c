@@ -6,6 +6,8 @@ typedef struct C0EPacketClickWindow C0EPacketClickWindow;
 typedef struct C0FPacketConfirmTransaction C0FPacketConfirmTransaction;
 typedef struct C10PacketCreativeInventoryAction C10PacketCreativeInventoryAction;
 typedef struct C08PacketPlayerBlockPlacement C08PacketPlayerBlockPlacement;
+typedef struct C07PacketPlayerDigging C07PacketPlayerDigging;
+typedef struct C09PacketHeldItemChange C09PacketHeldItemChange;
 /* Native virtual dispatch for these original interface methods. Other
    packet handlers await their source ports. Required callback failure represents
    an exception and marks the current heap; it is never an empty success. */
@@ -15,6 +17,8 @@ typedef struct {
     bool (*processConfirmTransaction)(MCObject *,C0FPacketConfirmTransaction *);
     bool (*processCreativeInventoryAction)(MCObject *,C10PacketCreativeInventoryAction *);
     bool (*processPlayerBlockPlacement)(MCObject *,C08PacketPlayerBlockPlacement *);
+    bool (*processPlayerDigging)(MCObject *,C07PacketPlayerDigging *);
+    bool (*processHeldItemChange)(MCObject *,C09PacketHeldItemChange *);
 } INetHandlerPlayServerMethods;
 typedef struct { MCObject *instance; const INetHandlerPlayServerMethods *methods; } INetHandlerPlayServer;
 #endif

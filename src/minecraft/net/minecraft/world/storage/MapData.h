@@ -1,6 +1,12 @@
 #ifndef C919_MAP_DATA_H
 #define C919_MAP_DATA_H
 #include "inventory/inventory.h"
+#include "util/MCObjectHeap.h"
+
+typedef struct MCGameplayWorld MCGameplayWorld;
+typedef struct MCGameplayPlayer MCGameplayPlayer;
+typedef struct ItemStack ItemStack;
+typedef struct mc_maps mc_maps;
 
 #define MC_MAP_MAX_VIEWERS 64u
 #define MC_MAP_DECORATION_KEY 128u
@@ -32,4 +38,24 @@ bool mc_MapData_updateDecorations(mc_map_info *map,int type,const char *identifi
 void mc_MapData_updateMapData(mc_map_info *map,unsigned x,unsigned z);
 /* 1 packet, 0 no update, -1 failure. Failed encoding retains dirty state. */
 int mc_MapData_getMapPacket(mc_map_info *map,const mc_slot *stack,int32_t entity_id,mc_buf *packet);
+
+/* Source-reference entry points over a borrowed native MapData store view.
+   owner retains the view in owner->maps; caller releases it before any store
+   replacement/adoption. Players and UTF-16 decoration keys are strong managed
+   references, not serialized inventory copies. Lookup preserves the source
+   Entity.equals/hashCode ID equality and HashMap's cached key hash.
+   World.trace must invoke MapData_traceReferences after its native deep copy.
+   Native terrain/color buffers, bounds and S34 encoding remain adapters.
+   ItemFrame dependencies are not ported: a non-NULL frame fails the heap.
+   A failed operation retains source-ordered partial mutations; abort the whole
+   working graph. Successful transient changes require adoption even when no
+   persistent pixels/metadata changed. Do not mix both tracking APIs on one map. */
+void MapData_traceReferences(mc_maps *,MCObjectVisitor,void *context);
+mc_MapInfo *MapData_getMapInfo(mc_map_info *,MCGameplayWorld *owner,MCGameplayPlayer *);
+bool MapData_updateVisiblePlayers(mc_map_info *,MCGameplayWorld *owner,
+    MCGameplayPlayer *,ItemStack *);
+/* Native packet result: 1 packet, 0 original NULL, -1 failed dependency/heap.
+   S34 encoder failure is atomic at this native boundary and retains dirtiness. */
+int MapData_getMapPacket(mc_map_info *,ItemStack *,MCGameplayWorld *,
+    MCGameplayPlayer *,mc_buf *);
 #endif

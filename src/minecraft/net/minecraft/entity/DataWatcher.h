@@ -22,6 +22,7 @@ MCObject *DataWatcher_boxShort(MCObjectHeap *, int32_t);
 MCObject *DataWatcher_boxInt(MCObjectHeap *, int32_t);
 MCObject *DataWatcher_boxFloat(MCObjectHeap *, float);
 DataWatcherBlockPos *DataWatcher_blockPos(MCObjectHeap *, int32_t, int32_t, int32_t);
+bool DataWatcher_blockPosIsInstance(const MCObject *);
 DataWatcherRotations *DataWatcher_rotations(MCObjectHeap *, float, float, float);
 /* Native ObjectUtils/equals dispatch for these registered value classes.
    Unknown unequal class references require the explicit subclass dependency. */

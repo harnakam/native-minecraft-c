@@ -43,8 +43,12 @@ class WorkbenchPeer(InventoryPeer):
 
     def table_click(self, index, button, action, mode=0, expected=b"\xff\xff", accepted=True):
         self.send(0x0e, struct.pack(">BhBhB", self.window, index, button, action, mode) + expected)
-        fields = struct.unpack(">BhB", self.wait(0x32))
+        fields = struct.unpack(">BhB", self.wait(0x32, lambda p: struct.unpack(">BhB", p)[:2] == (self.window, action)))
         assert fields == (self.window, action, int(accepted)), fields
+        if accepted:
+            assert mode != 5, "observe only after completing the source drag sequence"
+            payload, cursor = self.window_snapshot(self.window)
+            return window_items(payload, self.window), cursor
         slots = window_items(self.wait(0x30, lambda p: p[0] == self.window), self.window)
         cursor = parse_slot(self.wait(0x2f, lambda p: p[0] == 255), 3)[0]
         return slots, cursor
@@ -52,9 +56,7 @@ class WorkbenchPeer(InventoryPeer):
     def close_table(self, payload_id=255):
         self.send(0x0d, bytes([payload_id]))
         self.window = 0
-        slots = window_items(self.wait(0x30, lambda p: p[0] == 0), 0)
-        cursor = parse_slot(self.wait(0x2f, lambda p: p[0] == 255), 3)[0]
-        return slots, cursor
+        return self.snapshot()
 
 
 class WorkbenchTests(unittest.TestCase):
@@ -138,7 +140,8 @@ class WorkbenchTests(unittest.TestCase):
             peer.table_click(9, 0, 2)
             move(peer, peer.spawn[0] + 12, peer.spawn[1], peer.spawn[2])
             self.assertEqual(peer.wait(0x2e), bytes([peer.window]))
-            slots = window_items(peer.wait(0x30, lambda p: p[0] == 0), 0)
+            peer.window = 0
+            slots, _ = peer.snapshot()
             self.assertEqual(slots[9][0], -1)
             self.assertEqual(sum(e["Item"]["Count"] for e in item_snapshot(self.world)
                                  if e["Item"]["id"] == "minecraft:diamond"), 3)
@@ -177,7 +180,8 @@ class WorkbenchTests(unittest.TestCase):
             owner.table_click(9, 0, 2)
             other.send(7, vint(0) + position(*table) + b"\x01")
             self.assertEqual(owner.wait(0x2e), bytes([owner.window]))
-            window_items(owner.wait(0x30, lambda p: p[0] == 0), 0)
+            owner.window = 0
+            owner.snapshot()
             self.assertEqual(sum(e["Item"]["Count"] for e in item_snapshot(self.world)
                                  if e["Item"]["id"] == "minecraft:diamond"), 3)
 
@@ -206,10 +210,12 @@ class WorkbenchTests(unittest.TestCase):
             peer = self.peer(port, "TableMaps")
             table = self.place_table(peer)
             peer.creative(36, 395, 1)
+            before = len(peer.observed)
             peer.send(8, position(-1, -1, -1) + b"\xff" + wire_slot(395, 1) + b"\0\0\0")
-            slots = window_items(peer.wait(0x30, lambda p: p[0] == 0), 0)
+            slots, _ = peer.snapshot()
             self.assertEqual(slots[36][:3], (358, 1, 0))
-            packet = peer.wait(0x34)
+            maps = [payload for kind, payload in peer.observed[before:] if kind == 0x34]
+            packet = maps[0] if maps else peer.wait(0x34)
             map_id, offset = read_vint(packet)
             self.assertEqual(map_id, 0)
             self.assertEqual(packet[offset], 0)
@@ -294,12 +300,11 @@ class WorkbenchTests(unittest.TestCase):
             # Move the resolved map onto selected hotbar index 0. The very next
             # real survey must use its retained viewer state, not another full map.
             peer.send(9, struct.pack(">h", 0))
-            peer.send(0x0e, struct.pack(">BhBhB", 0, 9, 0, 1, 2) + wire_slot())
-            peer.wait(0x32)
-            peer.wait(0x30)
-            peer.wait(0x2f, lambda p: p[0] == 255)
+            before = len(peer.observed)
+            peer.click(9, 0, 1, 2)
+            maps = [payload for kind, payload in peer.observed[before:] if kind == 0x34]
             for _ in range(40):
-                packet = peer.wait(0x34)
+                packet = maps.pop(0) if maps else peer.wait(0x34)
                 _, offset = read_vint(packet)
                 icons, offset = read_vint(packet, offset + 1)
                 offset += icons * 3
@@ -312,6 +317,59 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(length, width * height)
             self.assertTrue(any(packet[offset:]))
             self.assertLess(width * height, 16384, "initial full MapInfo state must survive unselected ticks")
+
+    def test_armor_only_map_resolves_without_main_inventory_onupdate_or_packet(self):
+        with running_server(self.world) as port:
+            peer = self.peer(port, "ArmorMap")
+            start = len(peer.observed)
+            peer.creative(5, 358, 1, 77)
+            time.sleep(0.15)
+            slots, _ = peer.snapshot()
+            self.assertEqual(slots[5][:3], (358, 1, 0), "armor packet lookup still resolves missing MapData")
+            self.assertFalse(any(kind == 0x34 for kind, _ in peer.observed[start:]),
+                             "InventoryPlayer.onUpdate covers main36; armor alone must not register MapInfo")
+        saved = decode_nbt(gzip.decompress(Path(str(self.world) + ".maps.dat").read_bytes()))
+        self.assertEqual(saved["NextId"], 1)
+        self.assertEqual(saved["Maps"][0]["Data"]["scale"], 3)
+
+    def test_all_main_map_decorations_update_before_first_map_packet(self):
+        # Prepare both source main-inventory stacks before the first tick so
+        # packet observation cannot be confused with separate C10/tick order.
+        def decoration(label, kind, x):
+            element = compound(named(8, "id", nbt_string(label)), named(1, "type", bytes([kind])),
+                               named(6, "x", struct.pack(">d", x)), named(6, "z", struct.pack(">d", 0)),
+                               named(6, "rot", struct.pack(">d", 0)))
+            return compound(named(9, "Decorations", b"\x0a" + struct.pack(">i", 1) + element))
+
+        entries = []
+        for index, label, kind, x in ((0, "first", 3, 16), (9, "second", 4, 32)):
+            entries.append(compound(named(1, "Slot", bytes([index])),
+                                    named(8, "id", nbt_string("minecraft:filled_map")), named(1, "Count", b"\x01"),
+                                    named(2, "Damage", b"\0\0"), named(10, "tag", decoration(label, kind, x))))
+        player = named(10, "", compound(named(9, "Inventory", b"\x0a" + struct.pack(">i", 2) + b"".join(entries)),
+                                         named(3, "SelectedItemSlot", struct.pack(">i", 0))))
+        path = player_file(self.world, "MapOrder")
+        path.parent.mkdir()
+        path.write_bytes(gzip.compress(player))
+        map_body = compound(named(1, "dimension", b"\0"), named(3, "xCenter", struct.pack(">i", 0)),
+                            named(3, "zCenter", struct.pack(">i", 0)), named(1, "scale", b"\x04"),
+                            named(2, "width", struct.pack(">h", 128)), named(2, "height", struct.pack(">h", 128)),
+                            named(7, "colors", struct.pack(">i", 16384) + bytes(16384)))
+        map_entry = compound(named(3, "Id", struct.pack(">i", 0)), named(10, "Data", map_body))
+        maps = named(10, "", compound(named(3, "Version", struct.pack(">i", 1)),
+                                      named(3, "NextId", struct.pack(">i", 1)),
+                                      named(9, "Maps", b"\x0a" + struct.pack(">i", 1) + map_entry)))
+        Path(str(self.world) + ".maps.dat").write_bytes(gzip.compress(maps))
+        with running_server(self.world) as port:
+            peer = self.peer(port, "MapOrder")
+            observed = [payload for kind, payload in peer.observed if kind == 0x34]
+            packet = observed[0] if observed else peer.wait(0x34)
+            map_id, offset = read_vint(packet)
+            self.assertEqual((map_id, packet[offset]), (0, 4))
+            count, offset = read_vint(packet, offset + 1)
+            self.assertEqual(count, 3, "all main36 onUpdate calls precede all main+armor40 packet lookups")
+            icons = [struct.unpack_from(">Bbb", packet, offset + i * 3) for i in range(count)]
+            self.assertEqual(icons[1:], [(0x30, 2, 0), (0x40, 4, 0)])
 
 
 if __name__ == "__main__":

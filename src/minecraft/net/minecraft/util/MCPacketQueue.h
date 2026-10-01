@@ -5,7 +5,9 @@
 
 /* Native deferred transport storage shared by the source packet adapters.
    The immutable profile identifies packet direction and its commit boundary.
-   No packet bytes or independent inventory values are retained in the graph. */
+   Source packet objects retain their original managed references. Unported
+   packet classes can use NativePacket's immutable encoded transport message;
+   neither path keeps an independent inventory authority. */
 typedef struct {
     int32_t id;
     bool (*isInstance)(const MCObject *);

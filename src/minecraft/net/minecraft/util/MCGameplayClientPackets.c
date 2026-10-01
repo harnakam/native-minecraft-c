@@ -4,13 +4,17 @@
         return type##_writePacketData((type *)o, b);                                               \
     }
 CODEC(C08PacketPlayerBlockPlacement)
+CODEC(C07PacketPlayerDigging)
+CODEC(C09PacketHeldItemChange)
 CODEC(C0DPacketCloseWindow)
 CODEC(C0EPacketClickWindow)
 CODEC(C0FPacketConfirmTransaction)
 CODEC(C10PacketCreativeInventoryAction)
 #undef CODEC
 static const MCPacketCodec codecs[] = {
+    {0x07, C07PacketPlayerDigging_isInstance, write_C07PacketPlayerDigging},
     {0x08, C08PacketPlayerBlockPlacement_isInstance, write_C08PacketPlayerBlockPlacement},
+    {0x09, C09PacketHeldItemChange_isInstance, write_C09PacketHeldItemChange},
     {0x0d, C0DPacketCloseWindow_isInstance, write_C0DPacketCloseWindow},
     {0x0e, C0EPacketClickWindow_isInstance, write_C0EPacketClickWindow},
     {0x0f, C0FPacketConfirmTransaction_isInstance, write_C0FPacketConfirmTransaction},

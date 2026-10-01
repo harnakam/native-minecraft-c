@@ -1,5 +1,6 @@
 #include "util/MCGameplayPackets.h"
 #include "util/MCPacketQueue.h"
+#include "network/NativePacket.h"
 #define CODEC(type, id)                                                                            \
     static bool write_##type(MCObject *o, PacketBuffer *b) {                                       \
         return type##_writePacketData((type *)o, b);                                               \
@@ -8,12 +9,24 @@ CODEC(S2EPacketCloseWindow, 0x2e)
 CODEC(S2FPacketSetSlot, 0x2f)
 CODEC(S30PacketWindowItems, 0x30)
 CODEC(S32PacketConfirmTransaction, 0x32)
+CODEC(S1CPacketEntityMetadata, 0x1c)
 #undef CODEC
 static const MCPacketCodec codecs[] = {
+    {0x04, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x0d, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x0e, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x12, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x13, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x18, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x1c, S1CPacketEntityMetadata_isInstance, write_S1CPacketEntityMetadata},
+    {0x29, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x2d, NativePacket_isInstance, NativePacket_writePacketData},
     {0x2e, S2EPacketCloseWindow_isInstance, write_S2EPacketCloseWindow},
     {0x2f, S2FPacketSetSlot_isInstance, write_S2FPacketSetSlot},
     {0x30, S30PacketWindowItems_isInstance, write_S30PacketWindowItems},
-    {0x32, S32PacketConfirmTransaction_isInstance, write_S32PacketConfirmTransaction}};
+    {0x32, S32PacketConfirmTransaction_isInstance, write_S32PacketConfirmTransaction},
+    {0x34, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x37, NativePacket_isInstance, NativePacket_writePacketData}};
 static const MCPacketQueueProfile profile = {codecs, sizeof codecs / sizeof *codecs, true};
 static MCObject *packets(const MCGameplayPlayer *p) {
     if (!p)
@@ -69,6 +82,15 @@ bool MCGameplayPackets_sendCloseWindow(MCGameplayPlayer *p, int32_t w) {
 bool MCGameplayPackets_sendConfirmTransaction(MCGameplayPlayer *p, int32_t w, int16_t a, bool b) {
     return p &&
            append(p, (MCObject *)S32PacketConfirmTransaction_new(p->object.heap, w, a, b), 0x32);
+}
+bool MCGameplayPackets_sendMetadata(MCGameplayPlayer *p,S1CPacketEntityMetadata *packet) {
+    return p&&append(p,(MCObject *)packet,0x1c);
+}
+bool MCGameplayPackets_sendNative(MCGameplayPlayer *p,const mc_buf *message) {
+    if (!p||!message||message->failed||!message->data||message->len>message->cap)return false;
+    mc_buf input=*message;input.pos=0;int32_t id=mc_get_varint(&input);
+    if (input.failed)return false;
+    return append(p,NativePacket_new(p->object.heap,message),id);
 }
 int32_t MCGameplayPackets_count(const MCGameplayPlayer *p) {
     MCObject *q = packets(p);

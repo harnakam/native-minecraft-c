@@ -9,6 +9,29 @@ static bool dependencies_ready(const EntityPlayerDropsDependencies *d) {
     return d&&d->entity&&d->constructor&&d->getEyeHeight&&d->nextFloat&&d->getName&&
         d->joinEntityItemWithWorld&&d->triggerDropStat&&d->mathSin&&d->mathCos;
 }
+float EntityPlayer_getEyeHeight(const MCGameplayPlayer *p) {
+    if (!p || !MCGameplayPlayer_isInstance((const MCObject *)p)) {
+        MCObjectHeap_fail(p ? p->object.heap : NULL);
+        return 0;
+    }
+    float height = 1.62F;
+    if (p->sleeping)
+        height = 0.2F;
+    if (p->sneaking) {
+        volatile float lowered = height - 0.08F;
+        height = lowered;
+    }
+    return height;
+}
+EntityItem *EntityPlayer_dropOneItem(MCGameplayPlayer *p,bool all,
+    const EntityPlayerDropsDependencies *d,MCObject *context) {
+    if(!p||!p->inventory) {MCObjectHeap_fail(p?p->object.heap:NULL);return NULL;}
+    ItemStack *held=all?InventoryPlayer_getCurrentItem(p->inventory):NULL;
+    ItemStack *stack=InventoryPlayer_decrStackSize(p->inventory,p->inventory->currentItem,
+        all&&held?held->stackSize:1);
+    if(MCObjectHeap_failed(p->object.heap))return NULL;
+    return EntityPlayer_dropItem(p,stack,false,true,d,context);
+}
 EntityItem *EntityPlayer_dropItem(MCGameplayPlayer *player,ItemStack *stack,bool around,bool trace,
     const EntityPlayerDropsDependencies *d,MCObject *context) {
     if (!player) return NULL;

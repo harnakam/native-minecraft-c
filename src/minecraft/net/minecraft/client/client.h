@@ -2,14 +2,12 @@
 #define C919_CLIENT_H
 #include "../network/protocol.h"
 #include "../world/world.h"
-#include "world/map.h"
-#include "inventory/inventory.h"
-#include "inventory/container_runtime.h"
+#include "client/native_runtime.h"
 #include "item/item.h"
-#include "entity/item/item_entity.h"
 
 #define MC_CLIENT_PLAYERS 128
 #define MC_CLIENT_CHAT_LINES 6
+#define MC_CLIENT_ITEMS MC_GAMEPLAY_MAX_ITEMS
 
 typedef struct {
     bool used;
@@ -27,40 +25,33 @@ typedef struct {
 } mc_remote_player;
 typedef struct {
     bool active, metadata_ready;
-    mc_item_entity entity;
+    /* Native interpolation/network coordinates only. The entity, watcher,
+       ItemStack and mutable NBT are owned solely by gameplay.items. */
+    int32_t eid;
     int32_t server_x, server_y, server_z;
 } mc_client_item;
 
 typedef struct {
     mc_conn connection;
     mc_world world;
-    mc_maps maps;
-    mc_inventory inventory, inventory_authoritative;
-    mc_container container, container_authoritative;
-    uint8_t window_id, inventory_pending_window;
-    uint64_t window_generation, inventory_pending_generation;
+    MCGameplay gameplay;
+    uint8_t window_id;
+    uint64_t window_generation;
     bool window_ready;
     char window_title[256];
     mc_player_info player_info[MC_CLIENT_PLAYERS];
     mc_remote_player players[MC_CLIENT_PLAYERS];
-    mc_client_item items[MC_MAX_ITEM_ENTITIES];
-    size_t item_nbt_bytes;
+    mc_client_item items[MC_CLIENT_ITEMS];
     unsigned item_spawns, item_metadata, item_collects;
     uint64_t last_item_tick_ms;
     char host[256], name[17], status[256];
     char chat[MC_CLIENT_CHAT_LINES][256];
     int chat_count;
     uint16_t port;
-    int state, dimension, gamemode, entity_id, selected;
+    int state, dimension, gamemode, entity_id;
     bool joined, positioned, failed, disconnected, flying, can_fly, on_ground;
     bool paused, chat_open;
-    bool inventory_open, creative_open, inventory_ready, inventory_pending, inventory_sync;
-    bool inventory_sync_slots, inventory_sync_cursor;
-    bool inventory_close_requested;
-    int inventory_queue[47][3];
-    unsigned inventory_queue_count, inventory_queue_index;
-    int16_t inventory_action, next_inventory_action;
-    uint64_t inventory_pending_ms;
+    bool inventory_open, creative_open, inventory_ready;
     unsigned inventory_packets, inventory_rejections;
     char inventory_status[160];
     double x, y, z, velocity_y;
@@ -86,8 +77,12 @@ typedef struct {
 } mc_input;
 
 bool mc_client_ray(const mc_client *client, int *x, int *y, int *z, int *face);
-void mc_client_slot_name(const mc_slot *slot, char *output, size_t capacity);
+void mc_client_slot_name(ItemStack *slot, char *output, size_t capacity);
 bool mc_client_inventory_ready(const mc_client *client);
 unsigned mc_client_window_slots(const mc_client *client);
-const mc_slot *mc_client_window_slot(const mc_client *client, int index);
+ItemStack *mc_client_window_slot(const mc_client *client, int index);
+ItemStack *mc_client_player_slot(const mc_client *client, int index);
+ItemStack *mc_client_cursor(const mc_client *client);
+int mc_client_selected(const mc_client *client);
+mc_maps *mc_client_maps(const mc_client *client);
 #endif

@@ -21,12 +21,20 @@ typedef struct MCGameplayWorld {
     StatList *statList;
     ItemStackDisplayNameDispatch itemDisplayName;
     MCObject *itemDisplayContext;
+    /* Native inherited World/runtime state used by source method dependencies.
+       The context is managed; it never retains pointers into another heap. */
+    MCObject *nativeContext;
     NBTTagCompound *savedItemFields;
     NBTString *savedItemRootName;
     StatBase *craftStats[MC_GAMEPLAY_CRAFT_STAT_COUNT];
+    /* Native per-heap registration of the original empty-map use-stat identity.
+       Full StatList.objectUseStats initialization remains a separate port. */
+    StatBase *emptyMapUseStat;
     bool remote;
     int32_t spawnX,spawnZ,dimension,nextEntityId;
     uint64_t randomState;
+    int64_t worldTime;
+    bool hasNoSky;
 } MCGameplayWorld;
 MCGameplayWorld *MCGameplayWorld_new(MCObjectHeap *,MCGameplayObjects *,const mc_world *,CraftingManager *);
 bool MCGameplayWorld_isInstance(const MCObject *);

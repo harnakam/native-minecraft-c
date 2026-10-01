@@ -6,6 +6,9 @@ static void trace(MCObject *o, MCObjectVisitor v, void *c) {
 }
 static const MCObjectClass klass = {"net.minecraft.network.play.server.S1CPacketEntityMetadata",
                                     MCObjectHeap_plainClone, trace, NULL};
+bool S1CPacketEntityMetadata_isInstance(const MCObject *object) {
+    return object&&object->klass==&klass;
+}
 S1CPacketEntityMetadata *S1CPacketEntityMetadata_new_empty(MCObjectHeap *h) {
     return (S1CPacketEntityMetadata *)MCObjectHeap_alloc(h, sizeof(S1CPacketEntityMetadata),
                                                          &klass);

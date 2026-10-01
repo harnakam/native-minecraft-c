@@ -14,7 +14,7 @@ import unittest
 
 from test_client import CLIENT, read_frame, send_frame
 from test_client_inventory import EMPTY, TOOL, TOOL_NBT
-from test_inventory_network import wire_slot, player_file, compound, named, nbt_string, parse_slot
+from test_inventory_network import wire_slot, player_file, compound, named, nbt_string, item_metadata
 from test_workbench_network import WorkbenchPeer
 from test_multiplayer import running_server, position, read_vint
 from test_multiplayer import string, vint
@@ -87,13 +87,16 @@ def container_peer(kind="snapshot", slots=None, cursor=EMPTY, window=7, bad_open
                         send_frame(sock, 0x34, vint(23)+b"\2"+vint(1)+b"\x07\0\0"+b"\2\2\3\4"+vint(4)+pixels, True)
                         if kind == "map_bad":
                             send_frame(sock, 0x34, vint(23)+b"\3"+vint(0)+b"\2\2\3\4"+vint(4)+pixels[:-1], True)
-                    elif kind == "aggregate":
+                    elif kind in ["aggregate", "aggregate_truncated"]:
                         large = named(10, "", named(7, "foreign", struct.pack(">i", 1100000)+bytes(1100000))+b"\0")
                         item = wire_slot(387, 1, tag=large)
                         send_frame(sock, 0x2f, struct.pack(">Bh", window, 1)+item, True)
                         send_frame(sock, 0x2f, struct.pack(">Bh", window, 2)+item, True)
+                        if kind == "aggregate_truncated":
+                            send_frame(sock, 0x2f, struct.pack(">Bh", window, 1)+item[:-1], True)
                     elif kind == "forced":
                         send_frame(sock, 0x2e, b"\xff", True)
+                reopened = False
                 while True:
                     try:
                         packet_id, packet = read_frame(sock, True)
@@ -121,7 +124,8 @@ def container_peer(kind="snapshot", slots=None, cursor=EMPTY, window=7, bad_open
                                 send_frame(sock, 0x30, b"\0"+struct.pack(">h", 45)+b"".join(initial), True)
                             send_frame(sock, 0x32, struct.pack(">BhB", window, action, kind == "backup_valid"), True)
                             continue
-                        if kind == "reuse" and action == 1:
+                        if kind == "reuse" and not reopened:
+                            reopened = True
                             send_frame(sock, 0x2d, open_window(window), True)
                             send_frame(sock, 0x30, bytes([window])+struct.pack(">h", 46)+b"".join(provided), True)
                             send_frame(sock, 0x2f, b"\xff\xff\xff"+cursor, True)
@@ -267,44 +271,52 @@ class ClientContainerTests(unittest.TestCase):
         self.assertIn("CLIENT_CONTAINER_SLOT index=1 id=1 count=127", output)
         self.assertNotIn("CLIENT_SLOT index=36 ", output)
 
-    def test_unknown_map_preview_survives_and_crafts_without_allocating_map(self):
+    def test_source_grid_notifications_clear_unknown_map_preview(self):
         marker = named(10, "", named(1, "map_is_scaling", b"\1")+b"\0")
         slots = [wire_slot(358, 1, 23, marker)]+[wire_slot(339, 1)]*9+[EMPTY]*36
         slots[5] = wire_slot(358, 1, 23)
         with container_peer("map", slots=slots) as (port, observed):
             result, output = self.client(port, "--inventory-actions", "0:0:0")
         self.assertEqual(result.returncode, 0, output)
-        self.assertEqual(next(c for k, c in observed if k == 0x0e)[7:], slots[0])
-        self.assertIn("CLIENT_CURSOR id=358 count=1 damage=23", output)
-        self.assertNotIn("CLIENT_CONTAINER_SLOT index=", output)
+        # S30 writes output first, then each grid input calls the original
+        # manager. Remote getMapData is NULL, so MapExtending does not match.
+        self.assertEqual(next(c for k, c in observed if k == 0x0e)[7:], EMPTY)
+        self.assertIn("CLIENT_CURSOR id=-1 count=0", output)
+        self.assertIn("CLIENT_CONTAINER_SLOT index=5 id=358 count=1 damage=23", output)
+        self.assertEqual(output.count("CLIENT_CONTAINER_SLOT index="), 9)
         colors = bytearray(16384)
         colors[3+4*128:5+4*128] = b"\4\5"
         colors[3+5*128:5+5*128] = b"\6\7"
         self.assertIn(f"CLIENT_MAP id=23 scale=2 icons=1 metadata_known=0 pixels_crc={zlib.crc32(colors):08x}", output)
 
-    def test_malformed_map_and_aggregate_nbt_updates_are_atomic(self):
+    def test_malformed_map_is_atomic_and_cumulative_large_tags_are_retained(self):
         with container_peer("map_bad") as (port, _):
             result, output = self.client(port)
         self.assertNotEqual(result.returncode, 0, output)
         self.assertIn("CLIENT_MAP id=23 scale=2 icons=1", output)
         with container_peer("aggregate") as (port, _):
             result, output = self.client(port)
-        self.assertNotEqual(result.returncode, 0, output)
+        self.assertEqual(result.returncode, 0, output)
         self.assertIn("CLIENT_CONTAINER_SLOT index=1 id=387 count=1", output)
-        self.assertNotIn("CLIENT_CONTAINER_SLOT index=2 ", output)
+        self.assertIn("CLIENT_CONTAINER_SLOT index=2 id=387 count=1", output)
+        with container_peer("aggregate_truncated") as (port, _):
+            result, output = self.client(port)
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("Malformed", output)
+        self.assertEqual(output.count("id=387 count=1 damage=0 nbt_size=1100018"), 2)
 
-    def test_pending_authoritative_nbt_budget_is_atomic_for_slot_and_snapshot(self):
+    def test_large_tags_update_single_graph_without_authoritative_backup(self):
         large = named(10, "", named(7, "foreign", struct.pack(">i", 1100000)+bytes(1100000))+b"\0")
         slots = [EMPTY]*46
         slots[1] = wire_slot(387, 1, tag=large)
         for kind in ["backup_slot", "backup_snapshot"]:
             with container_peer(kind, slots=slots) as (port, _):
                 result, output = self.client(port, "--inventory-actions", "1:0:0")
-            self.assertNotEqual(result.returncode, 0, output)
-            self.assertNotIn("CLIENT_SLOT index=36 ", output)
+            self.assertEqual(result.returncode, 0, output)
+            self.assertIn("CLIENT_SLOT index=36 id=387 count=1", output)
             self.assertIn("CLIENT_CURSOR id=-1 count=0", output)
-        # Window0 supplies no cursor and must preserve the distinct backup
-        # cursor when the current workbench prediction owns the large item.
+        # S30 has no cursor field. Source applies its slots directly and
+        # preserves the real cursor reference from the earlier prediction.
         with container_peer("backup_valid", slots=slots) as (port, _):
             result, output = self.client(port, "--inventory-actions", "1:0:0")
         self.assertEqual(result.returncode, 0, output)
@@ -312,15 +324,16 @@ class ClientContainerTests(unittest.TestCase):
         self.assertIn("inventory_pending=0", output)
         self.assertNotIn("CLIENT_CONTAINER_SLOT index=1 ", output)
 
-    def test_rejection_requires_both_window_and_cursor_snapshot_in_either_order(self):
+    def test_rejection_ack_does_not_lock_on_missing_partial_resync(self):
         slots = [EMPTY]*46
         slots[10] = TOOL
-        for kind, sync in [("reject_cursor_first", 0), ("reject_cursor_only", 1), ("reject_slots_only", 1)]:
+        for kind in ["reject_cursor_first", "reject_cursor_only", "reject_slots_only"]:
             with container_peer(kind, slots=slots) as (port, observed):
                 result, output = self.client(port, "--inventory-actions", "10:0:0,10:0:0")
             self.assertEqual(result.returncode, 0, output)
-            self.assertIn(f"sync={sync}", output)
-            self.assertEqual(sum(k == 0x0e for k, _ in observed), 2 if sync == 0 else 1)
+            self.assertIn("sync=0", output)
+            self.assertEqual(sum(k == 0x0e for k, _ in observed), 2)
+            self.assertEqual(sum(k == 0x0f for k, _ in observed), 2)
             self.assertTrue(all(c[0] == 7 for k, c in observed if k == 0x0f))
 
     def test_window_id_reuse_and_high_unsigned_id(self):
@@ -330,14 +343,24 @@ class ClientContainerTests(unittest.TestCase):
             result, output = self.client(port, "--inventory-actions", "10:0:0,10:0:0")
         self.assertEqual(result.returncode, 0, output)
         clicks = [c for k, c in observed if k == 0x0e]
-        self.assertEqual([struct.unpack_from(">h", c, 4)[0] for c in clicks], [1, 2])
+        self.assertEqual(len(clicks), 2)
+        self.assertEqual(struct.unpack_from(">h", clicks[0], 4)[0], 1)
+        second_action = struct.unpack_from(">h", clicks[1], 4)[0]
+        # Source predicts immediately. The second click may precede the
+        # server's reopen; transaction IDs belong to each Container instance.
+        self.assertIn(second_action, [1, 2])
+        self.assertEqual(clicks[1][7:], TOOL if second_action == 1 else EMPTY)
         self.assertIn("inventory_pending=0", output)
-        self.assertIn("CLIENT_CURSOR id=276 count=1", output)
+        self.assertIn("CLIENT_CURSOR id=276 count=1" if second_action == 1 else "CLIENT_CURSOR id=-1 count=0", output)
+        self.assertIn("generation=2", output)
         with container_peer("snapshot", window=200, slots=slots) as (port, _):
             result, output = self.client(port)
         self.assertEqual(result.returncode, 0, output)
         self.assertIn("CLIENT_WINDOW id=200 ready=1 slots=46", output)
-        self.assertIn("CLIENT_SLOT index=44 id=276 count=1", output)
+        # Original S30 reads unsigned windowId; S2F reads signed byte. The
+        # high-ID window snapshot applies, but its later S2F cannot match200.
+        self.assertIn("CLIENT_SLOT index=9 id=276 count=1", output)
+        self.assertNotIn("CLIENT_SLOT index=44 ", output)
 
     def test_open_window_malformed_json_horse_tail_and_type_length_rollback(self):
         slots = [EMPTY]*46
@@ -403,7 +426,7 @@ class ClientContainerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, output)
             self.assertIn("CLIENT_SLOT index=36 id=358 count=1 damage=0", output)
             self.assertIn("CLIENT_MAP id=0 scale=0", output)
-            self.assertIn("metadata_known=0", output)
+            self.assertIn("metadata_known=1", output)
 
     def test_real_server_empty_hand_use_three_by_three_craft_and_close_drop(self):
         with tempfile.TemporaryDirectory(prefix="c919-client-table-") as directory:
@@ -431,8 +454,8 @@ class ClientContainerTests(unittest.TestCase):
                     self.assertNotIn("CLIENT_SLOT index=9 id=5", output)
                     while True:
                         packet = witness.wait(0x1c)
-                        _, offset = read_vint(packet)
-                        if packet[offset] == 0xaa and parse_slot(packet, offset+1)[0][:3] == (54, 1, 0):
+                        item = item_metadata(packet)
+                        if item is not None and item[1][:3] == (54, 1, 0):
                             break
                 finally:
                     witness.close()

@@ -1,8 +1,11 @@
 #include "client.h"
 #include "renderer.h"
+#include "entity/item/NativeItemMotion.h"
 #include "block/block.h"
 #include "crafting/crafting.h"
-#include "network/play/client/C08PacketPlayerBlockPlacementValue.h"
+#include "network/GameplayPacketRouter.h"
+#include "nbt/NBTBase.h"
+#include "nbt/NBTString.h"
 #include <ctype.h>
 #include <errno.h>
 #include <float.h>
@@ -15,30 +18,32 @@
 bool mc_client_inventory_ready(const mc_client *c) {
     return c->inventory_ready && (!c->window_id || c->window_ready);
 }
-unsigned mc_client_window_slots(const mc_client *c) { return mc_container_slot_count(&c->container); }
-const mc_slot *mc_client_window_slot(const mc_client *c,int index) {
-    return mc_container_const_get(&c->inventory,&c->container,index);
+unsigned mc_client_window_slots(const mc_client *c) {
+    MCGameplayPlayer *p=mc_client_graph_player(&c->gameplay);
+    return p && p->openContainer ? (unsigned)ContainerList_size(p->openContainer->inventorySlots) : 0;
 }
-
-void mc_client_slot_name(const mc_slot *slot,char *output,size_t capacity) {
-    if (!output || !capacity) return;
-    mc_nbt_view root,display,name;
-    if (slot && slot->item_id>=0 && mc_nbt_root(&slot->nbt,&root) &&
-        mc_nbt_find(&root,"display",&display) && mc_nbt_find(&display,"Name",&name)) {
-        if (mc_nbt_get_string(&name,output,capacity)) return;
-        if (name.type==8 && name.size<=UINT16_MAX+2u) {
-            char *full=malloc(name.size+1);
-            if (full) {
-                if (mc_nbt_get_string(&name,full,name.size+1)) {
-                    size_t count=strlen(full); if (count>=capacity) count=capacity-1;
-                    while (count && ((unsigned char)full[count]&0xc0u)==0x80u) --count;
-                    memcpy(output,full,count); output[count]=0; free(full); return;
-                }
-                free(full);
-            }
-        }
-    }
-    snprintf(output,capacity,"%s",slot && slot->item_id>=0 ? mc_item_name(slot->item_id) : "Empty");
+ItemStack *mc_client_window_slot(const mc_client *c,int index) {
+    MCGameplayPlayer *p=mc_client_graph_player(&c->gameplay);
+    if (!p || !p->openContainer || index<0 || (unsigned)index>=mc_client_window_slots(c)) return NULL;
+    return Slot_getStack(Container_getSlot(p->openContainer,index));
+}
+ItemStack *mc_client_player_slot(const mc_client *c,int index) {
+    MCGameplayPlayer *p=mc_client_graph_player(&c->gameplay);
+    return p && index>=0 && index<45 ? Slot_getStack(Container_getSlot(&p->inventoryContainer->container,index)) : NULL;
+}
+ItemStack *mc_client_cursor(const mc_client *c) {
+    MCGameplayPlayer *p=mc_client_graph_player(&c->gameplay);
+    return p ? InventoryPlayer_getItemStack(p->inventory) : NULL;
+}
+int mc_client_selected(const mc_client *c) {
+    MCGameplayPlayer *p=mc_client_graph_player(&c->gameplay);
+    return p ? p->inventory->currentItem : 0;
+}
+mc_maps *mc_client_maps(const mc_client *c) {
+    MCGameplayWorld *w=mc_client_graph_world(&c->gameplay); return w ? &w->maps : NULL;
+}
+void mc_client_slot_name(ItemStack *slot,char *out,size_t capacity) {
+    mc_client_graph_slot_name(slot,out,capacity);
 }
 
 static void client_error(mc_client *c, const char *message) {
@@ -238,22 +243,31 @@ static mc_remote_player *remote_player(mc_client *c, int id, bool create) {
     if (create && empty) { memset(empty, 0, sizeof(*empty)); empty->active = true; empty->id = id; return empty; }
     return NULL;
 }
+static bool begin_frame(mc_client *,MCGameplayTransaction *,MCObjectRootScope *);
+static bool finish_frame(mc_client *,MCGameplayTransaction *,bool);
 static mc_client_item *client_item(mc_client *c,int32_t eid) {
-    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) if (c->items[i].active && c->items[i].entity.eid==eid) return &c->items[i];
+    for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) if (c->items[i].active && c->items[i].eid==eid) return &c->items[i];
     return NULL;
 }
 static void remove_item(mc_client *c,mc_client_item *item) {
     if (!item || !item->active) return;
-    c->item_nbt_bytes-=item->entity.item.nbt.size; mc_item_entity_free(&item->entity);
-    memset(item,0,sizeof(*item));
+    MCObjectRootScope scope={0};
+    if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) {
+        MCGameplayObjects *o=MCGameplay_get(&c->gameplay);
+        for (size_t i=0;o && i<o->itemCount;i++) if (EntityItem_isInstance(o->items[i]) && ((EntityItem *)o->items[i])->entityId==item->eid) {
+            (void)MCGameplay_removeItem(&c->gameplay,i); break;
+        }
+        MCObjectRootScope_end(&scope);
+    }
+    memset(item,0,sizeof *item);
 }
 static void clear_items(mc_client *c) {
-    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) remove_item(c,&c->items[i]);
+    for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) remove_item(c,&c->items[i]);
 }
 static void unload_items(mc_client *c,int x,int z) {
-    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) {
-        mc_client_item *item=&c->items[i];
-        if (item->active && mc_floor_div16((int)floor(item->entity.x))==x && mc_floor_div16((int)floor(item->entity.z))==z) remove_item(c,item);
+    for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) {
+        mc_client_item *item=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,item->eid);
+        if (item->active && e && mc_floor_div16((int)floor(e->posX))==x && mc_floor_div16((int)floor(e->posZ))==z) remove_item(c,item);
     }
 }
 static void receive_object(mc_client *c,mc_buf *b) {
@@ -264,49 +278,18 @@ static void receive_object(mc_client *c,mc_buf *b) {
     if (data>0) { vx=mc_get_i16(b)/8000.0; vy=mc_get_i16(b)/8000.0; vz=mc_get_i16(b)/8000.0; }
     if (b->failed || b->pos!=b->len) { b->failed=true; return; }
     if (type!=2) return;
-    if (fabs(x/32.0)>30000000 || fabs(y/32.0)>30000000 || fabs(z/32.0)>30000000) { b->failed=true; return; }
+    if (!NativeItemMotion_positionSupported(x/32.0,y/32.0,z/32.0)) { b->failed=true; return; }
     mc_client_item *item=client_item(c,eid);
-    if (!item) for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) if (!c->items[i].active) { item=&c->items[i]; break; }
+    if (!item) for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) if (!c->items[i].active) { item=&c->items[i]; break; }
     if (!item) { b->failed=true; return; }
-    remove_item(c,item); memset(item,0,sizeof(*item)); mc_item_entity_init(&item->entity);
-    item->active=true; item->entity.eid=eid; item->server_x=x; item->server_y=y; item->server_z=z;
-    item->entity.x=x/32.0; item->entity.y=y/32.0; item->entity.z=z/32.0;
-    item->entity.vx=vx; item->entity.vy=vy; item->entity.vz=vz; ++c->item_spawns;
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) { b->failed=true; return; }
+    bool ok=mc_client_graph_spawn_item(&tx.working,eid,x/32.0,y/32.0,z/32.0,vx,vy,vz);
+    MCObjectRootScope_end(&scope);
+    if (!finish_frame(c,&tx,ok)) { b->failed=true; return; }
+    memset(item,0,sizeof *item); item->active=true; item->eid=eid;
+    item->server_x=x; item->server_y=y; item->server_z=z; ++c->item_spawns;
 }
-static void receive_metadata(mc_client *c,mc_buf *b) {
-    int32_t eid=mc_get_varint(b); mc_slot next; mc_slot_init(&next); bool has_slot=false,ended=false;
-    while (!b->failed && b->pos<b->len) {
-        unsigned header=mc_get_u8(b); if (header==0x7f) { ended=true; break; }
-        unsigned type=header>>5,index=header&31;
-        if (index==10 && type!=5 && client_item(c,eid)) { b->failed=true; break; }
-        switch (type) {
-            case 0: (void)mc_get_u8(b); break;
-            case 1: (void)mc_get_i16(b); break;
-            case 2: (void)mc_get_i32(b); break;
-            case 3: (void)mc_get_f32(b); break;
-            case 4: skip_string(b); break;
-            case 5: {
-                mc_slot value; mc_slot_init(&value); mc_slot_read(b,&value);
-                if (!b->failed && index==10) { mc_slot_free(&next); next=value; mc_slot_init(&value); has_slot=true; }
-                mc_slot_free(&value); break;
-            }
-            case 6: for (unsigned i=0;i<3;i++) (void)mc_get_i32(b); break;
-            case 7: for (unsigned i=0;i<3;i++) (void)mc_get_f32(b); break;
-        }
-    }
-    if (!ended || b->pos!=b->len) b->failed=true;
-    mc_client_item *item=client_item(c,eid);
-    if (!b->failed && item && has_slot) {
-        size_t total=c->item_nbt_bytes-item->entity.item.nbt.size;
-        if (next.nbt.size>MC_NBT_MAX_BYTES-total) b->failed=true;
-        else {
-            c->item_nbt_bytes=total+next.nbt.size; mc_slot_free(&item->entity.item); item->entity.item=next; mc_slot_init(&next);
-            item->metadata_ready=item->entity.item.item_id>=0; ++c->item_metadata;
-        }
-    }
-    mc_slot_free(&next);
-}
-
 static mc_chunk *client_chunk(mc_client *c, int x, int z) {
     mc_chunk *chunk = mc_world_chunk(&c->world, x, z, false);
     if (chunk) return chunk;
@@ -390,10 +373,13 @@ static void send_abilities(mc_client *c) {
     send_packet(c, &packet);
 }
 
-static void send_slot(mc_client *c, int slot) {
-    mc_buf packet;
-    c->selected = slot;
-    start_packet(&packet, 0x09); mc_put_i16(&packet, (int16_t)slot); send_packet(c, &packet);
+static bool begin_frame(mc_client *,MCGameplayTransaction *,MCObjectRootScope *);
+static bool finish_frame(mc_client *,MCGameplayTransaction *,bool);
+static void send_slot(mc_client *c,int slot) {
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return;
+    bool ok=mc_client_graph_select(&tx.working,slot);
+    MCObjectRootScope_end(&scope); (void)finish_frame(c,&tx,ok);
 }
 
 static void configure_player(mc_client *c) {
@@ -404,258 +390,149 @@ static void configure_player(mc_client *c) {
     start_packet(&packet, 0x17);
     mc_put_string(&packet, "MC|Brand"); mc_put_string(&packet, "C919 native"); send_packet(c, &packet);
     if (c->gamemode == 1) c->can_fly = true;
-    send_slot(c, c->selected);
+    send_slot(c, mc_client_selected(c));
 }
 
-static void cancel_inventory_actions(mc_client *c) {
-    c->inventory_queue_count=0; c->inventory_queue_index=0; c->inventory_close_requested=false;
-    c->inventory_pending=false; c->inventory_sync=false; c->inventory_sync_slots=false; c->inventory_sync_cursor=false;
+static bool client_packet_sink(const mc_buf *packet,void *context) {
+    mc_client *c=context; return mc_conn_send(&c->connection,packet);
+}
+static void gui_view(mc_client *c) {
+    MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
+    c->inventory_open=b && b->screenOpen; c->creative_open=b && b->creativeScreen;
+    c->window_id=b ? (uint8_t)b->player->openContainer->windowId : 0;
+}
+static bool finish_frame(mc_client *c,MCGameplayTransaction *tx,bool ok) {
+    char error[160];
+    if (!ok || MCObjectHeap_failed(tx->working.heap)) {
+        (void)MCGameplay_abort(tx); client_error(c,"Source client dependency or graph allocation failed"); return false;
+    }
+    if (!MCGameplay_acceptClientFrame(tx,MCGameplayClientPackets_validateFrame,NULL,error,sizeof error)) {
+        client_error(c,error); return false;
+    }
+    gui_view(c);
+    MCPacketQueueResult sent=MCGameplayClientPackets_flush(&c->gameplay,0,client_packet_sink,c);
+    if (sent==MC_PACKET_QUEUE_FAILED) { client_error(c,"Unable to submit source client packet queue"); return false; }
+    return true;
+}
+static bool begin_frame(mc_client *c,MCGameplayTransaction *tx,MCObjectRootScope *scope) {
+    if (!MCGameplay_begin(&c->gameplay,tx)) { client_error(c,"Cannot snapshot remote client graph"); return false; }
+    if (!MCObjectRootScope_begin(scope,tx->working.heap)) {
+        (void)MCGameplay_abort(tx); client_error(c,"Cannot borrow client working graph"); return false;
+    }
+    return true;
+}
+static void actor_native_state(mc_client *c) {
+    MCObjectRootScope scope={0}; if (!MCObjectRootScope_begin(&scope,c->gameplay.heap)) return;
+    MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
+    if (b) {
+        b->player->posX=c->x; b->player->posY=c->y; b->player->posZ=c->z;
+        b->player->rotationYaw=c->yaw; b->player->rotationPitch=c->pitch;
+        b->player->entityId=c->entity_id; b->player->creative=c->gamemode==1; b->player->spectator=c->gamemode==3;
+        b->player->dimension=c->dimension;
+        b->player->worldObj->dimension=c->dimension;
+        if (c->gamemode!=1) b->creativeScreen=false;
+        static const PlayerControllerMPGameType *const modes[]={&PlayerControllerMP_SURVIVAL,&PlayerControllerMP_CREATIVE,&PlayerControllerMP_ADVENTURE,&PlayerControllerMP_SPECTATOR};
+        if (c->gamemode>=0 && c->gamemode<4) b->controller->currentGameType=modes[c->gamemode];
+        MCObjectHeap_touch(c->gameplay.heap);
+    }
+    MCObjectRootScope_end(&scope);
+    gui_view(c);
 }
 static void reset_window(mc_client *c) {
-    cancel_inventory_actions(c);
-    mc_container_free(&c->container); mc_container_init(&c->container,MC_CONTAINER_PLAYER);
-    mc_container_free(&c->container_authoritative); mc_container_init(&c->container_authoritative,MC_CONTAINER_PLAYER);
-    c->window_id=0; c->window_ready=false; ++c->window_generation; c->window_title[0]=0;
+    c->window_ready=false; ++c->window_generation; c->window_title[0]=0;
 }
 static void receive_open_window(mc_client *c,mc_buf *b) {
     unsigned window=mc_get_u8(b); char type[129],title[256];
-    if (!mc_get_string(b,type,sizeof(type))) return;
+    if (!mc_get_string(b,type,sizeof type)) return;
     unsigned units=0; for (const unsigned char *p=(const unsigned char *)type;*p;p++) if ((*p&0xc0u)!=0x80u) units+=*p>=0xf0u ? 2u : 1u;
     if (units>32 || !read_window_title(b,title)) { b->failed=true; return; }
     unsigned count=mc_get_u8(b); if (!strcmp(type,"EntityHorse")) (void)mc_get_i32(b);
     if (b->failed || b->pos!=b->len) { b->failed=true; return; }
     bool workbench=window && !strcmp(type,"minecraft:crafting_table") && count==0;
-    if (!workbench) {
-        mc_buf reply; start_packet(&reply,0x0d); mc_put_u8(&reply,(uint8_t)window);
-        if (send_packet(c,&reply)) {
-            reset_window(c); c->inventory_open=false; c->creative_open=false;
-            snprintf(c->inventory_status,sizeof(c->inventory_status),"This external container is unavailable; its window was closed");
-        }
-        return;
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) { b->failed=true; return; }
+    bool ok;
+    if (workbench) ok=mc_client_graph_open(&tx.working,(int32_t)window,true);
+    else {
+        MCGameplayPlayer *p=mc_client_graph_player(&tx.working);
+        C0DPacketCloseWindow *reply=C0DPacketCloseWindow_new(tx.working.heap,(int32_t)window);
+        ok=reply && MCGameplayClientPackets_addToSendQueue(p,(MCObject *)reply) && mc_client_graph_close(&tx.working,false);
     }
-    reset_window(c); c->window_id=(uint8_t)window;
-    mc_container_init(&c->container,MC_CONTAINER_WORKBENCH); mc_container_init(&c->container_authoritative,MC_CONTAINER_WORKBENCH);
-    snprintf(c->window_title,sizeof(c->window_title),"%s",title[0] ? title : "Workbench");
-    c->inventory_open=true; c->creative_open=false;
-    snprintf(c->inventory_status,sizeof(c->inventory_status),"Waiting for workbench contents");
+    MCObjectRootScope_end(&scope);
+    if (!finish_frame(c,&tx,ok)) { b->failed=true; return; }
+    reset_window(c);
+    if (workbench) snprintf(c->window_title,sizeof c->window_title,"%s",title[0] ? title : "Workbench");
+    snprintf(c->inventory_status,sizeof c->inventory_status,"%s",workbench ? "Waiting for workbench contents" : "This external container is unavailable; its window was closed");
 }
-static mc_crafting_context client_crafting_context(mc_client *c) {
-    mc_crafting_context context={0}; context.creative=c->gamemode==1; context.authoritative=false;
-    context.player_x=c->x; context.player_z=c->z; context.dimension=c->dimension;
-    context.maps=&c->maps;
-    return context;
-}
-static size_t inventory_nbt_bytes(const mc_inventory *player,const mc_container *container);
 static void inventory_click(mc_client *c,int slot,int button,int mode) {
-    if (!mc_client_inventory_ready(c) || c->inventory_pending || c->inventory_sync) {
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Waiting for server inventory synchronization"); return;
-    }
-    if ((slot!= -999 && (slot<0 || (unsigned)slot>=mc_client_window_slots(c))) ||
-        (mode==3 && c->gamemode!=1) || (mode==5 && button>=8 && c->gamemode!=1)) {
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"This inventory action is unavailable in the current game mode"); return;
-    }
-    mc_inventory predicted; mc_inventory_init(&predicted);
-    mc_container predicted_container; mc_container_init(&predicted_container,c->container.kind);
-    mc_crafting_context context=client_crafting_context(c);
-    mc_slot returned; mc_slot_init(&returned); mc_crafting_effects effects; mc_crafting_effects_init(&effects);
-    if (!mc_inventory_copy(&predicted,&c->inventory) || !mc_container_copy(&predicted_container,&c->container) ||
-        !mc_container_click(&predicted,&predicted_container,&context,slot,button,mode,&returned,&effects) ||
-        inventory_nbt_bytes(&predicted,&predicted_container)>MC_MAX_PACKET) {
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"This inventory action is unavailable"); goto done;
-    }
-    c->inventory_action=c->next_inventory_action;
-    c->next_inventory_action=(int16_t)((uint16_t)c->next_inventory_action+1u);
-    mc_buf packet; start_packet(&packet,0x0e); mc_put_u8(&packet,c->window_id);
-    mc_put_i16(&packet,(int16_t)slot); mc_put_u8(&packet,(uint8_t)button);
-    mc_put_i16(&packet,c->inventory_action); mc_put_u8(&packet,(uint8_t)mode); mc_slot_write(&packet,&returned);
-    if (send_packet(c,&packet)) {
-        mc_inventory_free(&c->inventory); c->inventory=predicted; mc_inventory_init(&predicted);
-        mc_container_free(&c->container); c->container=predicted_container; mc_container_init(&predicted_container,c->container.kind);
-        c->inventory_pending_window=c->window_id; c->inventory_pending_generation=c->window_generation;
-        c->inventory_pending=true; c->inventory_pending_ms=mc_time_ms();
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Waiting for transaction %d",c->inventory_action);
-    }
-done:
-    mc_inventory_free(&predicted); mc_container_free(&predicted_container); mc_slot_free(&returned); mc_crafting_effects_free(&effects);
+    if (!mc_client_inventory_ready(c)) return;
+    if ((slot!=-999 && (slot<0 || (unsigned)slot>=mc_client_window_slots(c))) ||
+        (mode==3 && c->gamemode!=1) || (mode==5 && button>=8 && c->gamemode!=1)) return;
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return;
+    bool ok=mc_client_graph_click(&tx.working,slot,button,mode);
+    MCObjectRootScope_end(&scope);
+    if (finish_frame(c,&tx,ok)) snprintf(c->inventory_status,sizeof c->inventory_status,"Inventory action sent");
 }
-
 static void creative_pick(mc_client *c,unsigned index) {
-    if (c->window_id || c->gamemode!=1 || !mc_client_inventory_ready(c) || c->inventory_pending || c->inventory_sync || c->inventory.cursor.item_id>=0) {
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Creative selection needs synchronized inventory and an empty cursor"); return;
-    }
     int16_t id,damage;
-    if (!mc_item_creative_at(index,&id,&damage)) return;
-    mc_slot item; mc_slot_init(&item);
-    if (!mc_slot_set(&item,id,(uint8_t)mc_item_stack_limit(id),damage)) { client_error(c,"Cannot construct creative slot"); return; }
-    mc_buf packet; start_packet(&packet,0x10); mc_put_i16(&packet,(int16_t)(MC_HOTBAR_START+c->selected)); mc_slot_write(&packet,&item);
-    if (send_packet(c,&packet)) {
-        int slot=MC_HOTBAR_START+c->selected;
-        if (!mc_slot_copy(&c->inventory.slots[slot],&item) || !mc_slot_copy(&c->inventory_authoritative.slots[slot],&item)) client_error(c,"Cannot retain creative inventory slot");
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Added %s to hotbar %d",mc_item_name(id),c->selected+1);
-    }
-    mc_slot_free(&item);
+    if (c->window_id || c->gamemode!=1 || !mc_client_inventory_ready(c) || mc_client_cursor(c) || !mc_item_creative_at(index,&id,&damage)) return;
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return;
+    bool ok=mc_client_graph_creative(&tx.working,id,damage);
+    MCObjectRootScope_end(&scope); (void)finish_frame(c,&tx,ok);
 }
-
-static void close_inventory(mc_client *c,bool notify_server) {
-    if (!notify_server) {
-        /* A server close clears the shared cursor before closing the GUI.
-           Only the ordinary player GUI invokes its 2x2 container cleanup. */
-        if (!c->window_id && c->inventory_open && !c->creative_open) for (int i=0;i<=4;i++) {
-            mc_slot_free(&c->inventory.slots[i]); mc_slot_free(&c->inventory_authoritative.slots[i]);
-        }
-        mc_slot_free(&c->inventory.cursor); mc_slot_free(&c->inventory_authoritative.cursor);
-        c->inventory.drag_active=false; c->inventory.drag_mode=0; c->inventory.drag_slots=0;
-        c->inventory_authoritative.drag_active=false; c->inventory_authoritative.drag_mode=0; c->inventory_authoritative.drag_slots=0;
-        reset_window(c);
-        c->inventory_open=false; c->creative_open=false; c->inventory_close_requested=false;
-        return;
-    }
-    if (c->inventory_pending || c->inventory_sync || c->inventory_queue_index<c->inventory_queue_count) {
-        c->inventory_close_requested=true;
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Closing after the server confirms inventory synchronization"); return;
-    }
-    mc_inventory next,authoritative; mc_inventory_init(&next); mc_inventory_init(&authoritative);
-    mc_container next_container; mc_container_init(&next_container,c->container.kind);
-    mc_crafting_effects effects; mc_crafting_effects_init(&effects);
-    if (!mc_inventory_copy(&next,&c->inventory) || !mc_container_copy(&next_container,&c->container) ||
-        !mc_container_close(&next,&next_container,&effects) || !mc_inventory_copy(&authoritative,&next)) {
-        client_error(c,"Cannot retain closed inventory state"); goto done;
-    }
-    mc_buf packet; start_packet(&packet,0x0d); mc_put_u8(&packet,c->window_id);
-    if (send_packet(c,&packet)) {
-        mc_inventory_free(&c->inventory); c->inventory=next; mc_inventory_init(&next);
-        mc_inventory_free(&c->inventory_authoritative); c->inventory_authoritative=authoritative; mc_inventory_init(&authoritative);
-        reset_window(c);
-        c->inventory_open=false; c->creative_open=false; c->inventory_close_requested=false;
-    }
-done:
-    mc_inventory_free(&next); mc_inventory_free(&authoritative); mc_container_free(&next_container); mc_crafting_effects_free(&effects);
+static void close_inventory(mc_client *c,bool send) {
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return;
+    bool ok=mc_client_graph_close(&tx.working,send);
+    MCObjectRootScope_end(&scope);
+    if (finish_frame(c,&tx,ok)) { reset_window(c); snprintf(c->inventory_status,sizeof c->inventory_status,"Inventory closed"); }
+}
+static void open_inventory(mc_client *c) {
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return;
+    bool ok=mc_client_graph_open(&tx.working,0,false);
+    MCObjectRootScope_end(&scope); (void)finish_frame(c,&tx,ok);
 }
 static void drop_held_item(mc_client *c,bool all) {
-    if (!c->inventory_ready || c->inventory_pending || c->inventory_sync) return;
-    mc_slot *held=&c->inventory.slots[36+c->selected]; if (held->item_id<0) return;
-    mc_slot next,authoritative; mc_slot_init(&next); mc_slot_init(&authoritative);
-    if (!mc_slot_copy(&next,held)) { client_error(c,"Cannot retain dropped inventory state"); return; }
-    if (all || next.count==1) mc_slot_free(&next); else --next.count;
-    if (!mc_slot_copy(&authoritative,&next)) { client_error(c,"Cannot retain dropped inventory state"); mc_slot_free(&next); return; }
-    mc_buf packet; start_packet(&packet,0x07); mc_put_varint(&packet,all ? 3 : 4); mc_put_position(&packet,0,0,0); mc_put_u8(&packet,0);
-    if (send_packet(c,&packet)) {
-        mc_slot_free(held); *held=next; mc_slot_init(&next);
-        mc_slot *saved=&c->inventory_authoritative.slots[36+c->selected]; mc_slot_free(saved); *saved=authoritative; mc_slot_init(&authoritative);
-    }
-    mc_slot_free(&next); mc_slot_free(&authoritative);
+    if (!c->inventory_ready) return;
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return;
+    bool ok=mc_client_graph_drop(&tx.working,all);
+    MCObjectRootScope_end(&scope); (void)finish_frame(c,&tx,ok);
 }
-
-static size_t inventory_nbt_bytes(const mc_inventory *player,const mc_container *container) {
-    size_t bytes=player->cursor.nbt.size;
-    for (int i=0;i<MC_PLAYER_INVENTORY_SIZE;i++) bytes+=player->slots[i].nbt.size;
-    if (container->kind==MC_CONTAINER_WORKBENCH) for (int i=0;i<10;i++) bytes+=container->slots[i].nbt.size;
-    return bytes;
-}
-static void receive_inventory(mc_client *c,mc_buf *b) {
-    unsigned window=mc_get_u8(b); int count=mc_get_i16(b);
-    bool matching=window==0 || (c->window_id && window==c->window_id);
-    unsigned expected=window==0 ? MC_PLAYER_INVENTORY_SIZE : mc_client_window_slots(c);
-    if (b->failed || count<0 || (matching && (unsigned)count!=expected)) { b->failed=true; return; }
-    mc_inventory next,authoritative; mc_inventory_init(&next); mc_inventory_init(&authoritative);
-    mc_container next_container,saved; mc_container_init(&next_container,c->container.kind); mc_container_init(&saved,c->container.kind);
-    if (matching && (!mc_inventory_copy(&next,&c->inventory) || !mc_container_copy(&next_container,&c->container))) b->failed=true;
-    for (int i=0;i<count && !b->failed;i++) {
-        mc_slot discard; mc_slot_init(&discard);
-        mc_slot *slot=!matching ? &discard : window==0 ? &next.slots[i] : mc_container_get(&next,&next_container,i);
-        if (!slot || !mc_slot_read(b,slot)) b->failed=true;
-        mc_slot_free(&discard);
+static void receive_source_packet(mc_client *c,mc_buf *b,int32_t id) {
+    unsigned window=b->pos<b->len ? b->data[b->pos] : 0;
+    int32_t eid=0; if (id==0x1c) { mc_buf peek=*b; eid=mc_get_varint(&peek); }
+    bool rejected=id==0x32 && b->len-b->pos>=4 && !b->data[b->pos+3];
+    MCGameplayTransaction tx={0};
+    if (!MCGameplay_begin(&c->gameplay,&tx)) { b->failed=true; return; }
+    GameplayPacketResult result=GameplayPacketRouter_client(&tx.working,0,id,b);
+    if (result!=MC_GAMEPLAY_PACKET_APPLIED) { (void)MCGameplay_abort(&tx); b->failed=true; return; }
+    if (!finish_frame(c,&tx,true)) { b->failed=true; return; }
+    if (id==0x30) {
+        if (!window) c->inventory_ready=true;
+        else if (window==c->window_id) c->window_ready=true;
+        if (!window || window==c->window_id)
+            snprintf(c->inventory_status,sizeof c->inventory_status,"Inventory updated");
+        ++c->inventory_packets;
     }
-    if (!b->failed && b->pos!=b->len) b->failed=true;
-    if (!b->failed && matching) {
-        bool sync_window=c->inventory_sync && window==c->inventory_pending_window;
-        if (sync_window) {
-            next.drag_active=false; next.drag_mode=0; next.drag_slots=0;
-            mc_container_reset_drag(&next_container);
-        }
-        const mc_slot *cursor=c->inventory_pending ? &c->inventory.cursor : &c->inventory_authoritative.cursor;
-        const mc_container *saved_source=window==0 && c->window_id ? &c->container_authoritative : &next_container;
-        if (!mc_slot_copy(&next.cursor,cursor) || inventory_nbt_bytes(&next,&next_container)>MC_MAX_PACKET ||
-            !mc_inventory_copy(&authoritative,&next) ||
-            !mc_slot_copy(&authoritative.cursor,&c->inventory_authoritative.cursor) ||
-            !mc_container_copy(&saved,saved_source) || inventory_nbt_bytes(&authoritative,&saved)>MC_MAX_PACKET) b->failed=true;
-        else {
-            mc_inventory_free(&c->inventory); c->inventory=next; mc_inventory_init(&next);
-            mc_inventory_free(&c->inventory_authoritative); c->inventory_authoritative=authoritative; mc_inventory_init(&authoritative);
-            mc_container_free(&c->container); c->container=next_container; mc_container_init(&next_container,c->container.kind);
-            mc_container_free(&c->container_authoritative); c->container_authoritative=saved; mc_container_init(&saved,c->container.kind);
-            if (!window) c->inventory_ready=true; else c->window_ready=true;
-            ++c->inventory_packets;
-            if (sync_window) {
-                c->inventory_sync_slots=true;
-                if (c->inventory_sync_cursor) c->inventory_sync=false;
+    else if (id==0x2f) ++c->inventory_packets;
+    else if (id==0x32 && rejected) ++c->inventory_rejections;
+    else if (id==0x2e) reset_window(c);
+    else if (id==0x1c) {
+        mc_client_item *item=client_item(c,eid);
+        if (item) {
+            MCObjectReadScope read={0};
+            if (MCObjectReadScope_begin(&read,c->gameplay.heap)) {
+                EntityItem *entity=mc_client_graph_item(&c->gameplay,eid);
+                item->metadata_ready=entity && DataWatcher_getWatchableObjectItemStack(entity->dataWatcher,10)!=NULL;
+                MCObjectReadScope_end(&read);
             }
-            snprintf(c->inventory_status,sizeof(c->inventory_status),"%s",c->inventory_sync ? "Waiting for authoritative cursor synchronization" : "Inventory synchronized");
+            ++c->item_metadata;
         }
     }
-    mc_inventory_free(&next); mc_inventory_free(&authoritative); mc_container_free(&next_container); mc_container_free(&saved);
-}
-
-static void receive_slot(mc_client *c,mc_buf *b) {
-    int window=(int8_t)mc_get_u8(b),index=mc_get_i16(b);
-    mc_slot item; mc_slot_init(&item); mc_slot_read(b,&item);
-    if (!b->failed && b->pos!=b->len) b->failed=true;
-    mc_slot *current=NULL,*authoritative=NULL;
-    if (window==-1 && index==-1) { current=&c->inventory.cursor; authoritative=&c->inventory_authoritative.cursor; }
-    else if (window==-2 && index>=0 && index<40) {
-        if (window==-2) index=index<9 ? MC_HOTBAR_START+index : index<36 ? index : 44-index;
-        current=&c->inventory.slots[index]; authoritative=&c->inventory_authoritative.slots[index];
-    } else if (window==0 && index>=36 && index<45) {
-        current=&c->inventory.slots[index]; authoritative=&c->inventory_authoritative.slots[index];
-    } else if ((uint8_t)window==c->window_id && index>=0 && (unsigned)index<mc_client_window_slots(c)) {
-        current=mc_container_get(&c->inventory,&c->container,index);
-        authoritative=mc_container_get(&c->inventory_authoritative,&c->container_authoritative,index);
-    } else if (window==-1 || window==-2 || (uint8_t)window==c->window_id) b->failed=true;
-    if (!b->failed && current) {
-        if (inventory_nbt_bytes(&c->inventory,&c->container)-current->nbt.size+item.nbt.size>MC_MAX_PACKET ||
-            inventory_nbt_bytes(&c->inventory_authoritative,&c->container_authoritative)-authoritative->nbt.size+item.nbt.size>MC_MAX_PACKET ||
-            !mc_slot_copy(current,&item)) b->failed=true;
-        else {
-            mc_slot_free(authoritative); *authoritative=item; mc_slot_init(&item); ++c->inventory_packets;
-            if (window==-1 && c->inventory_sync) {
-                c->inventory_sync_cursor=true;
-                if (c->inventory_sync_slots) { c->inventory_sync=false; snprintf(c->inventory_status,sizeof(c->inventory_status),"Inventory synchronized"); }
-            }
-        }
-    }
-    mc_slot_free(&item);
-}
-
-static void receive_transaction(mc_client *c,mc_buf *b) {
-    unsigned window=mc_get_u8(b); int16_t action=mc_get_i16(b); unsigned accepted=mc_get_u8(b);
-    if (b->failed || accepted>1 || b->pos!=b->len) { b->failed=true; return; }
-    if (window!=0 && window!=c->window_id) return;
-    if (!accepted) {
-        mc_buf reply; start_packet(&reply,0x0f); mc_put_u8(&reply,(uint8_t)window); mc_put_i16(&reply,action); mc_put_u8(&reply,1); send_packet(c,&reply);
-    }
-    if (!c->inventory_pending || action!=c->inventory_action || window!=c->inventory_pending_window ||
-        c->inventory_pending_generation!=c->window_generation) return;
-    c->inventory_pending=false;
-    mc_inventory copied; mc_inventory_init(&copied); mc_container copied_container; mc_container_init(&copied_container,c->container.kind);
-    bool copied_ok=mc_inventory_copy(&copied,accepted ? &c->inventory : &c->inventory_authoritative) &&
-        mc_container_copy(&copied_container,accepted ? &c->container : &c->container_authoritative);
-    if (!copied_ok) b->failed=true;
-    if (accepted) {
-        if (copied_ok) {
-            mc_inventory_free(&c->inventory_authoritative); c->inventory_authoritative=copied; mc_inventory_init(&copied);
-            mc_container_free(&c->container_authoritative); c->container_authoritative=copied_container; mc_container_init(&copied_container,c->container.kind);
-        }
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Inventory transaction accepted");
-    } else {
-        ++c->inventory_rejections; c->inventory_sync=true; c->inventory_sync_slots=false; c->inventory_sync_cursor=false;
-        c->inventory_queue_count=0; c->inventory_queue_index=0;
-        if (copied_ok) {
-            mc_inventory_free(&c->inventory); c->inventory=copied; mc_inventory_init(&copied);
-            mc_container_free(&c->container); c->container=copied_container; mc_container_init(&copied_container,c->container.kind);
-        }
-        snprintf(c->inventory_status,sizeof(c->inventory_status),"Server rejected action; waiting for inventory resynchronization");
-    }
-    mc_inventory_free(&copied); mc_container_free(&copied_container);
 }
 
 static void handle_player_info(mc_client *c, mc_buf *b) {
@@ -721,7 +598,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
                 c->joined = true;
                 snprintf(c->status, sizeof(c->status), "Connected; loading terrain");
                 printf("JOIN entity=%d gamemode=%d dimension=%d\n", c->entity_id, c->gamemode, c->dimension);
-                configure_player(c);
+                actor_native_state(c); configure_player(c);
             }
             break;
         }
@@ -737,17 +614,17 @@ static void handle_packet(mc_client *c, mc_buf *b) {
         }
         case 0x07:
             c->dimension = mc_get_i32(b); (void)mc_get_u8(b); c->gamemode = mc_get_u8(b); skip_string(b);
-            if (!b->failed) { close_inventory(c,false); clear_items(c); mc_maps_free(&c->maps); mc_maps_init(&c->maps); mc_world_free(&c->world); mc_world_init(&c->world, 0); memset(c->players, 0, sizeof(c->players)); c->positioned = false; c->velocity_y = 0; }
+            if (!b->failed) { close_inventory(c,false); clear_items(c); MCObjectRootScope map_scope={0}; if (MCObjectRootScope_begin(&map_scope,c->gameplay.heap)) { mc_maps *maps=mc_client_maps(c); mc_maps_free(maps); mc_maps_init(maps); MCObjectRootScope_end(&map_scope); } mc_world_free(&c->world); mc_world_init(&c->world, 0); memset(c->players, 0, sizeof(c->players)); c->positioned = false; c->velocity_y = 0; actor_native_state(c); }
             break;
         case 0x08: {
             double x = mc_get_f64(b), y = mc_get_f64(b), z = mc_get_f64(b);
             float yaw = mc_get_f32(b), pitch = mc_get_f32(b); uint8_t flags = mc_get_u8(b);
             if (!b->failed && !correct_position(c, x, y, z, yaw, pitch, flags)) b->failed = true;
-            if (!b->failed) send_movement(c);
+            if (!b->failed) { actor_native_state(c); send_movement(c); }
             break;
         }
         case 0x09: {
-            int slot = mc_get_u8(b); if (slot < 9) c->selected = slot;
+            int slot = mc_get_u8(b); if (slot < 9) { MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { mc_client_graph_player(&c->gameplay)->inventory->currentItem=slot; MCObjectHeap_touch(c->gameplay.heap); MCObjectRootScope_end(&scope); } }
             break;
         }
         case 0x0c: {
@@ -777,7 +654,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             int32_t entity=mc_get_varint(b); double vx=mc_get_i16(b)/8000.0,vy=mc_get_i16(b)/8000.0,vz=mc_get_i16(b)/8000.0;
             if (b->failed || b->pos!=b->len) { b->failed=true; break; }
             mc_client_item *item=client_item(c,entity);
-            if (item) { item->entity.vx=vx; item->entity.vy=vy; item->entity.vz=vz; }
+            if (item) { MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) { e->motionX=vx; e->motionY=vy; e->motionZ=vz; } MCObjectRootScope_end(&scope); } }
             break;
         }
         case 0x13: {
@@ -791,7 +668,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
         case 0x14: {
             int32_t eid=mc_get_varint(b); unsigned ground=mc_get_u8(b);
             if (b->failed || b->pos!=b->len || ground>1) { b->failed=true; break; }
-            mc_client_item *item=client_item(c,eid); if (item) item->entity.on_ground=ground!=0;
+            mc_client_item *item=client_item(c,eid); if (item) { MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,eid); if (e) e->onGround=ground!=0; MCObjectRootScope_end(&scope); } }
             break;
         }
         case 0x15: case 0x16: case 0x17: case 0x18: {
@@ -803,25 +680,28 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             if (id != 0x15) { yaw = mc_get_u8(b) * (360.0f / 256.0f); pitch = mc_get_u8(b) * (360.0f / 256.0f); }
             unsigned ground=mc_get_u8(b);
             if (b->failed || b->pos!=b->len || ground>1) { b->failed=true; break; }
+            double next_x=0,next_y=0,next_z=0;
+            if (item) {
+                next_x=id==0x18 ? x : item->server_x/32.0+x;
+                next_y=id==0x18 ? y : item->server_y/32.0+y;
+                next_z=id==0x18 ? z : item->server_z/32.0+z;
+                if (!NativeItemMotion_positionSupported(next_x,next_y,next_z)) { b->failed=true; break; }
+            }
             if (!b->failed && p) {
                 if (id == 0x18) { p->x = x; p->y = y; p->z = z; }
                 else if (id != 0x16) { p->x += x; p->y += y; p->z += z; }
                 if (id != 0x15) { p->yaw = yaw; p->pitch = pitch; }
             }
             if (item) {
-                double next_x=id==0x18 ? x : item->server_x/32.0+x;
-                double next_y=id==0x18 ? y : item->server_y/32.0+y;
-                double next_z=id==0x18 ? z : item->server_z/32.0+z;
-                if (fabs(next_x)>30000000 || fabs(next_y)>30000000 || fabs(next_z)>30000000) { b->failed=true; break; }
                 if (id!=0x16) {
                     item->server_x=(int32_t)llround(next_x*32); item->server_y=(int32_t)llround(next_y*32); item->server_z=(int32_t)llround(next_z*32);
-                    item->entity.x=next_x; item->entity.y=next_y; item->entity.z=next_z;
+                    MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) { e->posX=next_x; e->posY=next_y; e->posZ=next_z; } MCObjectRootScope_end(&scope); }
                 }
-                item->entity.on_ground=ground!=0;
+                MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) { EntityItem *e=mc_client_graph_item(&c->gameplay,entity); if (e) e->onGround=ground!=0; MCObjectRootScope_end(&scope); }
             }
             break;
         }
-        case 0x1c: receive_metadata(c,b); break;
+        case 0x1c: receive_source_packet(c,b,id); break;
         case 0x21: {
             int x = mc_get_i32(b), z = mc_get_i32(b); bool full = mc_get_u8(b) != 0;
             uint16_t mask = (uint16_t)mc_get_i16(b); int length = mc_get_varint(b);
@@ -866,7 +746,7 @@ static void handle_packet(mc_client *c, mc_buf *b) {
             else if (reason==3) {
                 if (value<0 || value>3 || value!=(float)(int)value) b->failed=true;
                 else {
-                    c->gamemode=(int)value;
+                    c->gamemode=(int)value; actor_native_state(c);
                     c->can_fly=c->gamemode==1 || c->gamemode==3;
                     if (!c->can_fly) { c->flying=false; c->velocity_y=0; }
                     else if (c->gamemode==3) c->flying=true;
@@ -880,18 +760,16 @@ static void handle_packet(mc_client *c, mc_buf *b) {
         }
         case 0x38: handle_player_info(c, b); break;
         case 0x2d: receive_open_window(c,b); break;
-        case 0x2e: {
-            (void)mc_get_u8(b);
-            if (b->failed || b->pos!=b->len) { b->failed=true; break; }
-            cancel_inventory_actions(c);
-            close_inventory(c,false);
-            snprintf(c->inventory_status,sizeof(c->inventory_status),"Server closed inventory");
+        case 0x2e: case 0x2f: case 0x30: case 0x32: receive_source_packet(c,b,id); break;
+        case 0x34: {
+            MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+            if (!begin_frame(c,&tx,&scope)) { b->failed=true; break; }
+            bool ok=mc_maps_receive(&mc_client_graph_world(&tx.working)->maps,b);
+            MCObjectRootScope_end(&scope);
+            if (!ok) { (void)MCGameplay_abort(&tx); b->failed=true; }
+            else if (!finish_frame(c,&tx,true)) b->failed=true;
             break;
         }
-        case 0x2f: receive_slot(c,b); break;
-        case 0x30: receive_inventory(c,b); break;
-        case 0x32: receive_transaction(c,b); break;
-        case 0x34: if (!mc_maps_receive(&c->maps,b)) b->failed=true; break;
         case 0x39: {
             int flags = mc_get_u8(b); (void)mc_get_f32(b); (void)mc_get_f32(b);
             c->can_fly = (flags & 4) != 0; c->flying = (flags & 2) != 0;
@@ -988,25 +866,21 @@ bool mc_client_ray(const mc_client *c, int *x, int *y, int *z, int *face) {
     return false;
 }
 
-static bool send_placement(mc_client *c,C08ValueBlockPos position,int face,const mc_slot *held,bool air) {
-    C08PacketPlayerBlockPlacementValue placement; C08PacketPlayerBlockPlacementValue_init(&placement);
-    const mc_slot *stack=held->item_id<0 ? NULL : held;
-    bool ready=air ? C08PacketPlayerBlockPlacementValue_constructUseItem(&placement,stack) :
-        C08PacketPlayerBlockPlacementValue_construct(&placement,&position,face,stack,0.5f,0.5f,0.5f);
-    mc_buf packet; start_packet(&packet,0x08);
-    if (!ready || !C08PacketPlayerBlockPlacementValue_writePacketData(&placement,&packet)) packet.failed=true;
-    C08PacketPlayerBlockPlacementValue_free(&placement);
-    return send_packet(c,&packet);
+static bool send_placement(mc_client *c,int x,int y,int z,int face,bool air) {
+    MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+    if (!begin_frame(c,&tx,&scope)) return false;
+    bool ok=mc_client_graph_place(&tx.working,x,y,z,face,air);
+    MCObjectRootScope_end(&scope); return finish_frame(c,&tx,ok);
 }
 static void edit_block(mc_client *c, bool place) {
     if (c->gamemode==3 || (!place && c->gamemode!=1)) return;
     int x=0,y=0,z=0,face=0; bool hit=mc_client_ray(c,&x,&y,&z,&face);
-    const mc_slot *held=&c->inventory.slots[MC_HOTBAR_START+c->selected];
-    bool use_map=place && held->item_id==395 && (!hit || (mc_world_get(&c->world,x,y,z)>>4)!=58);
+    ItemStack *held=mc_client_player_slot(c,36+mc_client_selected(c));
+    bool use_map=place && held && ItemStack_registryId(held->item)==395 && (!hit || (mc_world_get(&c->world,x,y,z)>>4)!=58);
     if (!hit && !use_map) return;
     mc_buf packet;
     if (hit) {
-        if (place) { if (!send_placement(c,(C08ValueBlockPos){x,y,z},face,held,false)) return; }
+        if (place) { if (!send_placement(c,x,y,z,face,false)) return; }
         else {
             start_packet(&packet,0x07); mc_put_varint(&packet,0);
             mc_put_position(&packet,x,y,z); mc_put_u8(&packet,(uint8_t)face);
@@ -1015,7 +889,7 @@ static void edit_block(mc_client *c, bool place) {
     }
     /* A non-activating block use falls through to the held empty map's air
        use, matching the same right-click path when no block is in reach. */
-    if (use_map && !send_placement(c,(C08ValueBlockPos){-1,-1,-1},255,held,true)) return;
+    if (use_map && !send_placement(c,-1,-1,-1,255,true)) return;
     start_packet(&packet,0x0a); send_packet(c,&packet);
 }
 
@@ -1027,31 +901,32 @@ static void update_player(mc_client *c, const mc_input *input, double dt) {
     if (input->toggle_inventory && inventory_controls) {
         if (c->inventory_open) close_inventory(c,true);
         else {
-            c->inventory_open=true; c->creative_open=false;
+            open_inventory(c);
             snprintf(c->inventory_status,sizeof(c->inventory_status),"Left/right click, Shift transfer, 1-9 swap; Q drop, drag to distribute");
             mc_buf packet; start_packet(&packet,0x16); mc_put_varint(&packet,2); send_packet(c,&packet);
         }
     }
-    if (input->toggle_creative && inventory_controls && c->inventory_open && !c->window_id && c->gamemode==1) c->creative_open=!c->creative_open;
-    if (input->inventory_click && inventory_controls && c->inventory_open && c->inventory_queue_index==c->inventory_queue_count)
+    if (input->toggle_creative && inventory_controls && c->inventory_open && !c->window_id && c->gamemode==1) {
+        MCObjectRootScope scope={0}; if (MCObjectRootScope_begin(&scope,c->gameplay.heap)) {
+            MCClientBindings *b=mc_client_graph_bindings(&c->gameplay); b->creativeScreen=!b->creativeScreen;
+            MCObjectRootScope_end(&scope); gui_view(c);
+        }
+    }
+    if (input->inventory_click && inventory_controls && c->inventory_open)
         inventory_click(c,input->inventory_slot,input->inventory_button,input->inventory_mode);
-    if (input->inventory_drag && inventory_controls && c->inventory_open && !c->inventory_pending && !c->inventory_sync &&
-        c->inventory_queue_index==c->inventory_queue_count && input->inventory_drag_mode<=2 &&
+    if (input->inventory_drag && inventory_controls && c->inventory_open && input->inventory_drag_mode<=2 &&
         mc_client_inventory_ready(c) && !(input->inventory_drag_slots>>mc_client_window_slots(c)) && !(input->inventory_drag_slots&1) &&
         (input->inventory_drag_mode<2 || c->gamemode==1)) {
-        unsigned base=input->inventory_drag_mode*4; c->inventory_queue_count=0; c->inventory_queue_index=0;
-        int *action=c->inventory_queue[c->inventory_queue_count++]; action[0]=-999; action[1]=(int)base; action[2]=5;
-        for (unsigned i=1;i<mc_client_window_slots(c);i++) if (input->inventory_drag_slots&(UINT64_C(1)<<i)) {
-            action=c->inventory_queue[c->inventory_queue_count++]; action[0]=(int)i; action[1]=(int)base+1; action[2]=5;
+        MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
+        if (begin_frame(c,&tx,&scope)) {
+            unsigned base=input->inventory_drag_mode*4;
+            bool ok=mc_client_graph_click(&tx.working,-999,(int)base,5);
+            for (unsigned i=1;ok && i<mc_client_window_slots(c);i++) if (input->inventory_drag_slots&(UINT64_C(1)<<i))
+                ok=mc_client_graph_click(&tx.working,(int)i,(int)base+1,5);
+            if (ok) ok=mc_client_graph_click(&tx.working,-999,(int)base+2,5);
+            MCObjectRootScope_end(&scope); (void)finish_frame(c,&tx,ok);
         }
-        action=c->inventory_queue[c->inventory_queue_count++]; action[0]=-999; action[1]=(int)base+2; action[2]=5;
     }
-    if (controls_active && c->inventory_open && c->inventory_queue_index<c->inventory_queue_count && !c->inventory_pending && !c->inventory_sync) {
-        int *action=c->inventory_queue[c->inventory_queue_index++]; inventory_click(c,action[0],action[1],action[2]);
-        if (!c->inventory_pending) { c->inventory_queue_count=0; c->inventory_queue_index=0; }
-    }
-    if (c->inventory_close_requested && controls_active && !c->inventory_pending && !c->inventory_sync &&
-        c->inventory_queue_index==c->inventory_queue_count) close_inventory(c,true);
     if (input->drop_item && controls_active && !c->inventory_open) drop_held_item(c,input->drop_all);
     if (input->creative_pick>=0 && inventory_controls && c->inventory_open) creative_pick(c,(unsigned)input->creative_pick);
     if (input->chat_submit && input->chat[0]) {
@@ -1062,10 +937,18 @@ static void update_player(mc_client *c, const mc_input *input, double dt) {
     if (!c->last_item_tick_ms) c->last_item_tick_ms=now;
     unsigned ticks=(unsigned)((now-c->last_item_tick_ms)/50); if (ticks>4) ticks=4;
     c->last_item_tick_ms+=ticks*50u;
-    for (unsigned step=0;step<ticks;step++) for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) {
-        mc_client_item *item=&c->items[i];
-        if (item->active && item->metadata_ready && body_loaded(c,item->entity.x,item->entity.z))
-            (void)mc_item_entity_tick(&item->entity,&c->world);
+    MCObjectRootScope motion_scope={0};
+    if (MCObjectRootScope_begin(&motion_scope,c->gameplay.heap)) {
+        for (unsigned step=0;step<ticks && !MCObjectHeap_failed(c->gameplay.heap);step++) for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) {
+            mc_client_item *item=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,item->eid);
+            if (item->active && e && !NativeItemMotion_validate(e)) break;
+            if (item->active && item->metadata_ready && e && body_loaded(c,e->posX,e->posZ))
+                (void)NativeItemMotion_tick(e,&c->world);
+        }
+        MCObjectRootScope_end(&motion_scope);
+    }
+    if (MCObjectHeap_failed(c->gameplay.heap)) {
+        client_error(c,"Unsupported native item motion state"); return;
     }
     if (!body_loaded(c, c->x, c->z)) {
         c->velocity_y = 0;
@@ -1100,6 +983,7 @@ static void update_player(mc_client *c, const mc_input *input, double dt) {
         if (input->break_block) edit_block(c, false);
         if (input->place_block) edit_block(c, true);
     }
+    actor_native_state(c);
     if (mc_time_ms() - c->last_move_ms >= 50) send_movement(c);
 }
 
@@ -1123,8 +1007,7 @@ static int self_test(void) {
     mc_client *c = calloc(1, sizeof(*c));
     if (!c) return 1;
     mc_world_init(&c->world, 0); c->state = 1;
-    mc_inventory_init(&c->inventory); mc_inventory_init(&c->inventory_authoritative);
-    mc_container_init(&c->container,MC_CONTAINER_PLAYER); mc_container_init(&c->container_authoritative,MC_CONTAINER_PLAYER); mc_maps_init(&c->maps);
+    if (!mc_client_graph_init(&c->gameplay,&c->world,"SelfTest")) { (void)MCGameplay_free(&c->gameplay); free(c); return 1; }
     size_t length = chunk_size(1, true, true);
     uint8_t *data = calloc(length, 1);
     int errors = 0;
@@ -1156,46 +1039,43 @@ static int self_test(void) {
     CHECK(mc_world_set(&c->world,8,10,8,(uint16_t)(85u<<4)),"fence fixture placed");
     CHECK(collides(c,8.5,11.3,8.5) && !collides(c,8.5,11.5,8.5),"tall fence collision includes block below player feet");
     mc_buf inv_packet; start_packet(&inv_packet,0x30); mc_put_u8(&inv_packet,0); mc_put_i16(&inv_packet,45);
-    mc_slot tool; mc_slot_init(&tool); CHECK(mc_slot_set(&tool,276,1,7),"durable tool slot fixture");
-    for (int i=0;i<45;i++) mc_slot_write(&inv_packet,i==36 ? &tool : &c->inventory.slots[i]);
+    MCObjectRootScope scope={0}; CHECK(MCObjectRootScope_begin(&scope,c->gameplay.heap),"source fixture scope");
+    ItemStack *tool=ItemStack_new(c->gameplay.heap,ItemStack_registryItem(276),1,7);
+    PacketBuffer buffer; CHECK(PacketBuffer_init(&buffer,c->gameplay.heap,&inv_packet),"source PacketBuffer fixture");
+    for (int i=0;i<45;i++) CHECK(PacketBuffer_writeItemStackToBuffer(&buffer,i==36 ? tool : NULL),"source slot wire fixture");
+    MCObjectRootScope_end(&scope);
     handle_packet(c,&inv_packet);
-    CHECK(!inv_packet.failed && c->inventory_ready && c->inventory.slots[36].item_id==276 && c->inventory.slots[36].damage==7,"window items retain server tool and damage");
-    mc_buf_free(&inv_packet); mc_slot_free(&tool);
-    mc_slot named_tool; mc_slot_init(&named_tool); CHECK(mc_slot_set(&named_tool,276,1,8),"named tool fixture");
-    mc_buf named_data; mc_buf_init(&named_data); mc_put_u8(&named_data,10); mc_put_i16(&named_data,0);
-    mc_put_u8(&named_data,10); mc_put_i16(&named_data,7); mc_put_bytes(&named_data,"display",7);
-    mc_put_u8(&named_data,8); mc_put_i16(&named_data,4); mc_put_bytes(&named_data,"Name",4); mc_put_i16(&named_data,360);
-    for (int i=0;i<30;i++) mc_put_bytes(&named_data,"\xe6\x97\xa5\xe6\x9c\xac\xe3\x81\xae\xe5\x89\xa3",12);
-    mc_put_u8(&named_data,0); mc_put_u8(&named_data,0);
-    CHECK(mc_nbt_read(&named_data,&named_tool.nbt),"long Japanese custom name parses");
-    char short_name[32]; mc_client_slot_name(&named_tool,short_name,sizeof(short_name));
+    ItemStack *received=mc_client_player_slot(c,36);
+    CHECK(!inv_packet.failed && c->inventory_ready && received && ItemStack_registryId(received->item)==276 && received->itemDamage==7,"source window items retain server tool and damage");
+    mc_buf_free(&inv_packet);
+    CHECK(MCObjectRootScope_begin(&scope,c->gameplay.heap),"display fixture scope");
+    ItemStack *named=ItemStack_new(c->gameplay.heap,ItemStack_registryItem(276),1,8);
+    char long_name[361]; for (int i=0;i<30;i++) memcpy(long_name+i*12,"\xe6\x97\xa5\xe6\x9c\xac\xe3\x81\xae\xe5\x89\xa3",12); long_name[360]=0;
+    NBTString *display=NBTString_fromUTF8(c->gameplay.heap,long_name);
+    CHECK(named && display && ItemStack_setStackDisplayName(named,display),"source Japanese display name");
+    char short_name[32]; mc_client_slot_name(named,short_name,sizeof short_name);
     CHECK(strlen(short_name)==30 && !memcmp(short_name,"\xe6\x97\xa5",3),"custom name truncates only at UTF8 boundaries");
-    mc_slot_free(&named_tool); mc_buf_free(&named_data);
-    c->joined=true; c->inventory_open=true; c->last_move_ms=mc_time_ms();
-    mc_input inactive; memset(&inactive,0,sizeof(inactive)); inactive.select_slot=-1; inactive.creative_pick=-1;
+    MCObjectRootScope_end(&scope);
+    c->joined=true; c->last_move_ms=mc_time_ms();
+    MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
+    CHECK(MCObjectRootScope_begin(&scope,c->gameplay.heap),"paused source GUI scope");
+    CHECK(mc_client_graph_open(&c->gameplay,0,false),"source player GUI open");
+    MCObjectRootScope_end(&scope); gui_view(c);
+    mc_input inactive={0}; inactive.select_slot=-1; inactive.creative_pick=-1;
     inactive.paused=true; inactive.inventory_click=true; inactive.inventory_slot=36;
     update_player(c,&inactive,0);
-    CHECK(c->inventory.cursor.item_id<0 && c->inventory.slots[36].item_id==276 && !c->inventory_pending,"paused inventory input cannot move a carried item");
+    CHECK(!mc_client_cursor(c) && mc_client_player_slot(c,36) && ItemStack_registryId(mc_client_player_slot(c,36)->item)==276,"paused input cannot move source carried item");
     for (unsigned gui=0;gui<3;gui++) for (unsigned window=0;window<3;window++) {
-        CHECK(mc_slot_set(&c->inventory.slots[1],41,1,0) && mc_slot_set(&c->inventory.slots[0],266,9,0) &&
-            mc_slot_copy(&c->inventory.cursor,&c->inventory.slots[36]) &&
-            mc_inventory_copy(&c->inventory_authoritative,&c->inventory),"forced close owns cursor and crafting fixture");
-        c->inventory_open=gui!=0; c->creative_open=gui==2;
-        c->inventory_pending=true; c->inventory_sync=true; c->inventory_sync_slots=true; c->inventory_sync_cursor=true;
-        c->inventory_close_requested=true; c->inventory_queue_count=3; c->inventory_queue_index=1;
-        c->inventory.drag_active=true; c->inventory.drag_slots=UINT64_C(1)<<9;
-        c->inventory_authoritative.drag_active=true; c->inventory_authoritative.drag_slots=UINT64_C(1)<<9;
+        CHECK(MCObjectRootScope_begin(&scope,c->gameplay.heap),"source close fixture scope");
+        b=mc_client_graph_bindings(&c->gameplay);
+        CHECK(Container_putStackInSlot(&b->player->inventoryContainer->container,1,ItemStack_new(c->gameplay.heap,ItemStack_registryItem(41),1,0)) &&
+            InventoryPlayer_setItemStack(b->player->inventory,mc_client_player_slot(c,36)),"source close grid/cursor references");
+        b->screenOpen=gui!=0; b->creativeScreen=gui==2; b->screenContainer=b->screenOpen ? &b->player->inventoryContainer->container : NULL;
+        MCObjectRootScope_end(&scope); gui_view(c);
         mc_buf forced; start_packet(&forced,0x2e); mc_put_u8(&forced,(uint8_t)(window==0 ? 0 : window==1 ? 7 : 255));
         handle_packet(c,&forced);
-        CHECK(!forced.failed && !c->inventory_open && !c->creative_open && !c->inventory_pending && !c->inventory_sync &&
-            !c->inventory_sync_slots && !c->inventory_sync_cursor && !c->inventory_close_requested &&
-            !c->inventory_queue_count && !c->inventory_queue_index,"server close cancels pending resynchronization and queued input for every window ID");
-        CHECK(c->inventory.cursor.item_id<0 && c->inventory_authoritative.cursor.item_id<0 &&
-            !c->inventory.drag_active && !c->inventory.drag_slots && !c->inventory_authoritative.drag_active &&
-            !c->inventory_authoritative.drag_slots && c->connection.tx.len==0,"server close clears shared cursor and drag without sending a reply");
-        CHECK(c->inventory.slots[1].item_id==(gui==1 ? -1 : 41) && c->inventory.slots[0].item_id==(gui==1 ? -1 : 266) &&
-            mc_slot_equal(&c->inventory.slots[1],&c->inventory_authoritative.slots[1]) &&
-            mc_slot_equal(&c->inventory.slots[0],&c->inventory_authoritative.slots[0]),"only an open player inventory GUI closes its local crafting grid and output");
+        CHECK(!forced.failed && !c->inventory_open && !c->creative_open && !mc_client_cursor(c) && c->connection.tx.len==0,"source server close ignores window ID, clears cursor and sends no reply");
+        CHECK((mc_client_player_slot(c,1)!=NULL)==(gui==0) && (mc_client_player_slot(c,0)!=NULL)==(gui==0),"only a retained native container GUI invokes its source close grid method");
         mc_buf_free(&forced);
     }
     mc_buf packet; start_packet(&packet, 0x38); mc_put_varint(&packet, 0); mc_put_varint(&packet, 1);
@@ -1210,7 +1090,7 @@ static int self_test(void) {
     CHECK(strcmp(text, "Hello world") == 0, "chat extras retain text");
     plain_chat("{\"text\":\"\\u65e5\\u672c \\ud83d\\ude00\"}", text, sizeof(text));
     CHECK(strcmp(text, "\xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x98\x80") == 0, "Japanese and paired surrogate chat decoded as UTF8");
-    free(data); mc_inventory_free(&c->inventory); mc_inventory_free(&c->inventory_authoritative); mc_container_free(&c->container); mc_container_free(&c->container_authoritative); mc_maps_free(&c->maps); mc_world_free(&c->world); free(c);
+    free(data); (void)MCGameplay_free(&c->gameplay); mc_world_free(&c->world); free(c);
     if (!errors) printf("client self-test passed\n");
     return errors ? 1 : 0;
 #undef CHECK
@@ -1317,15 +1197,17 @@ int main(int argc, char **argv) {
     if ((headless || screenshot) && run_seconds == 0) run_seconds = 5;
     if (!mc_net_init()) { fprintf(stderr, "Network initialization failed\n"); free(c); return 1; }
     mc_world_init(&c->world, 0);
-    mc_inventory_init(&c->inventory); mc_inventory_init(&c->inventory_authoritative); c->next_inventory_action=1;
-    mc_container_init(&c->container,MC_CONTAINER_PLAYER); mc_container_init(&c->container_authoritative,MC_CONTAINER_PLAYER); mc_maps_init(&c->maps);
+    if (!mc_client_graph_init(&c->gameplay,&c->world,c->name)) { fprintf(stderr,"Cannot initialize source client graph\n"); (void)MCGameplay_free(&c->gameplay); mc_net_shutdown(); free(c); return 1; }
     mc_renderer *renderer = NULL;
     if (!headless) {
         char error[160]; renderer = mc_renderer_open(screenshot != NULL, error, sizeof(error));
-        if (!renderer) { fprintf(stderr, "Renderer: %s\n", error); mc_net_shutdown(); free(c); return 1; }
+        if (!renderer) {
+            fprintf(stderr,"Renderer: %s\n",error); (void)MCGameplay_free(&c->gameplay);
+            mc_world_free(&c->world); mc_net_shutdown(); free(c); return 1;
+        }
     }
     connect_client(c);
-    uint64_t started = mc_time_ms(), previous = started;
+    uint64_t started = mc_time_ms(), previous = started, last_collection = started;
     bool screenshot_done = false;
     while (true) {
         uint64_t now = mc_time_ms(); double dt = (now - previous) / 1000.0; previous = now;
@@ -1342,12 +1224,14 @@ int main(int argc, char **argv) {
                 input.place_block=true; use_sent=true;
             }
             bool script_ready=mc_client_inventory_ready(c) && (!use_script || (use_sent && c->window_id));
-            if (action_index<action_count && script_ready && !c->inventory_pending && !c->inventory_sync) {
-                c->inventory_open=true; input.inventory_click=true;
+            if (action_index<action_count && script_ready) {
+                if (!c->inventory_open) open_inventory(c);
+                input.inventory_click=true;
                 input.inventory_slot=actions[action_index][0]; input.inventory_button=actions[action_index][1]; input.inventory_mode=actions[action_index][2]; ++action_index;
-            } else if (action_index==action_count && close_script && !close_done && script_ready && !c->inventory_pending && !c->inventory_sync) {
-                c->inventory_open=true; input.toggle_inventory=true; close_done=true;
-            } else if (drop_index<drop_count && c->inventory_ready && !c->inventory_pending && !c->inventory_sync && !c->inventory_open) {
+            } else if (action_index==action_count && close_script && !close_done && script_ready) {
+                if (!c->inventory_open) open_inventory(c);
+                input.toggle_inventory=true; close_done=true;
+            } else if (drop_index<drop_count && c->inventory_ready && !c->inventory_open) {
                 input.drop_item=true; input.drop_all=drops[drop_index++];
             }
             update_player(c, &input, dt);
@@ -1358,6 +1242,13 @@ int main(int argc, char **argv) {
             if (!screenshot_done) client_error(c, error);
             else printf("SCREENSHOT %s\n", screenshot);
         }
+        /* Native lifetime safe point: input, source frames and drawing have
+           released all borrowed references. Temporary display strings are
+           not retained by the renderer or the scalar client records. */
+        if (!c->failed && now - last_collection >= 1000) {
+            last_collection = now;
+            if (!MCObjectHeap_collect(c->gameplay.heap)) client_error(c,"Cannot collect source client graph");
+        }
         if (headless && (c->failed || c->disconnected)) break;
         if (run_seconds > 0 && now - started >= (uint64_t)(run_seconds * 1000)) break;
         mc_sleep_ms(renderer ? 8 : 5);
@@ -1365,34 +1256,49 @@ int main(int argc, char **argv) {
     unsigned non_air = 0, players = 0,items=0;
     for (int i = 0; i < c->world.count; ++i) for (unsigned b = 0; b < MC_CHUNK_BLOCKS; ++b) if (c->world.chunks[i].blocks[b] >> 4) ++non_air;
     for (int i = 0; i < MC_CLIENT_PLAYERS; ++i) if (c->players[i].active) ++players;
-    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) if (c->items[i].active) ++items;
-    printf("CLIENT_RESULT joined=%d positioned=%d chunks=%d chunk_packets=%u non_air=%u block_updates=%u players=%u packets=%u position=%.3f,%.3f,%.3f inventory_packets=%u inventory_rejections=%u inventory_pending=%d gamemode=%d item_entities=%u item_spawns=%u item_metadata=%u item_collects=%u\n",
-           c->joined, c->positioned, c->world.count, c->chunks_received, non_air, c->block_updates, players, c->packets_received, c->x, c->y, c->z,c->inventory_packets,c->inventory_rejections,c->inventory_pending,c->gamemode,items,c->item_spawns,c->item_metadata,c->item_collects);
-    for (unsigned i=0;i<MC_MAX_ITEM_ENTITIES;i++) if (c->items[i].active) {
-        const mc_client_item *item=&c->items[i]; const mc_slot *s=&item->entity.item;
-        printf("CLIENT_ITEM eid=%d ready=%d id=%d count=%u damage=%d nbt_size=%zu nbt_crc=%08lx server_position=%.3f,%.3f,%.3f position=%.3f,%.3f,%.3f\n",
-            item->entity.eid,item->metadata_ready,s->item_id,(unsigned)s->count,s->damage,s->nbt.size,(unsigned long)crc32(0,s->nbt.data,(uInt)s->nbt.size),
-            item->server_x/32.0,item->server_y/32.0,item->server_z/32.0,item->entity.x,item->entity.y,item->entity.z);
+    for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) if (c->items[i].active) ++items;
+    /* Scalar diagnostic boundary only. The historical pending/sync fields are
+       always zero: original prediction has neither an ACK lock nor rollback. */
+    printf("CLIENT_RESULT joined=%d positioned=%d chunks=%d chunk_packets=%u non_air=%u block_updates=%u players=%u packets=%u position=%.3f,%.3f,%.3f inventory_packets=%u inventory_rejections=%u inventory_pending=0 gamemode=%d item_entities=%u item_spawns=%u item_metadata=%u item_collects=%u\n",
+           c->joined,c->positioned,c->world.count,c->chunks_received,non_air,c->block_updates,players,c->packets_received,c->x,c->y,c->z,c->inventory_packets,c->inventory_rejections,c->gamemode,items,c->item_spawns,c->item_metadata,c->item_collects);
+    MCObjectRootScope diagnostic={0};
+    if (MCObjectRootScope_begin(&diagnostic,c->gameplay.heap)) {
+        for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) if (c->items[i].active) {
+            const mc_client_item *entry=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,entry->eid);
+            ItemStack *stack=e ? DataWatcher_getWatchableObjectItemStack(e->dataWatcher,10) : NULL;
+            mc_buf tag; mc_buf_init(&tag); if (stack && stack->stackTagCompound) (void)NBTWire_encodeCompound(&tag,stack->stackTagCompound);
+            printf("CLIENT_ITEM eid=%d ready=%d id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx server_position=%.3f,%.3f,%.3f position=%.3f,%.3f,%.3f\n",
+                entry->eid,entry->metadata_ready,stack ? ItemStack_registryId(stack->item) : -1,stack ? stack->stackSize : 0,stack ? stack->itemDamage : 0,tag.len,(unsigned long)crc32(0,tag.data,(uInt)tag.len),
+                entry->server_x/32.0,entry->server_y/32.0,entry->server_z/32.0,e ? e->posX : 0,e ? e->posY : 0,e ? e->posZ : 0);
+            mc_buf_free(&tag);
+        }
+        for (int i=0;i<45;i++) {
+            ItemStack *stack=mc_client_player_slot(c,i);
+            if (stack) { mc_buf tag; mc_buf_init(&tag); if (stack->stackTagCompound) (void)NBTWire_encodeCompound(&tag,stack->stackTagCompound);
+                printf("CLIENT_SLOT index=%d id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx\n",i,ItemStack_registryId(stack->item),stack->stackSize,stack->itemDamage,tag.len,(unsigned long)crc32(0,tag.data,(uInt)tag.len)); mc_buf_free(&tag);
+            }
+        }
+        printf("CLIENT_WINDOW id=%u ready=%d slots=%u generation=%llu sync=0 title=%s\n",(unsigned)c->window_id,
+            c->window_id ? c->window_ready : c->inventory_ready,mc_client_window_slots(c),(unsigned long long)c->window_generation,c->window_title);
+        for (int i=0;c->window_id && i<10;i++) {
+            ItemStack *stack=mc_client_window_slot(c,i);
+            if (stack) { mc_buf tag; mc_buf_init(&tag); if (stack->stackTagCompound) (void)NBTWire_encodeCompound(&tag,stack->stackTagCompound);
+                printf("CLIENT_CONTAINER_SLOT index=%d id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx\n",i,ItemStack_registryId(stack->item),stack->stackSize,stack->itemDamage,tag.len,(unsigned long)crc32(0,tag.data,(uInt)tag.len)); mc_buf_free(&tag);
+            }
+        }
+        mc_maps *maps=mc_client_maps(c);
+        for (size_t i=0;maps && i<maps->count;i++) {
+            const mc_map_info *map=&maps->entries[i];
+            printf("CLIENT_MAP id=%d scale=%u icons=%zu metadata_known=%d pixels_crc=%08lx\n",map->id,
+                (unsigned)map->scale,map->icon_count,map->metadata_known,(unsigned long)crc32(0,map->colors,MC_MAP_PIXELS));
+        }
+        ItemStack *cursor=mc_client_cursor(c); mc_buf tag; mc_buf_init(&tag);
+        if (cursor && cursor->stackTagCompound) (void)NBTWire_encodeCompound(&tag,cursor->stackTagCompound);
+        printf("CLIENT_CURSOR id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx\n",cursor ? ItemStack_registryId(cursor->item) : -1,cursor ? cursor->stackSize : 0,cursor ? cursor->itemDamage : 0,tag.len,(unsigned long)crc32(0,tag.data,(uInt)tag.len)); mc_buf_free(&tag);
+        MCObjectRootScope_end(&diagnostic);
     }
-    for (int i=0;i<MC_PLAYER_INVENTORY_SIZE;i++) {
-        const mc_slot *slot=&c->inventory.slots[i];
-        if (slot->item_id>=0) printf("CLIENT_SLOT index=%d id=%d count=%u damage=%d nbt_size=%zu nbt_crc=%08lx\n",i,slot->item_id,(unsigned)slot->count,slot->damage,slot->nbt.size,(unsigned long)crc32(0,slot->nbt.data,(uInt)slot->nbt.size));
-    }
-    printf("CLIENT_WINDOW id=%u ready=%d slots=%u generation=%llu sync=%d title=%s\n",(unsigned)c->window_id,
-        c->window_id ? c->window_ready : c->inventory_ready,mc_client_window_slots(c),(unsigned long long)c->window_generation,c->inventory_sync,c->window_title);
-    for (int i=0;c->window_id && i<10;i++) {
-        const mc_slot *s=&c->container.slots[i];
-        if (s->item_id>=0) printf("CLIENT_CONTAINER_SLOT index=%d id=%d count=%u damage=%d nbt_size=%zu nbt_crc=%08lx\n",i,s->item_id,
-            (unsigned)s->count,s->damage,s->nbt.size,(unsigned long)crc32(0,s->nbt.data,(uInt)s->nbt.size));
-    }
-    for (size_t i=0;i<c->maps.count;i++) {
-        const mc_map_info *map=&c->maps.entries[i];
-        printf("CLIENT_MAP id=%d scale=%u icons=%zu metadata_known=%d pixels_crc=%08lx\n",map->id,
-            (unsigned)map->scale,map->icon_count,map->metadata_known,(unsigned long)crc32(0,map->colors,MC_MAP_PIXELS));
-    }
-    printf("CLIENT_CURSOR id=%d count=%u damage=%d nbt_size=%zu nbt_crc=%08lx\n",c->inventory.cursor.item_id,(unsigned)c->inventory.cursor.count,c->inventory.cursor.damage,c->inventory.cursor.nbt.size,(unsigned long)crc32(0,c->inventory.cursor.nbt.data,(uInt)c->inventory.cursor.nbt.size));
     int result = c->failed || c->disconnected || ((headless || screenshot) && (!c->joined || !c->positioned || !c->world.count)) || (screenshot && !screenshot_done) ? 1 : 0;
     if (renderer) mc_renderer_close(renderer);
-    clear_items(c); mc_conn_close(&c->connection); mc_inventory_free(&c->inventory); mc_inventory_free(&c->inventory_authoritative); mc_container_free(&c->container); mc_container_free(&c->container_authoritative); mc_maps_free(&c->maps); mc_world_free(&c->world); mc_net_shutdown(); free(c);
+    mc_conn_close(&c->connection); (void)MCGameplay_free(&c->gameplay); mc_world_free(&c->world); mc_net_shutdown(); free(c);
     return result;
 }
