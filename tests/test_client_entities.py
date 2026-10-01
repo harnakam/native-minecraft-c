@@ -18,8 +18,9 @@ from test_multiplayer import running_server, read_vint
 from test_inventory_network import InventoryPeer, compound, named, nbt_string, player_file, wire_slot, item_metadata
 
 
-def spawn(eid, x=8, y=7, z=8):
-    return vint(eid) + struct.pack(">BiiiBBihhh", 2, x*32, y*32, z*32, 0, 0, 1, 0, 0, 0)
+def spawn(eid, x=8, y=7, z=8, pitch=0, yaw=0, data=1, velocity=(0, 0, 0)):
+    payload = vint(eid) + struct.pack(">BiiiBBi", 2, x*32, y*32, z*32, pitch, yaw, data)
+    return payload + (struct.pack(">hhh", *velocity) if data > 0 else b"")
 
 
 @contextlib.contextmanager
@@ -71,6 +72,12 @@ def entity_peer(kind="lifecycle", inventory=None, cursor=EMPTY, ack_snapshot=Non
                 elif kind == "nullable":
                     send_frame(sock, 0x1c, vint(20)+b"\xaa"+EMPTY+b"\x7f", True)
                     send_frame(sock, 0x0e, spawn(21), True)
+                elif kind == "spawn_angles":
+                    cases = [(20, 128, 255, 0), (21, 255, 127, -1), (22, 127, 128, 1)]
+                    for eid, pitch, yaw, object_data in cases:
+                        send_frame(sock, 0x0e, spawn(eid, y=20, pitch=pitch, yaw=yaw,
+                                                   data=object_data, velocity=(800, -1600, 2400)), True)
+                        send_frame(sock, 0x1c, vint(eid)+b"\xaa"+TOOL+b"\x7f", True)
                 elif kind == "all_metadata":
                     extra = (b"\x00\1\x21"+struct.pack(">h", 7)+b"\x42"+struct.pack(">i", 99)+
                              b"\x63"+struct.pack(">f", 0.5)+b"\x84"+string("extra")+
@@ -152,6 +159,16 @@ class ClientEntityTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, output)
         self.assertIn("Malformed", output)
         self.assertRegex(output, r"CLIENT_ITEM eid=20 ready=1 id=276 count=1 damage=7 nbt_size=%d" % len(TOOL_NBT))
+
+    def test_signed_spawn_angles_and_absent_velocity(self):
+        with entity_peer("spawn_angles") as (port, _):
+            result, output = self.client(port)
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("item_entities=3 item_spawns=6 item_metadata=6", output)
+        for eid, angles in [(20, "-180.000000,-1.406250"),
+                            (21, "-1.406250,178.593750"),
+                            (22, "178.593750,-180.000000")]:
+            self.assertRegex(output, r"CLIENT_ITEM eid=%d [^\n]*rotation=%s" % (eid, angles))
 
     def test_signed_entity_ids_include_zero_and_int32_boundaries(self):
         with entity_peer("signed_ids") as (port, _):

@@ -8,6 +8,8 @@ Java原本、テクスチャ、音声、モデル、JAR、MCP本体・マッピ�
 
 所持品の毎tick更新とホットバーの受取アニメーションも、原版InventoryPlayer・ItemStack・ItemとGuiIngameの対象メソッドへ接続しています。同じstackが複数枠にある場合も元順で更新し、個数0や負のstackを消しません。Timerの全field・constructor・updateTimerを移植し、原版の経過tickと描画用端数を実clientへ接続しています。全プレイヤーtick・Minecraft.runGameLoop/runTick・RenderItem/FontRenderer全体は未移植で、2つの時計と画像・文字の描画はnative依存です。
 
+乱数の独自xorshiftを置き換え、JDK 8のscalar Random APIをCで接続しました。World・プレイヤー・各EntityItemの独立したrandと、プロセスで共有するMath.randomを原本の呼出し先・順で使います。MathHelper.getRandomUuidとEntityのUUID保存部分を移植し、保存中の古いUUIDを現在の参照から更新します。受信アイテムのsigned角度、dataが正の場合だけ速度を適用する条件、消音byteが1の場合だけ拾得音と乱数消費を省く条件も原本に合わせました。全constructor・プレイヤーNBT・Gaussian・JDKの並行実行全体は未移植です。
+
 ## 対応範囲
 
 | 項目 | 現在の対応 |

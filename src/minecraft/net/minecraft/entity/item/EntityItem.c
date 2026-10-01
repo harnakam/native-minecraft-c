@@ -1,5 +1,6 @@
 #include "entity/item/EntityItem.h"
 #include "entity/Entity.h"
+#include "util/MathHelper.h"
 #include "nbt/NBTTagCompound.h"
 #include <limits.h>
 #include <string.h>
@@ -24,9 +25,25 @@ static void trace(MCObject *o,MCObjectVisitor visitor,void *context) {
     entity->owner=(NBTString *)visitor((MCObject *)entity->owner,context);
     entity->thrower=(NBTString *)visitor((MCObject *)entity->thrower,context);
     entity->savedFields=(NBTTagCompound *)visitor((MCObject *)entity->savedFields,context);
+    entity->rand=(NativeJavaRandom *)visitor((MCObject *)entity->rand,context);
+    entity->entityUniqueID=(NativeJavaUUID *)visitor((MCObject *)entity->entityUniqueID,context);
 }
 static const MCObjectClass klass={"net.minecraft.entity.item.EntityItem",MCObjectHeap_plainClone,trace,NULL};
 bool EntityItem_isInstance(const MCObject *object) {return object&&object->klass==&klass;}
+bool EntityItem_nativeInitializeRandom(EntityItem *entity,NativeJavaRandomRuntime *runtime) {
+    MCObjectHeap *heap=entity?entity->object.heap:NULL;
+    if (!EntityItem_isInstance((MCObject *)entity)||entity->rand||entity->entityUniqueID||entity->dataWatcher||!runtime) {
+        MCObjectHeap_fail(heap);return false;
+    }
+    MCObjectRootScope scope={0};
+    if (!MCObjectRootScope_begin(&scope,heap)) return false;
+    entity->rand=NativeJavaRandomRuntime_newRandom(runtime,heap);
+    if (entity->rand) entity->entityUniqueID=MathHelper_getRandomUuid(entity->rand);
+    bool ok=entity->rand&&entity->entityUniqueID&&!MCObjectHeap_failed(heap);
+    MCObjectHeap_touch(heap);
+    if (!ok) MCObjectHeap_fail(heap);
+    MCObjectRootScope_end(&scope);return ok;
+}
 DataWatcher *EntityItem_getDataWatcher(EntityItem *entity) {return entity?entity->dataWatcher:NULL;}
 static DataWatcher *required_watcher(EntityItem *entity) {
     MCObjectHeap *heap=entity?entity->object.heap:NULL;

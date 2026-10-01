@@ -28,6 +28,8 @@ MCGameplayWorld *mc_client_graph_world(const MCGameplay *);
 MCClientBindings *mc_client_graph_bindings(const MCGameplay *);
 EntityItem *mc_client_graph_item(const MCGameplay *, int32_t id);
 bool mc_client_graph_spawn_item(MCGameplay *,int32_t id,double x,double y,double z,double vx,double vy,double vz);
+bool mc_client_graph_spawn_item_packet(MCGameplay *,int32_t id,double x,double y,double z,
+    int32_t pitch,int32_t yaw,int32_t data,double vx,double vy,double vz);
 bool mc_client_graph_open(MCGameplay *, int32_t window, bool workbench);
 bool mc_client_graph_close(MCGameplay *, bool send);
 bool mc_client_graph_click(MCGameplay *, int32_t slot, int32_t button, int32_t mode);

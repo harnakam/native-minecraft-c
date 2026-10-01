@@ -3,6 +3,7 @@
 #include "util/MCGameplay.h"
 #include "item/crafting/CraftingManager.h"
 #include "world/map.h"
+#include "util/NativeJavaRandomRuntime.h"
 
 typedef struct StatBase StatBase;
 typedef struct StatList StatList;
@@ -32,11 +33,18 @@ typedef struct MCGameplayWorld {
     StatBase *emptyMapUseStat;
     bool remote;
     int32_t spawnX,spawnZ,dimension,nextEntityId;
-    uint64_t randomState;
+    NativeJavaRandom *rand;
+    int32_t updateLCG,ambientTickCountdown;
+    /* External native process service. Its lifetime spans this world and every
+       snapshot; it is deliberately neither a traced edge nor rollback state. */
+    NativeJavaRandomRuntime *randomRuntime;
     int64_t worldTime;
     bool hasNoSky;
 } MCGameplayWorld;
 MCGameplayWorld *MCGameplayWorld_new(MCObjectHeap *,MCGameplayObjects *,const mc_world *,CraftingManager *);
+/* Explicit native inherited RNG segment: temporary Random/updateLCG, separate
+   World.rand and ambient draw in source order. Complete World ctor is pending. */
+MCGameplayWorld *MCGameplayWorld_newWithRandomRuntime(MCObjectHeap *,MCGameplayObjects *,const mc_world *,CraftingManager *,NativeJavaRandomRuntime *);
 bool MCGameplayWorld_isInstance(const MCObject *);
 /* Callback-compatible native reads for mc_crafting_dispatch. A missing terrain
    dependency fails the heap instead of manufacturing an empty world. */

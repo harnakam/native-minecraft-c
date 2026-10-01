@@ -390,27 +390,20 @@ static bool craft_achievement(MCObject *object, mc_crafting_achievement achievem
     StatBase *s = achievement_stat(p, ids[achievement]);
     return s && add_stat(p, s, 1);
 }
-static uint64_t random_word(MCGameplayWorld *w) {
-    uint64_t s = w->randomState;
-    if (!s)
-        s = 919;
-    s ^= s << 13;
-    s ^= s >> 7;
-    s ^= s << 17;
-    w->randomState = s;
-    MCObjectHeap_touch(w->object.heap);
-    return s;
-}
 static double random_double(MCObject *ctx) {
-    return (random_word((MCGameplayWorld *)ctx) >> 11) * (1.0 / 9007199254740992.0);
-}
-static float random_float(MCGameplayWorld *w) {
-    return (float)(random_word(w) >> 40) * (1.0F / 16777216.0F);
+    double value=0;
+    if (!MCGameplayWorld_isInstance(ctx)||
+        !NativeJavaRandomRuntime_mathRandom(((MCGameplayWorld *)ctx)->randomRuntime,&value)) {
+        MCObjectHeap_fail(ctx?ctx->heap:NULL);return 0;
+    }
+    return value;
 }
 static bool base_entity(MCObject *ctx, EntityItem *item, MCObject *world) {
     (void)ctx;
     item->worldObj = world;
-    return EntityItem_nativeInitializeDataWatcher(item, NULL, NULL);
+    return MCGameplayWorld_isInstance(world)&&
+        EntityItem_nativeInitializeRandom(item,((MCGameplayWorld *)world)->randomRuntime)&&
+        EntityItem_nativeInitializeDataWatcher(item, NULL, NULL);
 }
 static bool size_entity(MCObject *ctx, EntityItem *e, float width, float height) {
     (void)ctx;
@@ -471,11 +464,16 @@ static bool item_achievement(MCObject *ctx, MCObject *object, EntityItemAchievem
 }
 static bool silent(MCObject *ctx, const EntityItem *e) {
     (void)ctx;
-    return (DataWatcher_getWatchableObjectByte(e->dataWatcher, 4) & 4) != 0;
+    return DataWatcher_getWatchableObjectByte(e->dataWatcher, 4) == 1;
 }
 static float entity_float(MCObject *ctx, EntityItem *e) {
     (void)ctx;
-    return random_float((MCGameplayWorld *)e->worldObj);
+    float value=0;
+    if (!EntityItem_isInstance((MCObject *)e)||!e->rand||e->rand->object.heap!=e->object.heap||
+        !NativeJavaRandom_nextFloat(e->rand,&value)) {
+        MCObjectHeap_fail(e?e->object.heap:NULL);return 0;
+    }
+    return value;
 }
 static bool sound(MCObject *ctx, MCObject *world, MCObject *object, const char *soundName,
                   float volume, float pitch) {
@@ -537,7 +535,12 @@ static float eye_height(MCObject *ctx, MCGameplayPlayer *p) {
 }
 static float player_float(MCObject *ctx, MCGameplayPlayer *p) {
     (void)ctx;
-    return random_float(p->worldObj);
+    float value=0;
+    if (!MCGameplayPlayer_isInstance((MCObject *)p)||!p->rand||p->rand->object.heap!=p->object.heap||
+        !NativeJavaRandom_nextFloat(p->rand,&value)) {
+        MCObjectHeap_fail(p?p->object.heap:NULL);return 0;
+    }
+    return value;
 }
 int32_t mc_server_graph_allocate_entity(MCGameplayWorld *w) {
     for (size_t tries = 0; tries < MC_GAMEPLAY_MAX_ITEMS + MC_TRANSFER_MAX_PLAYERS + 1; tries++) {
@@ -682,7 +685,9 @@ bool mc_server_graph_init(MCGameplay *game, const mc_world *terrain, int32_t spa
         w->spawnX = spawnX;
         w->spawnZ = spawnZ;
         w->nextEntityId = 1;
-        w->randomState = seed ? seed : 919;
+        /* The terrain generation seed is not World.rand/Entity.rand or Math's
+           process seed. Native no-argument construction owns those streams. */
+        (void)seed;
         ok = MCGameplayCrafting_configureWorld(w, display_name, (MCObject *)w) &&
              MCGameplay_setWorld(game, (MCObject *)w);
     }
@@ -704,6 +709,13 @@ bool mc_server_graph_add_player(MCGameplay *game, size_t index, const char *uuid
           : NULL;
     MCGameplayPlayer *p =
         stats && n ? MCGameplayPlayer_new(w, n, (StatFileWriter *)stats, &craftingDispatch) : NULL;
+    if (p) {
+        NBTString *profile=NBTString_fromASCII(heap,uuid);
+        p->gameProfileUUID=profile?NativeJavaUUID_fromString(heap,profile):NULL;
+        if (!p->gameProfileUUID) return false;
+        p->entityUniqueID=p->gameProfileUUID;
+        MCObjectHeap_touch(heap);
+    }
     RuntimeActor *a = p ? (RuntimeActor *)MCObjectHeap_alloc(heap, sizeof(*a), &actorClass) : NULL;
     if (!a)
         return false;

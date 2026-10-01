@@ -218,11 +218,15 @@ static bool entity_achievement(MCObject *c,MCObject *p,EntityItemAchievement whi
     return stat && EntityPlayerSP_triggerAchievement(b->sp,stat);
 }
 static bool silent(MCObject *c,const EntityItem *e) {
-    return binding(c) && e && DataWatcher_getWatchableObjectByte(e->dataWatcher,4)!=0;
+    return binding(c) && e && DataWatcher_getWatchableObjectByte(e->dataWatcher,4)==1;
 }
-static uint64_t random_word(MCClientBindings *);
 static float entity_random(MCObject *c,EntityItem *e) {
-    (void)e; MCClientBindings *b=binding(c); return b ? (float)((random_word(b)>>40)*0x1p-24) : 0;
+    float value=0;
+    if (!binding(c)||!EntityItem_isInstance((MCObject *)e)||e->object.heap!=c->heap||
+        !e->rand||e->rand->object.heap!=c->heap||!NativeJavaRandom_nextFloat(e->rand,&value)) {
+        MCObjectHeap_fail(c?c->heap:NULL);return 0;
+    }
+    return value;
 }
 /* Source onCollideWithPlayer returns before these dependencies in a remote
    world. Unported World audio/EntityLivingBase pickup effects fail explicitly
@@ -247,15 +251,24 @@ static bool base_constructor(MCObject *c,EntityItem *e,MCObject *w) {
     e->worldObj=w; e->entityId=((MCGameplayWorld *)w)->nextEntityId;
     uint32_t next=(uint32_t)e->entityId+1u;
     memcpy(&((MCGameplayWorld *)w)->nextEntityId,&next,sizeof next);
-    return EntityItem_nativeInitializeDataWatcher(e,NULL,NULL);
+    return EntityItem_nativeInitializeRandom(e,((MCGameplayWorld *)w)->randomRuntime)&&
+        EntityItem_nativeInitializeDataWatcher(e,NULL,NULL);
 }
-static uint64_t random_word(MCClientBindings *b) {
-    uint64_t x=b->player->worldObj->randomState; if (!x) x=919;
-    x^=x<<13; x^=x>>7; x^=x<<17; b->player->worldObj->randomState=x;
-    MCObjectHeap_touch(b->object.heap); return x;
+static double random_double(MCObject *c) {
+    MCClientBindings *b=binding(c);double value=0;
+    if (!b||!NativeJavaRandomRuntime_mathRandom(b->player->worldObj->randomRuntime,&value)) {
+        MCObjectHeap_fail(c?c->heap:NULL);return 0;
+    }
+    return value;
 }
-static double random_double(MCObject *c) { MCClientBindings *b=binding(c); return b ? (random_word(b)>>11)*0x1p-53 : 0; }
-static float random_float(MCObject *c,MCGameplayPlayer *p) { (void)p; MCClientBindings *b=binding(c); return b ? (float)((random_word(b)>>40)*0x1p-24) : 0; }
+static float random_float(MCObject *c,MCGameplayPlayer *p) {
+    float value=0;
+    if (!binding(c)||!MCGameplayPlayer_isInstance((MCObject *)p)||p->object.heap!=c->heap||
+        !p->rand||p->rand->object.heap!=c->heap||!NativeJavaRandom_nextFloat(p->rand,&value)) {
+        MCObjectHeap_fail(c?c->heap:NULL);return 0;
+    }
+    return value;
+}
 static bool size_entity(MCObject *c,EntityItem *e,float w,float h) { if (!binding(c)) return false; e->width=w; e->height=h; return true; }
 static bool position_entity(MCObject *c,EntityItem *e,double x,double y,double z) { if (!binding(c)) return false; e->posX=x; e->posY=y; e->posZ=z; return true; }
 static const EntityItemConstructorDependencies constructors={base_constructor,random_double,size_entity,position_entity};
@@ -324,7 +337,10 @@ bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name
         b->controller=h ? PlayerControllerMP_nativeNew(g->heap,h,(MCObject *)b,&controller_deps) : NULL;
         b->sp=h ? EntityPlayerSP_nativeNew(p,h,(MCObject *)b,(MCObject *)b,&sp_deps) : NULL;
         uint8_t uuid[16]; char text[37]; mc_offline_uuid(name,uuid); mc_uuid_string(uuid,text);
-        ok=b->origin && b->controller && b->sp && MCGameplay_setPlayer(g,0,text,(MCObject *)p) && MCGameplayClientPackets_bind(p) &&
+        NBTString *profile=NBTString_fromASCII(g->heap,text);
+        p->gameProfileUUID=profile?NativeJavaUUID_fromString(g->heap,profile):NULL;
+        if (p->gameProfileUUID) {p->entityUniqueID=p->gameProfileUUID;MCObjectHeap_touch(g->heap);}
+        ok=p->gameProfileUUID && b->origin && b->controller && b->sp && MCGameplay_setPlayer(g,0,text,(MCObject *)p) && MCGameplayClientPackets_bind(p) &&
             PlayerControllerMP_bindActions(b->controller,(MCObject *)b,(MCObject *)b,&action_deps);
     } else ok=false;
     MCObjectRootScope_end(&scope);
@@ -375,20 +391,34 @@ bool mc_client_graph_place(MCGameplay *g,int32_t x,int32_t y,int32_t z,int32_t f
         pos ? C08PacketPlayerBlockPlacement_new(g->heap,pos,face,s,0.5f,0.5f,0.5f) : NULL;
     return p && MCGameplayClientPackets_addToSendQueue(b->player,(MCObject *)p);
 }
-bool mc_client_graph_spawn_item(MCGameplay *g,int32_t id,double x,double y,double z,double vx,double vy,double vz) {
+static float spawn_angle(int32_t angle) {
+    uint32_t product=(uint32_t)angle*360u;int32_t wrapped;
+    memcpy(&wrapped,&product,sizeof wrapped);
+    return (float)wrapped/256.0f;
+}
+bool mc_client_graph_spawn_item_packet(MCGameplay *g,int32_t id,double x,double y,double z,
+    int32_t pitch,int32_t yaw,int32_t data,double vx,double vy,double vz) {
     MCClientBindings *b=mc_client_graph_bindings(g);
     MCGameplayObjects *o=MCGameplay_get(g); if (!b || !o) return false;
     for (size_t i=0;i<o->itemCount;i++) if (EntityItem_isInstance(o->items[i]) && ((EntityItem *)o->items[i])->entityId==id) {
         if (!MCGameplay_removeItem(g,i)) return false;
         break;
     }
-    /* Native Spawn Object inherited-field adapter. The translated watcher
-       constructor segment owns metadata; no source full Entity ctor claim. */
-    EntityItem *e=EntityItem_nativeNew(g->heap,(MCObject *)b->player->worldObj,(MCObject *)b,&entity_deps);
-    if (!e || !EntityItem_nativeInitializeDataWatcher(e,NULL,NULL)) return false;
-    e->entityId=id; e->health=5; e->width=0.25f; e->height=0.25f;
-    e->posX=x; e->posY=y; e->posZ=z; e->motionX=vx; e->motionY=vy; e->motionZ=vz;
+    /* Original item spawn chooses the position constructor. Its inherited
+       Entity segment is still an explicit native adapter; packet scalar
+       fields/ID/velocity are applied afterward without another stack owner. */
+    EntityItem *e=EntityItem_new_position(g->heap,(MCObject *)b->player->worldObj,(MCObject *)b,
+        &entity_deps,&constructors,x,y,z);
+    if (!e) return false;
+    e->entityId=id;e->rotationPitch=spawn_angle(pitch);e->rotationYaw=spawn_angle(yaw);
+    if (data>0) {e->motionX=vx;e->motionY=vy;e->motionZ=vz;}
+    MCObjectHeap_touch(g->heap);
     return NativeItemMotion_validate(e) && MCGameplay_addItem(g,(MCObject *)e);
+}
+bool mc_client_graph_spawn_item(MCGameplay *g,int32_t id,double x,double y,double z,double vx,double vy,double vz) {
+    /* Native direct-fixture convenience: explicit zero packet angles and
+       positive packet data request the supplied velocity replacement. */
+    return mc_client_graph_spawn_item_packet(g,id,x,y,z,0,0,1,vx,vy,vz);
 }
 static bool any_binding(const MCObject *o,void *context) { (void)o; (void)context; return true; }
 void mc_client_graph_slot_name(ItemStack *s,char *out,size_t cap) {

@@ -35,3 +35,27 @@ float MathHelper_cos(float value) {
 double MathHelper_clamp_double(double value,double minimum,double maximum) {
     return value<minimum ? minimum : (value>maximum ? maximum : value);
 }
+
+NativeJavaUUID *MathHelper_getRandomUuid(NativeJavaRandom *random) {
+    if (!random) return NULL;
+    MCObjectHeap *heap=random->object.heap;
+    if (!NativeJavaRandom_isInstance((const MCObject*)random)) {
+        MCObjectHeap_fail(heap); return NULL;
+    }
+    MCObjectRootScope scope={0};
+    if (!MCObjectRootScope_begin(&scope,heap) || !MCObjectRootScope_pin(&scope,(MCObject*)random)) {
+        MCObjectHeap_fail(heap); MCObjectRootScope_end(&scope); return NULL;
+    }
+    NativeJavaUUID *uuid=NULL; int64_t first,second;
+    if (!NativeJavaRandom_nextLong(random,&first)) goto done;
+    uint64_t i=((uint64_t)first&UINT64_C(0xffffffffffff0fff))|UINT64_C(0x4000);
+    if (!NativeJavaRandom_nextLong(random,&second)) goto done;
+    uint64_t j=((uint64_t)second&UINT64_C(0x3fffffffffffffff))|UINT64_C(0x8000000000000000);
+    /* Unsigned masks preserve Java long bits without signed C overflow or
+       implementation-defined narrowing into the UUID platform adapter. */
+    int64_t most=i<=INT64_MAX ? (int64_t)i : -1-(int64_t)(UINT64_MAX-i);
+    int64_t least=j<=INT64_MAX ? (int64_t)j : -1-(int64_t)(UINT64_MAX-j);
+    uuid=NativeJavaUUID_new(heap,most,least);
+done:
+    MCObjectRootScope_end(&scope); return uuid;
+}

@@ -4,6 +4,8 @@
 #include "entity/DataWatcher.h"
 #include "entity/player/InventoryPlayer.h"
 #include "nbt/NBTString.h"
+#include "util/NativeJavaRandomRuntime.h"
+#include "util/NativeJavaUUID.h"
 
 typedef struct EntityItem EntityItem;
 typedef enum {
@@ -37,10 +39,12 @@ struct EntityItem {
     MCObject *worldObj,*dependencyContext;
     int32_t entityId;
     double posX,posY,posZ,motionX,motionY,motionZ;
-    float hoverStart,rotationYaw,width,height;
+    float hoverStart,rotationYaw,rotationPitch,width,height;
     int32_t ticksExisted;
     bool isDead,onGround,noClip;
     DataWatcher *dataWatcher;
+    NativeJavaRandom *rand;
+    NativeJavaUUID *entityUniqueID;
     /* Native persistence envelope metadata, distinct from source class fields. */
     NBTTagCompound *savedFields;
     const EntityItemDependencies *dependencies;
@@ -51,6 +55,10 @@ struct EntityItem {
    watcher segment before invoking original watcher-dependent methods. */
 EntityItem *EntityItem_nativeNew(MCObjectHeap *,MCObject *world,MCObject *context,const EntityItemDependencies *);
 bool EntityItem_isInstance(const MCObject *);
+/* Explicit native inherited Entity RNG segment. New entity-owned Random and
+   the actual MathHelper UUID result are initialized BEFORE the watcher segment
+   at the native base constructor boundary. It is not the full Entity ctor. */
+bool EntityItem_nativeInitializeRandom(EntityItem *,NativeJavaRandomRuntime *);
 DataWatcher *EntityItem_getDataWatcher(EntityItem *);
 /* Original virtual entityInit body: adds the null ItemStack entry10/type5.
    An explicit native adapter for the inherited Entity constructor segment

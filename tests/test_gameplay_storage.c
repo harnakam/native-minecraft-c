@@ -6,6 +6,7 @@
 #include "nbt/NBTTagDouble.h"
 #include "nbt/NBTTagByteArray.h"
 #include "nbt/NBTTagString.h"
+#include "entity/EntityUUIDNBT.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,9 +26,9 @@
 #endif
 static unsigned checks;
 #define CHECK(x) do {++checks;if (!(x)) {fprintf(stderr,"gameplay storage check %u at %d: %s\n",checks,__LINE__,#x);exit(1);}} while (0)
-typedef struct {MCObject object;unsigned watched,logged,dead,drops;ItemStack *dropped[16];unsigned positions,failPosition;unsigned watchedAtPosition[2];} Effects;
+typedef struct {MCObject object;unsigned watched,logged,dead,drops;ItemStack *dropped[16];unsigned positions,failPosition;unsigned watchedAtPosition[2];EntityItem *constructed;} Effects;
 static ItemStack *watched(EntityItem *e) {return DataWatcher_getWatchableObjectItemStack(EntityItem_getDataWatcher(e),10);}
-static void effects_trace(MCObject *o,MCObjectVisitor v,void *ctx) {Effects *e=(Effects *)o;for(unsigned i=0;i<e->drops;i++)e->dropped[i]=(ItemStack *)v((MCObject *)e->dropped[i],ctx);}
+static void effects_trace(MCObject *o,MCObjectVisitor v,void *ctx) {Effects *e=(Effects *)o;for(unsigned i=0;i<e->drops;i++)e->dropped[i]=(ItemStack *)v((MCObject *)e->dropped[i],ctx);e->constructed=(EntityItem *)v((MCObject *)e->constructed,ctx);}
 static const MCObjectClass effects_class={"fixture.storage.required-effects",MCObjectHeap_plainClone,effects_trace,NULL};
 /* These are explicit inherited-Entity/world/effect fixtures. They construct
    actual source EntityItem objects and retain direct references, not mc_slot
@@ -46,7 +47,7 @@ static bool sound(MCObject *ctx,MCObject *w,MCObject *p,const char *n,float v,fl
 static bool pickup(MCObject *ctx,MCObject *p,EntityItem *e,int32_t n) {(void)ctx;(void)p;(void)e;(void)n;CHECK(false);return false;}
 static bool dead(MCObject *ctx,EntityItem *e) {((Effects *)ctx)->dead++;e->isDead=true;MCObjectHeap_touch(ctx->heap);return true;}
 static const EntityItemDependencies entity_dependencies={logged,remote,inventory,name,find,achieve,silent,next_float,sound,pickup,dead};
-static bool base_constructor(MCObject *ctx,EntityItem *e,MCObject *w) {CHECK(ctx->heap==w->heap&&e->health==0&&EntityItem_getDataWatcher(e)==NULL);MCGameplayWorld *world=(MCGameplayWorld *)w;e->entityId=world->nextEntityId++;return EntityItem_nativeInitializeDataWatcher(e,&watcherMethods,ctx);}
+static bool base_constructor(MCObject *ctx,EntityItem *e,MCObject *w) {CHECK(ctx->heap==w->heap&&e->health==0&&EntityItem_getDataWatcher(e)==NULL);MCGameplayWorld *world=(MCGameplayWorld *)w;e->entityId=world->nextEntityId++;e->rand=NativeJavaRandom_new(e->object.heap,17);e->entityUniqueID=NativeJavaUUID_new(e->object.heap,37,e->entityId);CHECK(e->rand&&e->entityUniqueID);((Effects *)ctx)->constructed=e;return EntityItem_nativeInitializeDataWatcher(e,&watcherMethods,ctx);}
 static double math_random(MCObject *ctx) {MCObjectHeap_touch(ctx->heap);return 0.25;}
 static bool size_entity(MCObject *ctx,EntityItem *e,float w,float h) {CHECK(ctx->heap==e->object.heap);e->width=w;e->height=h;return true;}
 static bool position_entity(MCObject *ctx,EntityItem *e,double x,double y,double z) {CHECK(ctx->heap==e->object.heap);Effects *effects=(Effects *)ctx;if(effects->positions<2)effects->watchedAtPosition[effects->positions]=effects->watched;effects->positions++;if(effects->positions==effects->failPosition)return false;e->posX=x;e->posY=y;e->posZ=z;MCObjectHeap_touch(ctx->heap);return true;}
@@ -68,7 +69,7 @@ static const char *uuids[]={"00000000-0000-3000-8000-000000000001","00000000-000
 static MCGameplayPlayer *setup(MCGameplay *g,MCObjectRootScope *scope) {
     CHECK(MCGameplay_init(g,64*1024*1024));CHECK(MCObjectRootScope_begin(scope,g->heap));CraftingManager *m=CraftingManager_newEmpty(g->heap);CHECK(m);RecipeBookCloning *b=RecipeBookCloning_new(g->heap);CHECK(b&&CraftingManager_addRecipe(m,RecipeBookCloning_asRecipe(b)));
     MCGameplayWorld *w=MCGameplayWorld_new(g->heap,MCGameplay_get(g),NULL,m);CHECK(w&&MCGameplay_setWorld(g,(MCObject *)w));w->nextEntityId=100;
-    for(unsigned i=0;i<2;i++){MCGameplayPlayer *p=MCGameplayPlayer_new(w,NBTString_fromASCII(g->heap,i?"Second":"First"),NULL,&crafting);CHECK(p&&MCGameplay_setPlayer(g,i,uuids[i],(MCObject *)p));Effects *e=(Effects *)MCObjectHeap_alloc(g->heap,sizeof(*e),&effects_class);CHECK(e);p->effects=(MCObject *)e;CHECK(MCGameplayPackets_bind(p));}
+    for(unsigned i=0;i<2;i++){MCGameplayPlayer *p=MCGameplayPlayer_new(w,NBTString_fromASCII(g->heap,i?"Second":"First"),NULL,&crafting);CHECK(p&&MCGameplay_setPlayer(g,i,uuids[i],(MCObject *)p));p->gameProfileUUID=NativeJavaUUID_fromString(g->heap,NBTString_fromASCII(g->heap,uuids[i]));CHECK(p->gameProfileUUID&&p->rand);p->entityUniqueID=p->gameProfileUUID;Effects *e=(Effects *)MCObjectHeap_alloc(g->heap,sizeof(*e),&effects_class);CHECK(e);p->effects=(MCObject *)e;CHECK(MCGameplayPackets_bind(p));}
     return (MCGameplayPlayer *)MCGameplay_get(g)->players[0];
 }
 static void finish(MCGameplay *g,MCObjectRootScope *scope) {CHECK(!MCObjectHeap_failed(g->heap));MCObjectRootScope_end(scope);CHECK(MCGameplay_free(g));}
@@ -110,6 +111,84 @@ static void durable_group_and_packet_preflight(void) {
     for(unsigned i=0;i<2;i++){snprintf(path,sizeof(path),"%s.players/%s.dat",base,uuids[i]);CHECK(remove(path)==0);}snprintf(path,sizeof(path),"%s.items.dat",base);CHECK(remove(path)==0);snprintf(path,sizeof(path),"%s.maps.dat",base);CHECK(remove(path)==0);CHECK(remove_dir(directory)==0);CHECK(MCGameplay_free(&g));
 }
 static void snapshot(NBTTagCompound *root,mc_nbt *out) {mc_buf buffer={0};CHECK(NBTWire_encodeCompound(&buffer,root)&&mc_nbt_read(&buffer,out)&&buffer.pos==buffer.len);mc_buf_free(&buffer);}
+static NBTTagCompound *storage_tag(MCObjectHeap *heap,const mc_nbt *data) {
+    mc_buf in={data->data,data->size,data->size,0,false};NBTSizeTracker tracker;NBTSizeTracker_initInfinite(&tracker);NBTTagCompound *tag=NULL;
+    CHECK(NBTWire_decodeCompound(heap,&in,&tracker,&tag)&&tag&&in.pos==in.len);return tag;
+}
+static void random_unchanged(const NativeJavaRandomState *before,const NativeJavaRandom *after) {
+    CHECK(after&&before->seed48==after->state.seed48&&before->haveNextNextGaussian==after->state.haveNextNextGaussian);
+    CHECK(!memcmp(&before->nextNextGaussian,&after->state.nextNextGaussian,sizeof before->nextNextGaussian));
+}
+/* Missing UUID writes, stale saved-field authority, profile restoration after
+   the inherited read, and accidental RNG draws/persistence all break this test. */
+static void uuid_authority_profile_order_and_random_nonpersistence(void) {
+    MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);
+    CHECK(NativeJavaRandom_setSeed(p->rand,123));NativeJavaRandomState playerRandom=p->rand->state;
+    p->entityUniqueID=NativeJavaUUID_new(g.heap,-1,-2);CHECK(p->entityUniqueID);
+    p->savedFields=NBTTagCompound_new(g.heap);CHECK(p->savedFields);
+    CHECK(NBTTagCompound_setLong_ascii(p->savedFields,"UUIDMost",123)&&NBTTagCompound_setLong_ascii(p->savedFields,"UUIDLeast",456)&&
+          NBTTagCompound_setString_ascii(p->savedFields,"UUID",NBTString_fromASCII(g.heap,"1-2-3-4-5")));
+    CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,0,book(p,-1)));
+    mc_nbt playerData={0};encode_player(p,&playerData);NBTTagCompound *playerTag=storage_tag(g.heap,&playerData);
+    CHECK(NBTTagCompound_getTagId_ascii(playerTag,"UUIDMost")==4&&NBTTagCompound_getLong_ascii(playerTag,"UUIDMost")==-1&&
+          NBTTagCompound_getLong_ascii(playerTag,"UUIDLeast")==-2);
+    CHECK(!NBTTagCompound_hasKey_ascii(playerTag,"RandomSeed")&&!NBTTagCompound_hasKey_ascii(playerTag,"rand"));random_unchanged(&playerRandom,p->rand);
+    EntityItem *e=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2,book(p,1));CHECK(e&&MCGameplay_addItem(&g,(MCObject *)e));
+    e->entityUniqueID=NativeJavaUUID_new(g.heap,INT64_MIN,INT64_MAX);e->savedFields=NBTTagCompound_new(g.heap);CHECK(e->entityUniqueID&&e->savedFields&&
+        NBTTagCompound_setLong_ascii(e->savedFields,"UUIDMost",3)&&NBTTagCompound_setLong_ascii(e->savedFields,"UUIDLeast",4));
+    NativeJavaRandomState entityRandom=e->rand->state;mc_nbt itemData={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&itemData,NULL));
+    NBTTagCompound *itemsTag=storage_tag(g.heap,&itemData);NBTTagCompound *entry=NBTTagList_getCompoundTagAt(NBTTagCompound_getTagList_ascii(itemsTag,"Entities",10),0);
+    CHECK(entry&&NBTTagCompound_getLong_ascii(entry,"UUIDMost")==INT64_MIN&&NBTTagCompound_getLong_ascii(entry,"UUIDLeast")==INT64_MAX);
+    CHECK(!NBTTagCompound_hasKey_ascii(entry,"RandomSeed")&&!NBTTagCompound_hasKey_ascii(entry,"rand"));random_unchanged(&entityRandom,e->rand);
+    MCGameplay loaded={0};MCObjectRootScope loadedScope={0};MCGameplayPlayer *q=setup(&loaded,&loadedScope);NativeJavaRandomState readRandom=q->rand->state;
+    NativeJavaUUID *profile=q->gameProfileUUID;CHECK(MCGameplayStorage_loadPlayer(q,&playerData,&crafting));
+    CHECK(q->entityUniqueID==profile&&q->entityUniqueID->mostSignificantBits==12288&&q->entityUniqueID->leastSignificantBits==INT64_MIN+1);
+    CHECK(InventoryPlayer_getStackInSlot(q->inventory,0)->stackSize==-1);random_unchanged(&readRandom,q->rand);
+    CHECK(MCGameplayStorage_loadItems(q->worldObj,&itemData,q->effects,&entity_dependencies,&constructors));EntityItem *restored=(EntityItem *)MCGameplay_get(&loaded)->items[0];
+    CHECK(restored->entityUniqueID->mostSignificantBits==INT64_MIN&&restored->entityUniqueID->leastSignificantBits==INT64_MAX);
+    random_unchanged(&entityRandom,restored->rand);
+    /* Legacy input uses the actual UUID adapter, then player profile reset;
+       malformed legacy input stops before both reset and Inventory reads. */
+    CHECK(NBTTagCompound_removeTag_ascii(playerTag,"UUIDMost")&&NBTTagCompound_removeTag_ascii(playerTag,"UUIDLeast"));mc_nbt legacy={0};snapshot(playerTag,&legacy);
+    q->entityUniqueID=NativeJavaUUID_new(loaded.heap,71,72);CHECK(q->entityUniqueID&&MCGameplayStorage_loadPlayer(q,&legacy,&crafting)&&q->entityUniqueID==profile);random_unchanged(&readRandom,q->rand);mc_nbt_free(&legacy);
+    CHECK(NBTTagCompound_removeTag_ascii(entry,"UUIDMost")&&NBTTagCompound_removeTag_ascii(entry,"UUIDLeast")&&
+          NBTTagCompound_setString_ascii(entry,"UUID",NBTString_fromASCII(g.heap,"1-2-3-4-5---")));snapshot(itemsTag,&legacy);
+    CHECK(MCGameplayStorage_loadItems(q->worldObj,&legacy,q->effects,&entity_dependencies,&constructors));restored=(EntityItem *)MCGameplay_get(&loaded)->items[0];
+    CHECK(restored->entityUniqueID->mostSignificantBits==INT64_C(0x0000000100020003)&&restored->entityUniqueID->leastSignificantBits==INT64_C(0x0004000000000005));random_unchanged(&entityRandom,restored->rand);mc_nbt_free(&legacy);
+    CHECK(NBTTagCompound_setString_ascii(playerTag,"UUID",NBTString_fromASCII(g.heap,"invalid")));snapshot(playerTag,&legacy);
+    ItemStack *before=book(q,7);CHECK(InventoryPlayer_setInventorySlotContents(q->inventory,0,before));MCObjectRootScope_end(&loadedScope);
+    MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&loaded,&tx)&&MCObjectRootScope_begin(&loadedScope,tx.working.heap));MCGameplayPlayer *bad=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
+    NativeJavaUUID *oldUUID=bad->entityUniqueID;ItemStack *oldInventory=InventoryPlayer_getStackInSlot(bad->inventory,0);
+    CHECK(!MCGameplayStorage_loadPlayer(bad,&legacy,&crafting)&&MCObjectHeap_failed(tx.working.heap));
+    CHECK(bad->entityUniqueID==oldUUID&&InventoryPlayer_getStackInSlot(bad->inventory,0)==oldInventory);random_unchanged(&readRandom,bad->rand);
+    MCObjectRootScope_end(&loadedScope);CHECK(MCGameplay_abort(&tx)&&MCObjectRootScope_begin(&loadedScope,loaded.heap));
+    CHECK(q->entityUniqueID==profile&&InventoryPlayer_getStackInSlot(q->inventory,0)==before);mc_nbt_free(&legacy);
+    mc_nbt_free(&itemData);mc_nbt_free(&playerData);finish(&loaded,&loadedScope);finish(&g,&scope);
+}
+static void malformed_item_uuid_preserves_prefix_and_abort_preserves_parent(void) {
+    MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);
+    EntityItem *original=EntityItem_new_stack(g.heap,(MCObject *)p->worldObj,p->effects,&entity_dependencies,&constructors,1.25,20.5,-2,book(p,1));CHECK(original&&MCGameplay_addItem(&g,(MCObject *)original));original->motionX=0.5;original->age=37;original->onGround=true;
+    mc_nbt data={0};CHECK(MCGameplayStorage_encodeItems(MCGameplay_get(&g),&data,NULL));NBTTagCompound *root=storage_tag(g.heap,&data);
+    NBTTagCompound *entry=NBTTagList_getCompoundTagAt(NBTTagCompound_getTagList_ascii(root,"Entities",10),0);CHECK(entry&&
+        NBTTagCompound_removeTag_ascii(entry,"UUIDMost")&&NBTTagCompound_removeTag_ascii(entry,"UUIDLeast")&&
+        NBTTagCompound_setString_ascii(entry,"UUID",NBTString_fromASCII(g.heap,"invalid")));snapshot(root,&data);
+    MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx)&&MCObjectRootScope_begin(&scope,tx.working.heap));
+    MCGameplayPlayer *copy=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];Effects *effects=(Effects *)copy->effects;effects->positions=0;
+    EntityItem *old=(EntityItem *)MCGameplay_get(&tx.working)->items[0];CHECK(!MCGameplayStorage_loadItems(copy->worldObj,&data,copy->effects,&entity_dependencies,&constructors)&&MCObjectHeap_failed(tx.working.heap));
+    EntityItem *partial=effects->constructed;CHECK(partial&&partial!=old&&partial->posX==1.25&&partial->posY==20.5&&partial->posZ==-2&&partial->motionX==0.5&&partial->onGround);
+    CHECK(partial->entityUniqueID&&partial->entityUniqueID->mostSignificantBits==37&&partial->age==0&&effects->positions==0);
+    CHECK(MCGameplay_get(&tx.working)->items[0]==(MCObject *)old&&old->age==37);
+    MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx)&&MCObjectRootScope_begin(&scope,g.heap));
+    CHECK(MCGameplay_get(&g)->items[0]==(MCObject *)original&&original->age==37&&original->motionX==0.5);mc_nbt_free(&data);finish(&g,&scope);
+}
+static void missing_profile_fails_after_base_uuid_before_inventory(void) {
+    MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);ItemStack *old=book(p,7);CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,0,old));
+    NBTTagCompound *root=NBTTagCompound_new(g.heap);CHECK(root&&NBTTagCompound_setLong_ascii(root,"UUIDMost",71)&&NBTTagCompound_setLong_ascii(root,"UUIDLeast",72));mc_nbt data={0};snapshot(root,&data);
+    MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx)&&MCObjectRootScope_begin(&scope,tx.working.heap));MCGameplayPlayer *copy=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];NativeJavaUUID *prior=copy->entityUniqueID;ItemStack *inventory=InventoryPlayer_getStackInSlot(copy->inventory,0);copy->gameProfileUUID=NULL;
+    CHECK(!MCGameplayStorage_loadPlayer(copy,&data,&crafting)&&MCObjectHeap_failed(tx.working.heap));
+    CHECK(copy->entityUniqueID!=prior&&copy->entityUniqueID->mostSignificantBits==71&&copy->entityUniqueID->leastSignificantBits==72&&InventoryPlayer_getStackInSlot(copy->inventory,0)==inventory);
+    MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx)&&MCObjectRootScope_begin(&scope,g.heap));CHECK(p->gameProfileUUID&&p->entityUniqueID==p->gameProfileUUID&&InventoryPlayer_getStackInSlot(p->inventory,0)==old);mc_nbt_free(&data);finish(&g,&scope);
+}
 static NBTTagCompound *item_entry(MCGameplayPlayer *p,int32_t index,int32_t count) {NBTTagCompound *entry=NBTTagCompound_new(p->object.heap);CHECK(entry&&NBTTagCompound_setByte_ascii(entry,"Slot",(int8_t)index)&&ItemStack_writeToNBT(book(p,count),entry));return entry;}
 static void source_inventory_last_wins_and_partial_rollback(void) {
     MCGameplay g={0};MCObjectRootScope scope={0};MCGameplayPlayer *p=setup(&g,&scope);NBTTagCompound *root=NBTTagCompound_new(g.heap);NBTTagList *list=NBTTagList_new(g.heap);CHECK(root&&list);
@@ -156,4 +235,4 @@ static void native_position_restore_and_failure(void) {
         MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx)&&MCObjectRootScope_begin(&scope,g.heap));CHECK(MCGameplay_get(&g)->items[0]==(MCObject *)original&&watched(original)==InventoryPlayer_getItemStack(p->inventory)&&original->motionY==-10.000000000000002&&original->age==37);mc_nbt_free(&data);finish(&g,&scope);
     }
 }
-int main(void) {roundtrip_sources_foreign_and_names();workbench_recovery_and_item_envelope();maps_and_snapshot_metadata();durable_group_and_packet_preflight();source_inventory_last_wins_and_partial_rollback();malformed_extensions_and_profile_dependency();storage_byte_cap_and_persistence_tracker();item_list_boundaries_and_invalid_adoption();native_position_restore_and_failure();printf("gameplay storage: %u checks passed\n",checks);return 0;}
+int main(void) {uuid_authority_profile_order_and_random_nonpersistence();malformed_item_uuid_preserves_prefix_and_abort_preserves_parent();missing_profile_fails_after_base_uuid_before_inventory();roundtrip_sources_foreign_and_names();workbench_recovery_and_item_envelope();maps_and_snapshot_metadata();durable_group_and_packet_preflight();source_inventory_last_wins_and_partial_rollback();malformed_extensions_and_profile_dependency();storage_byte_cap_and_persistence_tracker();item_list_boundaries_and_invalid_adoption();native_position_restore_and_failure();printf("gameplay storage: %u checks passed\n",checks);return 0;}

@@ -273,7 +273,10 @@ static void unload_items(mc_client *c,int x,int z) {
 static void receive_object(mc_client *c,mc_buf *b) {
     int32_t eid=mc_get_varint(b); unsigned type=mc_get_u8(b);
     int32_t x=mc_get_i32(b),y=mc_get_i32(b),z=mc_get_i32(b);
-    (void)mc_get_u8(b); (void)mc_get_u8(b); int32_t data=mc_get_i32(b);
+    int32_t pitch=mc_get_u8(b),yaw=mc_get_u8(b);
+    if (pitch>=128) pitch-=256;
+    if (yaw>=128) yaw-=256;
+    int32_t data=mc_get_i32(b);
     double vx=0,vy=0,vz=0;
     if (data>0) { vx=mc_get_i16(b)/8000.0; vy=mc_get_i16(b)/8000.0; vz=mc_get_i16(b)/8000.0; }
     if (b->failed || b->pos!=b->len) { b->failed=true; return; }
@@ -284,7 +287,7 @@ static void receive_object(mc_client *c,mc_buf *b) {
     if (!item) { b->failed=true; return; }
     MCGameplayTransaction tx={0}; MCObjectRootScope scope={0};
     if (!begin_frame(c,&tx,&scope)) { b->failed=true; return; }
-    bool ok=mc_client_graph_spawn_item(&tx.working,eid,x/32.0,y/32.0,z/32.0,vx,vy,vz);
+    bool ok=mc_client_graph_spawn_item_packet(&tx.working,eid,x/32.0,y/32.0,z/32.0,pitch,yaw,data,vx,vy,vz);
     MCObjectRootScope_end(&scope);
     if (!finish_frame(c,&tx,ok)) { b->failed=true; return; }
     memset(item,0,sizeof *item); item->active=true; item->eid=eid;
@@ -1281,9 +1284,10 @@ int main(int argc, char **argv) {
             const mc_client_item *entry=&c->items[i]; EntityItem *e=mc_client_graph_item(&c->gameplay,entry->eid);
             ItemStack *stack=e ? DataWatcher_getWatchableObjectItemStack(e->dataWatcher,10) : NULL;
             mc_buf tag; mc_buf_init(&tag); if (stack && stack->stackTagCompound) (void)NBTWire_encodeCompound(&tag,stack->stackTagCompound);
-            printf("CLIENT_ITEM eid=%d ready=%d id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx server_position=%.3f,%.3f,%.3f position=%.3f,%.3f,%.3f\n",
+            printf("CLIENT_ITEM eid=%d ready=%d id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx server_position=%.3f,%.3f,%.3f position=%.3f,%.3f,%.3f rotation=%.6f,%.6f\n",
                 entry->eid,entry->metadata_ready,stack ? ItemStack_registryId(stack->item) : -1,stack ? stack->stackSize : 0,stack ? stack->itemDamage : 0,tag.len,(unsigned long)crc32(0,tag.data,(uInt)tag.len),
-                entry->server_x/32.0,entry->server_y/32.0,entry->server_z/32.0,e ? e->posX : 0,e ? e->posY : 0,e ? e->posZ : 0);
+                entry->server_x/32.0,entry->server_y/32.0,entry->server_z/32.0,e ? e->posX : 0,e ? e->posY : 0,e ? e->posZ : 0,
+                e ? e->rotationPitch : 0,e ? e->rotationYaw : 0);
             mc_buf_free(&tag);
         }
         for (int i=0;i<45;i++) {

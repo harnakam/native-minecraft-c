@@ -9,6 +9,7 @@ static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
     world->statList=(StatList *)visitor((MCObject *)world->statList,context);
     world->itemDisplayContext=visitor(world->itemDisplayContext,context);
     world->nativeContext=visitor(world->nativeContext,context);
+    world->rand=(NativeJavaRandom *)visitor((MCObject *)world->rand,context);
     world->emptyMapUseStat=(StatBase *)visitor((MCObject *)world->emptyMapUseStat,context);
     world->savedItemFields=(NBTTagCompound *)visitor((MCObject *)world->savedItemFields,context);
     world->savedItemRootName=(NBTString *)visitor((MCObject *)world->savedItemRootName,context);
@@ -35,15 +36,30 @@ static const MCObjectClass klass={"C919.native.GameplayWorld",clone,trace,destro
 bool MCGameplayWorld_isInstance(const MCObject *object) { return object && object->klass==&klass; }
 MCGameplayWorld *MCGameplayWorld_new(MCObjectHeap *heap,MCGameplayObjects *owners,
     const mc_world *terrain,CraftingManager *manager) {
+    return MCGameplayWorld_newWithRandomRuntime(heap,owners,terrain,manager,NativeJavaRandomRuntime_process());
+}
+MCGameplayWorld *MCGameplayWorld_newWithRandomRuntime(MCObjectHeap *heap,MCGameplayObjects *owners,
+    const mc_world *terrain,CraftingManager *manager,NativeJavaRandomRuntime *runtime) {
     if (!heap || !owners || owners->object.heap!=heap ||
-        (manager && manager->object.heap!=heap)) {
+        !runtime || (manager && manager->object.heap!=heap)) {
         MCObjectHeap_fail(heap); return NULL;
     }
+    MCObjectRootScope scope={0};
+    if (!MCObjectRootScope_begin(&scope,heap)) return NULL;
     MCGameplayWorld *world=(MCGameplayWorld *)MCObjectHeap_alloc(heap,sizeof(*world),&klass);
-    if (!world) return NULL;
-    world->owners=owners; world->terrain=terrain; world->manager=manager;
-    mc_maps_init(&world->maps);
-    return world;
+    bool ok=world!=NULL;
+    if (world) {
+        world->owners=owners; world->terrain=terrain; world->manager=manager;
+        world->randomRuntime=runtime; mc_maps_init(&world->maps);
+        NativeJavaRandom *temporary=NativeJavaRandomRuntime_newRandom(runtime,heap);
+        ok=temporary&&NativeJavaRandom_nextInt(temporary,&world->updateLCG);
+        if (ok) world->rand=NativeJavaRandomRuntime_newRandom(runtime,heap);
+        ok=ok&&world->rand&&NativeJavaRandom_nextIntBound(world->rand,12000,&world->ambientTickCountdown);
+        MCObjectHeap_touch(heap);
+    }
+    if (!ok) MCObjectHeap_fail(heap);
+    MCObjectRootScope_end(&scope);
+    return ok&&!MCObjectHeap_failed(heap)?world:NULL;
 }
 static const MCGameplayWorld *world_object(const MCObject *object) {
     if (!object) return NULL;

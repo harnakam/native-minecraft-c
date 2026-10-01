@@ -3,6 +3,7 @@
 #include "util/MCGameplayWorld.h"
 #include "inventory/ContainerPlayer.h"
 #include "nbt/NBTTagCompound.h"
+#include "util/NativeJavaUUID.h"
 
 typedef struct StatFileWriter StatFileWriter;
 typedef struct EntityPlayerMPWindowsDependencies EntityPlayerMPWindowsDependencies;
@@ -19,6 +20,14 @@ typedef struct MCGameplayPlayer {
     StatFileWriter *stats;
     NBTTagCompound *savedFields;
     NBTString *savedRootName;
+    NativeJavaRandom *rand;
+    NativeJavaUUID *entityUniqueID;
+    /* Existing authenticated/offline profile identity. NULL is permitted only
+       for generic native fixtures which have no GameProfile dependency. */
+    NativeJavaUUID *gameProfileUUID;
+    /* Results of the isolated inherited EntityLivingBase RNG segment, not a
+       claim that its attributes/health/complete constructor are translated. */
+    float randomUnused1,randomUnused2,rotationYawHead;
     double posX,posY,posZ;
     float rotationYaw,rotationPitch;
     int32_t entityId;

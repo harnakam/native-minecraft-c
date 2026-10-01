@@ -5,6 +5,7 @@
 #include "nbt/NBTTagString.h"
 #include "nbt/NBTTagDouble.h"
 #include "entity/item/NativeItemMotion.h"
+#include "entity/EntityUUIDNBT.h"
 #include <limits.h>
 #include <math.h>
 
@@ -83,8 +84,11 @@ bool MCGameplayStorage_encodePlayer(const MCGameplayObjects *objects,size_t inde
     if (!MCObjectRootScope_begin(&scope,heap))return false;
     MCGameplayPlayer *p=player(objects,index);bool ok=p&&MCGameplayPackets_validate(p);
     NBTTagCompound *root=ok?copy_fields(heap,p->savedFields):NULL;
-    NBTTagList *inventory=root?NBTTagList_new(heap):NULL;
-    ok=root&&inventory&&InventoryPlayer_writeToNBT(p->inventory,inventory)&&strip_player(root)&&
+    /* Entity writes its current UUID before the subclass Inventory segment;
+       saved envelope metadata cannot override the canonical live reference. */
+    ok=root&&Entity_writeUUIDToNBTSegment((MCObject *)p,root,EntityUUIDNBT_nativeOwnerDispatch());
+    NBTTagList *inventory=ok?NBTTagList_new(heap):NULL;
+    ok=ok&&inventory&&InventoryPlayer_writeToNBT(p->inventory,inventory)&&strip_player(root)&&
         NBTTagCompound_setTag_ascii(root,"Inventory",(NBTBase *)inventory)&&
         NBTTagCompound_setInteger_ascii(root,"SelectedItemSlot",p->inventory->currentItem);
     NBTTagList *grid=ok?grid_list(p->inventoryContainer->craftMatrix,4):NULL;
@@ -121,7 +125,8 @@ static bool entity_write(EntityItem *e,NBTTagList *list) {
         !NBTTagCompound_setInteger_ascii(root,"C919EntityId",e->entityId)||
         !vector_write(root,"Pos",e->posX,e->posY,e->posZ)||
         !vector_write(root,"Motion",e->motionX,e->motionY,e->motionZ)||
-        !NBTTagCompound_setBoolean_ascii(root,"OnGround",e->onGround))return false;
+        !NBTTagCompound_setBoolean_ascii(root,"OnGround",e->onGround)||
+        !Entity_writeUUIDToNBTSegment((MCObject *)e,root,EntityUUIDNBT_nativeOwnerDispatch()))return false;
     /* Unknown envelope fields survive, while absent source owner/thrower do
        not resurrect stale values from a previous file. */
     if (!NBTTagCompound_removeTag_ascii(root,"Owner")||!NBTTagCompound_removeTag_ascii(root,"Thrower")||
@@ -179,6 +184,10 @@ bool MCGameplayStorage_loadPlayer(MCGameplayPlayer *p,const mc_nbt *input,const 
         !same(heap,(MCObject *)p->worldObj))return fail(heap);
     if (!MCObjectRootScope_begin(&scope,heap))return false;
     NBTTagCompound *root=NULL;NBTString *name=NULL;bool ok=decode_named(heap,input,&root,&name);
+    /* The inherited read can fail before the original player profile reset.
+       EntityPlayer then restores its GameProfile identity before Inventory. */
+    if (ok)ok=Entity_readUUIDFromNBTSegment((MCObject *)p,root,EntityUUIDNBT_nativeOwnerDispatch())&&
+        EntityPlayer_restoreProfileUUIDSegment(p);
     NBTTagList *inventory=ok?NBTTagCompound_getTagList_ascii(root,"Inventory",10):NULL;
     if (ok)ok=inventory&&InventoryPlayer_readFromNBT(p->inventory,inventory)==ITEMSTACK_NBT_OK;
     if (ok) {p->inventory->currentItem=NBTTagCompound_getInteger_ascii(root,"SelectedItemSlot");MCObjectHeap_touch(heap);}
@@ -228,12 +237,13 @@ bool MCGameplayStorage_loadItems(MCGameplayWorld *w,const mc_nbt *input,MCObject
         if (ok)ok=NativeItemMotion_positionSupported(pos[0],pos[1],pos[2]);
         if (!ok)break;
         EntityItem *e=EntityItem_new_world(heap,(MCObject *)w,context,d,constructors);if (!e) {ok=false;break;}
-        /* Native restoration of the inherited envelope follows the source
-           Entity read order for these fields. The complete Entity NBT method
-           (UUID/rotation/fire/commands/etc.) remains an explicit dependency. */
+        /* Native restoration of these scalar inherited fields precedes the
+           translated UUID segment and the first setPosition, as in Entity.
+           Complete rotation/fire/commands/etc. remain separate dependencies. */
         e->entityId=NBTTagCompound_getInteger_ascii(tag,"C919EntityId");e->posX=pos[0];e->posY=pos[1];e->posZ=pos[2];e->motionX=fabs(motion[0])>10?0:motion[0];e->motionY=fabs(motion[1])>10?0:motion[1];e->motionZ=fabs(motion[2])>10?0:motion[2];e->onGround=NBTTagCompound_getBoolean_ascii(tag,"OnGround");MCObjectHeap_touch(heap);
         for(size_t j=0;j<count;j++)if (loaded[j]->entityId==e->entityId) {ok=false;break;}
-        if (!ok||!constructors->setPosition(context,e,pos[0],pos[1],pos[2])||MCObjectHeap_failed(heap)||
+        if (!ok||!Entity_readUUIDFromNBTSegment((MCObject *)e,tag,EntityUUIDNBT_nativeOwnerDispatch())||
+            !constructors->setPosition(context,e,pos[0],pos[1],pos[2])||MCObjectHeap_failed(heap)||
             EntityItem_readEntityFromNBT(e,tag)!=ITEMSTACK_NBT_OK||
             !constructors->setPosition(context,e,e->posX,e->posY,e->posZ)||MCObjectHeap_failed(heap)) {ok=false;break;}
         e->savedFields=tag;MCObjectHeap_touch(heap);loaded[count++]=e;

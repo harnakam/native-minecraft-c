@@ -40,6 +40,22 @@ static MCGameplayWorld *world_new(MCGameplay *game,const mc_world *terrain) {
 }
 static FixtureEffects *effects(MCGameplayPlayer *p) {FixtureEffects *f=(FixtureEffects *)MCObjectHeap_alloc(p->object.heap,sizeof(*f),&effects_class);CHECK(f);p->effects=(MCObject *)f;return f;}
 static ItemStack *stack(MCObjectHeap *h,int id,int32_t count,int32_t damage) {ItemStack *s=ItemStack_new(h,ItemStack_registryItem(id),count,damage);CHECK(s);return s;}
+static void constructor_container_world_flag(void) {
+    for(unsigned remote=0;remote<2;remote++) {
+        MCGameplay game={0};CHECK(MCGameplay_init(&game,32*1024*1024));
+        MCObjectRootScope scope={0};CHECK(MCObjectRootScope_begin(&scope,game.heap));
+        MCGameplayWorld *world=world_new(&game,NULL);world->remote=remote!=0;
+        MCGameplayPlayer *player=MCGameplayPlayer_new(world,NBTString_fromASCII(game.heap,"WorldFlag"),NULL,&dependencies);CHECK(player);
+        CHECK(player->inventoryContainer->isLocalWorld==!world->remote);
+        CHECK(MCGameplay_setPlayer(&game,0,"11111111-1111-1111-1111-111111111111",(MCObject *)player));
+        MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));
+        CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));
+        MCGameplayPlayer *copy=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
+        CHECK(copy->worldObj->remote==(remote!=0)&&copy->inventoryContainer->isLocalWorld==!copy->worldObj->remote);
+        CHECK(copy->inventoryContainer!=player->inventoryContainer&&copy->inventoryContainer->thePlayer==(MCObject *)copy);
+        MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&tx));CHECK(MCGameplay_free(&game));
+    }
+}
 static void construction_and_source_crafting(void) {
     mc_world terrain;mc_world_init(&terrain,7);CHECK(mc_world_set(&terrain,1,2,3,(uint16_t)(58u<<4)));
     MCGameplay game={0};CHECK(MCGameplay_init(&game,32*1024*1024));MCGameplayWorld *world=world_new(&game,&terrain);
@@ -75,7 +91,7 @@ static void snapshots_and_maps(void) {
     StatBase *stat=StatBase_newIdentity(game.heap,NBTString_fromASCII(game.heap,"stat.craft.test"),STAT_BASE_KIND_CRAFTING);CHECK(stat);world->craftStats[1]=world->craftStats[2]=stat;CHECK(StatFileWriter_increaseStat(stats,(MCObject *)a,stat,17));
     mc_map_info map={0};map.id=7;map.metadata_known=true;map.colors[0]=42;map_body(&map.original_nbt,19);map_body(&map.original_entry_nbt,23);CHECK(mc_maps_add(&world->maps,&map));mc_map_info_free(&map);map_body(&world->maps.original_nbt,29);
     mc_MapInfo *tracking=mc_MapData_getMapInfo(&world->maps.entries[0],5);CHECK(tracking);tracking->packet_counter=17;
-    world->remote=true;world->spawnX=-55;world->spawnZ=91;world->dimension=-1;world->randomState=UINT64_MAX;world->nextEntityId=123;
+    world->remote=true;world->spawnX=-55;world->spawnZ=91;world->dimension=-1;CHECK(NativeJavaRandom_setSeed(world->rand,-1));world->nextEntityId=123;
     a->posX=1.5;a->posY=20;a->posZ=-8;a->rotationYaw=33;a->rotationPitch=-15;a->spectator=true;a->silent=true;a->isChangingQuantityOnly=true;
     MCObjectRootScope_end(&scope);MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&game,&tx));CHECK(MCObjectRootScope_begin(&scope,tx.working.heap));MCGameplayObjects *owners=MCGameplay_get(&tx.working);MCGameplayWorld *copy=(MCGameplayWorld *)owners->world;MCGameplayPlayer *ca=(MCGameplayPlayer *)owners->players[0],*cb=(MCGameplayPlayer *)owners->players[1];
     CHECK(copy!=world&&copy->owners==owners&&copy->terrain==&terrain&&copy->manager!=world->manager);CHECK(ca->worldObj==copy&&cb->worldObj==copy);
@@ -88,7 +104,11 @@ static void snapshots_and_maps(void) {
     CHECK(StatFileWriter_increaseStat(ca->stats,(MCObject *)ca,copy->craftStats[1],6));CHECK(StatFileWriter_readStat(stats,stat)==17&&StatFileWriter_readStat(ca->stats,copy->craftStats[1])==23);
     CHECK(copy->maps.entries!=world->maps.entries&&copy->maps.entries[0].original_nbt.data!=world->maps.entries[0].original_nbt.data&&copy->maps.original_nbt.data!=world->maps.original_nbt.data);
     CHECK(copy->maps.entries[0].original_entry_nbt.data!=world->maps.entries[0].original_entry_nbt.data&&copy->maps.entries[0].tracking!=world->maps.entries[0].tracking);
-    CHECK(mc_MapData_getMapInfo(&copy->maps.entries[0],5)->packet_counter==17);CHECK(copy->remote&&copy->spawnX==-55&&copy->spawnZ==91&&copy->dimension==-1&&copy->randomState==UINT64_MAX&&copy->nextEntityId==123);
+    CHECK(mc_MapData_getMapInfo(&copy->maps.entries[0],5)->packet_counter==17);CHECK(copy->remote&&copy->spawnX==-55&&copy->spawnZ==91&&copy->dimension==-1&&copy->nextEntityId==123);
+    CHECK(copy->rand!=world->rand&&copy->rand->state.seed48==world->rand->state.seed48&&copy->randomRuntime==world->randomRuntime);
+    CHECK(ca->rand!=a->rand&&cb->rand!=b->rand&&ca->rand!=cb->rand&&ca->entityUniqueID!=a->entityUniqueID);
+    CHECK(ca->entityUniqueID->mostSignificantBits==a->entityUniqueID->mostSignificantBits&&ca->entityUniqueID->leastSignificantBits==a->entityUniqueID->leastSignificantBits);
+    CHECK(ca->randomUnused1==a->randomUnused1&&ca->randomUnused2==a->randomUnused2&&ca->rotationYawHead==a->rotationYawHead);
     CHECK(ca->posX==1.5&&ca->posY==20&&ca->posZ==-8&&ca->rotationYaw==33&&ca->rotationPitch==-15&&ca->spectator&&ca->silent&&ca->isChangingQuantityOnly);
     copy->maps.entries[0].colors[0]=99;mc_MapData_getMapInfo(&copy->maps.entries[0],5)->packet_counter=18;InventoryPlayer_getItemStack(ca->inventory)->stackSize=-1;
     CHECK(world->maps.entries[0].colors[0]==42&&mc_MapData_getMapInfo(&world->maps.entries[0],5)->packet_counter==17&&shared->stackSize==0);
@@ -131,4 +151,4 @@ static void bounded_constructor_failures(void) {
     }
     CHECK(failed_after_world>20&&successful>20);
 }
-int main(void) {construction_and_source_crafting();snapshots_and_maps();invalid_dependencies_and_clone_failure();bounded_constructor_failures();printf("gameplay owners: %u checks passed\n",checks);return 0;}
+int main(void) {constructor_container_world_flag();construction_and_source_crafting();snapshots_and_maps();invalid_dependencies_and_clone_failure();bounded_constructor_failures();printf("gameplay owners: %u checks passed\n",checks);return 0;}
