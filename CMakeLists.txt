@@ -16,6 +16,7 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/client/network/NetHandlerPlayClient.c
     ${MC_SOURCE}/client/multiplayer/PlayerControllerMP.c
     ${MC_SOURCE}/client/entity/EntityPlayerSP.c
+    ${MC_SOURCE}/client/gui/GuiIngameHotbar.c
     ${MC_SOURCE}/client/native_runtime.c
     ${MC_SOURCE}/network/transport.c
     ${MC_SOURCE}/network/play/client/C08PacketPlayerBlockPlacement.c
@@ -54,6 +55,8 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/item/ItemStack.c
     ${MC_SOURCE}/item/ItemStackCrafting.c
     ${MC_SOURCE}/item/ItemStackUse.c
+    ${MC_SOURCE}/item/ItemAnimation.c
+    ${MC_SOURCE}/item/ItemStackAnimation.c
     ${MC_SOURCE}/item/ItemMapCreated.c
     ${MC_SOURCE}/item/ItemMapData.c
     ${MC_SOURCE}/item/crafting/RecipeBookCloning.c
@@ -78,6 +81,7 @@ add_library(c919-core STATIC
     ${MC_SOURCE}/inventory/InventoryCrafting.c
     ${MC_SOURCE}/inventory/InventoryCraftResult.c
     ${MC_SOURCE}/entity/player/InventoryPlayer.c
+    ${MC_SOURCE}/entity/player/InventoryPlayerAnimations.c
     ${MC_SOURCE}/entity/player/EntityPlayerMPWindows.c
     ${MC_SOURCE}/entity/player/EntityPlayerMPStats.c
     ${MC_SOURCE}/entity/player/EntityPlayerDrops.c
@@ -142,7 +146,7 @@ if(WIN32)
     target_link_libraries(c919-client PRIVATE opengl32 gdi32 user32)
 endif()
 if(BUILD_TESTING)
-    foreach(name protocol gameplay_client_frame source_packet_placement source_empty_map source_action_packets source_client_actions source_server_use source_map_refs native_item_motion native_packets packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
+    foreach(name protocol gameplay_client_frame source_packet_placement source_empty_map source_action_packets source_client_actions source_server_use source_map_refs source_inventory_animation source_hotbar native_item_motion native_packets packet_placement packet_itemstack inventory_packets server_inventory_packets world item nbt inventory inventory_crafting container crafting map item_entity transfer object_heap nbt_objects itemstack source_container source_crafting source_item_crafting gameplay_graph source_recipes source_dynamic_recipes source_armor_fireworks source_banners source_entity_item source_stats gameplay_owners source_server_handler source_player_windows gameplay_packets source_client_handler source_player_drops gameplay_crafting source_craft_stats gameplay_storage source_data_watcher source_entity_metadata source_mp_stats)
         add_executable(test-${name} tests/test_${name}.c)
         target_link_libraries(test-${name} PRIVATE c919-core)
         c919_warnings(test-${name})
@@ -170,6 +174,8 @@ if(BUILD_TESTING)
     set_tests_properties(client-containers PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>;C919_CLIENT=$<TARGET_FILE:c919-client>" TIMEOUT 90)
     add_test(NAME client-source-graph COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_source_graph.py)
     set_tests_properties(client-source-graph PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>;C919_CLIENT=$<TARGET_FILE:c919-client>" TIMEOUT 60)
+    add_test(NAME client-animation COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_animation.py)
+    set_tests_properties(client-animation PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>;C919_CLIENT=$<TARGET_FILE:c919-client>" TIMEOUT 60)
     add_test(NAME source-graph-network COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_graph_network.py)
     set_tests_properties(source-graph-network PROPERTIES ENVIRONMENT "C919_SERVER=$<TARGET_FILE:c919-server>" TIMEOUT 60)
 endif()

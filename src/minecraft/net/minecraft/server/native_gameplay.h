@@ -20,6 +20,9 @@ bool mc_server_graph_add_player(MCGameplay *, size_t index, const char *uuid, co
 int32_t mc_server_graph_allocate_entity(MCGameplayWorld *);
 bool mc_server_graph_drop(MCGameplayPlayer *, bool all);
 bool mc_server_graph_use_item(MCGameplayPlayer *);
+/* Calls the original mainInventory update order. The caller owns a RootScope;
+   authoritative map effects require the complete disposable durable graph. */
+bool mc_server_graph_tick_inventory(MCGameplayPlayer *);
 bool mc_server_graph_open_workbench(MCGameplayPlayer *, int32_t x, int32_t y, int32_t z);
 bool mc_server_graph_close(MCGameplayPlayer *, bool sendClose);
 bool mc_server_graph_detect_changes(MCGameplayObjects *);

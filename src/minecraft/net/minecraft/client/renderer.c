@@ -34,6 +34,7 @@ struct mc_renderer {
     WCHAR surrogate;
     char chat[301], title[512];
     unsigned chat_units;
+    int hotbar_x,hotbar_y,hotbar_width; /* Frame-local native logical16 mapping. */
     mc_input pending;
     mesh_cache meshes[MC_MAX_CHUNKS];
     glyph_cache glyphs[MC_GLYPH_CACHE];
@@ -569,6 +570,70 @@ static void slot_icon(mc_renderer *r,const ItemStack *slot,int x,int y,int width
     slot_icon_view(r,render_stack(slot),x,y,width,focused,blocked);
 }
 
+static mc_renderer *current_renderer(MCObject *context) {
+    HDC dc=wglGetCurrentDC(); HWND window=dc ? WindowFromDC(dc) : NULL;
+    mc_renderer *r=window ? (mc_renderer *)(uintptr_t)GetWindowLongPtrW(window,GWLP_USERDATA) : NULL;
+    if (!r || r->dc!=dc) { MCObjectHeap_fail(context->heap); return NULL; }
+    return r;
+}
+static bool graphics_result(MCObject *c) { bool ok=glGetError()==GL_NO_ERROR; if (!ok) MCObjectHeap_fail(c->heap); return ok; }
+static bool hotbar_push(MCObject *c) { if (!current_renderer(c)) return false; glPushMatrix(); return graphics_result(c); }
+static bool hotbar_translate(MCObject *c,float x,float y,float z) { if (!current_renderer(c)) return false; glTranslatef(x,y,z); return graphics_result(c); }
+static bool hotbar_scale(MCObject *c,float x,float y,float z) { if (!current_renderer(c)) return false; glScalef(x,y,z); return graphics_result(c); }
+static bool hotbar_pop(MCObject *c) { if (!current_renderer(c)) return false; glPopMatrix(); return graphics_result(c); }
+static bool hotbar_body(MCObject *c,MCObject *view,ItemStack *s,int32_t x,int32_t y) {
+    if (!current_renderer(c) || !mc_client_graph_render_view(c,view) || !ItemStack_registryIsKnownItem(s->item)) { MCObjectHeap_fail(c->heap); return false; }
+    uint16_t state;
+    if (mc_item_block_state(ItemStack_registryId(s->item),s->itemDamage,&state)) {
+        glPushMatrix(); glTranslatef((float)x+8,(float)y+7,0); glScalef(2.0f/3.0f,2.0f/3.0f,1);
+        block_icon(0,0,state>>4); glPopMatrix();
+    } else {
+        /* Original resource textures/RenderItem are unported. This native
+           geometric item symbol responds to the actual source matrix; bitmap
+           captions remain fixed overlays because raster glyphs cannot scale. */
+        glColor3f(0.63f,0.77f,0.81f); glBegin(GL_QUADS);
+        glVertex2f((float)x+3,(float)y+7); glVertex2f((float)x+9,(float)y+2);
+        glVertex2f((float)x+13,(float)y+9); glVertex2f((float)x+7,(float)y+14); glEnd();
+        panel((float)x+6,(float)y+6,4,4,0.89f,0.94f,0.91f,1);
+    }
+    return graphics_result(c);
+}
+static bool hotbar_overlays(MCObject *c,MCObject *view,MCObject *font,ItemStack *s,int32_t x,int32_t y) {
+    (void)x; (void)y; mc_renderer *r=current_renderer(c);
+    if (!r || !mc_client_graph_render_view(c,view) || font!=mc_client_graph_font_view(c,c)) { MCObjectHeap_fail(c->heap); return false; }
+    slot_render slot=render_stack(s); int px=r->hotbar_x,py=r->hotbar_y,width=r->hotbar_width;
+    glPushMatrix(); glLoadIdentity();
+    uint16_t state;
+    if (!mc_item_block_state(slot.id,slot.damage,&state)) {
+        const char *name=mc_item_name(slot.id),*last=strrchr(name,' '); if (last) name=last+1;
+        char caption[6]; size_t n=strlen(name); if (n>5) n=5;
+        while (n && ((unsigned char)name[n]&0xc0u)==0x80u) --n;
+        memcpy(caption,name,n); caption[n]=0; text_line(r,px+3,py+width/2-11,width-6,caption,0.91f,0.95f,0.97f);
+    }
+    if (slot.tagged) panel((float)(px+width-8),(float)(py+5),3,3,0.93f,0.74f,0.34f,1);
+    if (slot.count!=1) {
+        char number[16]; snprintf(number,sizeof number,"%d",slot.count); int pixels=0;
+        for (const char *p=number;*p;p++) { glyph_cache *glyph=get_glyph(r,(WCHAR)*p); if (glyph) pixels+=glyph->width; }
+        text_line(r,px+width-3-pixels,py+width-22,pixels,number,1,slot.count<1 ? 0.3f : 1,slot.count<1 ? 0.3f : 0.94f);
+    }
+    glPopMatrix(); return graphics_result(c);
+}
+static const GuiIngameHotbarDependencies hotbar_dependencies={hotbar_push,hotbar_translate,hotbar_scale,hotbar_body,hotbar_pop,mc_client_graph_font_view,hotbar_overlays};
+static bool draw_hotbar_item(mc_renderer *r,const mc_client *c,int index,int x,int y,int width) {
+    MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
+    if (!mc_client_graph_bind_hotbar((MCGameplay *)&c->gameplay,&hotbar_dependencies)) return false;
+    panel((float)x,(float)y,(float)width,(float)width,0.13f,0.18f,0.20f,1);
+    r->hotbar_x=x; r->hotbar_y=y; r->hotbar_width=width;
+    GLint depth; glGetIntegerv(GL_MODELVIEW_STACK_DEPTH,&depth);
+    glPushMatrix(); glTranslatef((float)x,(float)y,0); glScalef(width/16.0f,width/16.0f,1);
+    bool ok=GuiIngame_renderHotbarItem(b->hotbar,index,0,0,c->partial_ticks,b->player);
+    /* Native exception boundary restores external GL state. The source body
+       itself has no finally/pop when its RenderItem dependency throws. */
+    GLint current; glGetIntegerv(GL_MODELVIEW_STACK_DEPTH,&current);
+    while (current>depth) { glPopMatrix(); --current; }
+    return ok;
+}
+
 static void draw_inventory(mc_renderer *r,const mc_client *c) {
     inventory_layout g=inventory_geometry(r); char line[512];
     panel(0,0,(float)r->width,(float)r->height,0.02f,0.035f,0.05f,0.76f);
@@ -754,7 +819,9 @@ static void draw_hud(mc_renderer *r, const mc_client *c) {
             panel((float)x,(float)bar_y,(float)(slot_width-3),49,0.35f,0.65f,0.63f,0.96f);
             panel((float)(x+2),(float)(bar_y+2),(float)(slot_width-7),45,0.10f,0.20f,0.20f,1);
         } else panel((float)x,(float)bar_y,(float)(slot_width-3),49,0.14f,0.19f,0.20f,0.95f);
-        slot_icon(r,mc_client_player_slot(c,36+i),x+3,bar_y+3,slot_width-9,false,false);
+        if (!draw_hotbar_item(r,c,i,x+3,bar_y+3,slot_width-9)) {
+            glDisable(GL_BLEND); glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE); return;
+        }
         snprintf(line,sizeof(line),"%d",i+1); text(r,x+5,bar_y+1,20,line,0.81f,0.86f,0.83f);
     }
     char selected_name[256]; mc_client_slot_name(mc_client_player_slot(c,36+mc_client_selected(c)),selected_name,sizeof(selected_name));
@@ -844,6 +911,7 @@ void mc_renderer_draw(mc_renderer *r, const mc_client *c) {
     GLfloat fog_color[]={0.65f,0.80f,0.84f,1}; glFogfv(GL_FOG_COLOR,fog_color); glFogi(GL_FOG_MODE,GL_LINEAR); glFogf(GL_FOG_START,56); glFogf(GL_FOG_END,128); glEnable(GL_FOG);
     if (c->positioned) { draw_world(r,c); draw_players(r,c); draw_items(r,c); draw_target(c); }
     draw_hud(r,c);
+    if (MCObjectHeap_failed(c->gameplay.heap)) { MCObjectRootScope_end(&frame); draw_graph_error(r,c); return; }
     glFlush();
     if (!r->hidden) SwapBuffers(r->dc);
     MCObjectRootScope_end(&frame);

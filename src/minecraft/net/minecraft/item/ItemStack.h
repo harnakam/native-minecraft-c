@@ -14,6 +14,9 @@ typedef struct NBTString NBTString;
    World/Entity/Stats/Enchantments and localization remain separate ports. */
 const Item *ItemStack_registryItem(int32_t legacy_id);
 int32_t ItemStack_registryId(const Item *item);
+/* Native immutable registry identity lookup: NULL retains source ID 0;
+   unregistered identities return -1 and never become a base Item fallback. */
+bool ItemStack_registryIsKnownItem(const Item *item);
 const char *ItemStack_registryResourceName(const Item *item);
 bool ItemStack_registryIsEditableBook(const Item *item);
 const Item *ItemStack_registryContainerItem(const Item *item);
@@ -39,6 +42,7 @@ typedef struct ItemStackArray {
     ItemStack *items[];
 } ItemStackArray;
 ItemStackArray *ItemStackArray_new(MCObjectHeap *heap,int32_t length);
+bool ItemStackArray_isInstance(const MCObject *);
 bool ItemStack_isInstance(const MCObject *);
 
 ItemStack *ItemStack_new(MCObjectHeap *heap,const Item *item,int32_t amount,int32_t metadata);
@@ -92,8 +96,11 @@ NBTTagCompound *ItemStack_writeToNBT(ItemStack *stack,NBTTagCompound *output);
 ItemStackNBTResult ItemStack_readFromNBT(ItemStack *stack,NBTTagCompound *input);
 ItemStack *ItemStack_loadItemStackFromNBT(MCObjectHeap *heap,NBTTagCompound *input,ItemStackNBTResult *status);
 
-/* Original body scope: constructors/state/split/copy/equality, storage NBT,
-   damage/stack properties and tag mutation. Combat/use/animation/crafting,
+/* Animation, use and crafting method subsets are declared by
+   ItemStackAnimation.h, ItemStackUse.h and ItemStackCrafting.h, with their
+   actual virtual Item dependencies explicit.
+   Original body scope here: constructors/state/split/copy/equality, storage NBT,
+   damage/stack properties and tag mutation. Combat,
    tooltip/chat/attribute/rarity/enchantment behavior and ItemFrame/Block-cache
    queries require their actual class dependencies and are not stubbed here. */
 #endif

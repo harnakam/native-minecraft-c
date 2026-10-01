@@ -11,7 +11,16 @@ const Item *ItemStack_registryItem(int32_t id) {
     if (id<0 || id>=2268 || !mc_item_valid((int16_t)id)) return NULL;
     return &registry[id];
 }
-int32_t ItemStack_registryId(const Item *item) { return item?(int32_t)(item-registry):0; }
+int32_t ItemStack_registryId(const Item *item) {
+    if (!item) return 0;
+    /* Source identity-map lookup returns -1 for an unregistered Item. Pointer
+       subtraction is undefined for foreign identities; equality is sufficient
+       for this immutable native registry adapter. */
+    for (int32_t id=0;id<2268;id++)
+        if (item==&registry[id]) return mc_item_valid((int16_t)id)?id:-1;
+    return -1;
+}
+bool ItemStack_registryIsKnownItem(const Item *item) { return item && ItemStack_registryId(item)>=0; }
 const char *ItemStack_registryResourceName(const Item *item) { return item?mc_item_resource_name((int16_t)ItemStack_registryId(item)):NULL; }
 bool ItemStack_registryIsEditableBook(const Item *item) { return item && ItemStack_registryId(item)==387; }
 const Item *ItemStack_registryContainerItem(const Item *item) {
@@ -47,6 +56,7 @@ static void array_trace(MCObject *object,MCObjectVisitor visit,void *ctx) {
 static const MCObjectClass stack_class={"ItemStack",MCObjectHeap_plainClone,stack_trace,NULL};
 static const MCObjectClass array_class={"ItemStack[]",MCObjectHeap_plainClone,array_trace,NULL};
 bool ItemStack_isInstance(const MCObject *object) {return object&&object->klass==&stack_class;}
+bool ItemStackArray_isInstance(const MCObject *object) {return object&&object->klass==&array_class;}
 ItemStackArray *ItemStackArray_new(MCObjectHeap *heap,int32_t length) {
     if (length<0 || (size_t)length>(SIZE_MAX-sizeof(ItemStackArray))/sizeof(ItemStack *)) { MCObjectHeap_fail(heap); return NULL; }
     ItemStackArray *a=(ItemStackArray *)MCObjectHeap_alloc(heap,sizeof(*a)+(size_t)length*sizeof(*a->items),&array_class);

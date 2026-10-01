@@ -6,6 +6,9 @@
 #include "item/ItemStackUse.h"
 #include "entity/player/EntityPlayerDrops.h"
 #include "entity/item/NativeItemMotion.h"
+#include "entity/player/InventoryPlayerAnimations.h"
+#include "item/ItemAnimation.h"
+#include "item/ItemMap.h"
 #include "nbt/NBTTagCompound.h"
 #include "stats/StatFileWriter.h"
 #include "stats/StatList.h"
@@ -22,8 +25,11 @@ static void trace(MCObject *o, MCObjectVisitor v, void *c) {
     b->sp=(EntityPlayerSP *)v((MCObject *)b->sp,c);
     b->screenContainer=(Container *)v((MCObject *)b->screenContainer,c);
     b->origin=(DataWatcherBlockPos *)v((MCObject *)b->origin,c);
+    b->hotbar=(GuiIngameHotbar *)v((MCObject *)b->hotbar,c);
+    b->fontView=v(b->fontView,c);
 }
 static const MCObjectClass klass={"C919.native.ClientBindings",MCObjectHeap_plainClone,trace,NULL};
+static const MCObjectClass graphics_view={"C919.native.HotbarGraphicsIdentity",MCObjectHeap_plainClone,NULL,NULL};
 MCGameplayPlayer *mc_client_graph_player(const MCGameplay *g) {
     MCGameplayObjects *o=g ? (MCGameplayObjects *)MCObjectRoot_get(&g->root) : NULL;
     return o && MCGameplayPlayer_isInstance(o->players[0]) ? (MCGameplayPlayer *)o->players[0] : NULL;
@@ -45,6 +51,41 @@ EntityItem *mc_client_graph_item(const MCGameplay *g,int32_t id) {
 static MCClientBindings *binding(MCObject *o) {
     if (!o || o->klass!=&klass) { if (o) MCObjectHeap_fail(o->heap); return NULL; }
     return (MCClientBindings *)o;
+}
+static bool animation(MCObject *c,const Item *item,ItemStack *s,MCObject *w,MCObject *p,int32_t index,bool selected) {
+    MCClientBindings *b=binding(c);
+    if (!b || !ItemStack_registryIsKnownItem(item) ||
+        w!=(MCObject *)b->player->worldObj || p!=(MCObject *)b->player) { if (c) MCObjectHeap_fail(c->heap); return false; }
+    if (ItemStack_registryId(item)==358) { bool changed; return ItemMap_onUpdate(s,b->player->worldObj,p,index,selected,&changed); }
+    Item_onUpdate(item,s,w,p,index,selected); return !MCObjectHeap_failed(c->heap);
+}
+static const ItemStackAnimationDependencies item_animation={animation};
+static const InventoryPlayerAnimationDependencies inventory_animation={MCGameplayPlayer_world,&item_animation};
+bool mc_client_graph_tick_inventory(MCGameplay *g) {
+    MCObjectRootScope scope={0}; if (!g || !MCObjectRootScope_begin(&scope,g->heap)) return false;
+    MCClientBindings *b=mc_client_graph_bindings(g);
+    bool ok=b && b->player->worldObj->remote && InventoryPlayer_decrementAnimations(b->player->inventory,&inventory_animation,(MCObject *)b);
+    if (!ok) MCObjectHeap_fail(g->heap);
+    MCObjectRootScope_end(&scope); return ok && !MCObjectHeap_failed(g->heap);
+}
+bool mc_client_graph_bind_hotbar(MCGameplay *g,const GuiIngameHotbarDependencies *d) {
+    MCClientBindings *b=mc_client_graph_bindings(g); if (!b) return false;
+    if (b->hotbar) return b->hotbar->dependencies==d;
+    MCObject *renderer=MCObjectHeap_alloc(g->heap,sizeof(MCObject),&graphics_view);
+    b->fontView=MCObjectHeap_alloc(g->heap,sizeof(MCObject),&graphics_view);
+    b->hotbar=renderer && b->fontView ? GuiIngameHotbar_nativeNew(g->heap,(MCObject *)b,renderer,(MCObject *)b,d) : NULL;
+    MCObjectHeap_touch(g->heap); return b->hotbar!=NULL;
+}
+MCObject *mc_client_graph_font_view(MCObject *c,MCObject *mc) {
+    MCClientBindings *b=binding(c);
+    if (!b || mc!=c) { if (c) MCObjectHeap_fail(c->heap); return NULL; }
+    return b->fontView;
+}
+bool mc_client_graph_render_view(MCObject *c,MCObject *renderer) {
+    MCClientBindings *b=binding(c);
+    bool valid=b && b->hotbar && renderer==b->hotbar->itemRenderer && renderer && renderer->klass==&graphics_view && renderer->heap==c->heap;
+    if (!valid && c) MCObjectHeap_fail(c->heap);
+    return valid;
 }
 static MCPacketThreadResult thread_check(MCObject *c,NetHandlerPlayClient *h,MCObject *p) {
     (void)h; return binding(c) && p && p->heap==c->heap ? MC_PACKET_THREAD_EXECUTE : MC_PACKET_THREAD_FAILED;

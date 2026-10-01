@@ -937,6 +937,10 @@ static void update_player(mc_client *c, const mc_input *input, double dt) {
     if (!c->last_item_tick_ms) c->last_item_tick_ms=now;
     unsigned ticks=(unsigned)((now-c->last_item_tick_ms)/50); if (ticks>4) ticks=4;
     c->last_item_tick_ms+=ticks*50u;
+    c->partial_ticks=(float)((now-c->last_item_tick_ms)%50u)/50.0f;
+    for (unsigned step=0;step<ticks;step++) if (!mc_client_graph_tick_inventory(&c->gameplay)) {
+        client_error(c,"Source inventory animation update failed"); return;
+    }
     MCObjectRootScope motion_scope={0};
     if (MCObjectRootScope_begin(&motion_scope,c->gameplay.heap)) {
         for (unsigned step=0;step<ticks && !MCObjectHeap_failed(c->gameplay.heap);step++) for (unsigned i=0;i<MC_CLIENT_ITEMS;i++) {
@@ -1237,6 +1241,7 @@ int main(int argc, char **argv) {
             update_player(c, &input, dt);
         }
         if (renderer) mc_renderer_draw(renderer, c);
+        if (!c->failed && MCObjectHeap_failed(c->gameplay.heap)) client_error(c,"Source hotbar rendering failed");
         if (screenshot && !screenshot_done && c->joined && c->positioned && c->world.count && now - started >= 500) {
             char error[160]; screenshot_done = mc_renderer_screenshot(renderer, screenshot, error, sizeof(error));
             if (!screenshot_done) client_error(c, error);
@@ -1275,7 +1280,7 @@ int main(int argc, char **argv) {
         for (int i=0;i<45;i++) {
             ItemStack *stack=mc_client_player_slot(c,i);
             if (stack) { mc_buf tag; mc_buf_init(&tag); if (stack->stackTagCompound) (void)NBTWire_encodeCompound(&tag,stack->stackTagCompound);
-                printf("CLIENT_SLOT index=%d id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx\n",i,ItemStack_registryId(stack->item),stack->stackSize,stack->itemDamage,tag.len,(unsigned long)crc32(0,tag.data,(uInt)tag.len)); mc_buf_free(&tag);
+                printf("CLIENT_SLOT index=%d id=%d count=%d damage=%d nbt_size=%zu nbt_crc=%08lx animations=%d\n",i,ItemStack_registryId(stack->item),stack->stackSize,stack->itemDamage,tag.len,(unsigned long)crc32(0,tag.data,(uInt)tag.len),stack->animationsToGo); mc_buf_free(&tag);
             }
         }
         printf("CLIENT_WINDOW id=%u ready=%d slots=%u generation=%llu sync=0 title=%s\n",(unsigned)c->window_id,

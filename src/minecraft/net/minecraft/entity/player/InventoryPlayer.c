@@ -10,6 +10,7 @@ static void trace(MCObject *o,MCObjectVisitor visit,void *ctx) {
     p->player=visit(p->player,ctx); p->itemStack=(ItemStack *)visit((MCObject *)p->itemStack,ctx);
 }
 static const MCObjectClass klass={"InventoryPlayer",MCObjectHeap_plainClone,trace,NULL};
+bool InventoryPlayer_isInstance(const MCObject *object) {return object&&object->klass==&klass;}
 InventoryPlayer *InventoryPlayer_new(MCObjectHeap *heap,MCObject *actor,InventoryPlayerCreative callback) {
     if (actor && actor->heap!=heap) { MCObjectHeap_fail(heap); return NULL; }
     InventoryPlayer *p=(InventoryPlayer *)MCObjectHeap_alloc(heap,sizeof(*p),&klass);

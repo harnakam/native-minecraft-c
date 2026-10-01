@@ -44,6 +44,7 @@ typedef struct {
     mc_client_item items[MC_CLIENT_ITEMS];
     unsigned item_spawns, item_metadata, item_collects;
     uint64_t last_item_tick_ms;
+    float partial_ticks; /* Native 50ms scheduler fraction, not source Timer. */
     char host[256], name[17], status[256];
     char chat[MC_CLIENT_CHAT_LINES][256];
     int chat_count;

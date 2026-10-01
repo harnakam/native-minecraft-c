@@ -4,6 +4,9 @@
 #include "entity/player/EntityPlayerDrops.h"
 #include "entity/player/EntityPlayerMPStats.h"
 #include "item/ItemStackCrafting.h"
+#include "item/ItemAnimation.h"
+#include "item/ItemMap.h"
+#include "entity/player/InventoryPlayerAnimations.h"
 #include "item/ItemMapCreated.h"
 #include "item/ItemEmptyMap.h"
 #include "item/item.h"
@@ -15,6 +18,35 @@
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+
+/* Registry subclass resolution is a native binding. In this original version
+   ItemMap is the sole Item.onUpdate override; all other registered Items inherit
+   the actual empty Item body. The source stack/inventory methods own ordering. */
+static bool item_on_update(MCObject *context, const Item *item, ItemStack *stack,
+                          MCObject *world, MCObject *entity, int32_t slot, bool selected) {
+    (void)context;
+    if (item == ItemStack_registryItem(358)) {
+        bool changed = false;
+        return ItemMap_onUpdate(stack, (MCGameplayWorld *)world, entity, slot, selected, &changed);
+    }
+    if (!ItemStack_registryIsKnownItem(item)) {
+        MCObjectHeap_fail(stack->object.heap);
+        return false;
+    }
+    Item_onUpdate(item, stack, world, entity, slot, selected);
+    return !MCObjectHeap_failed(stack->object.heap);
+}
+
+bool mc_server_graph_tick_inventory(MCGameplayPlayer *player) {
+    static const ItemStackAnimationDependencies item = {item_on_update};
+    static const InventoryPlayerAnimationDependencies inventory = {MCGameplayPlayer_world, &item};
+    if (!MCGameplayPlayer_isInstance((MCObject *)player)) {
+        MCObjectHeap_fail(player ? player->object.heap : NULL);
+        return false;
+    }
+    return InventoryPlayer_decrementAnimations(player->inventory, &inventory, NULL);
+}
+
 #ifdef _WIN32
 #include <windows.h>
 typedef DWORD RuntimeThread;

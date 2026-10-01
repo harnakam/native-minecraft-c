@@ -6,6 +6,8 @@ Java原本、テクスチャ、音声、モデル、JAR、MCP本体・マッピ�
 
 [原本からの移植記録](docs/porting.md)では、元クラスの本体、C側の環境処理、未移植の依存先を区別しています。実server/clientの所持品・クラフト枠・カーソル・落下アイテムは、翻訳済みの参照型ItemStack・NBT・Container・DataWatcherを直接所有します。原版のpacket/handler、クリック予測、複数プレイヤーをまとめた保存へ接続しています。描画・地形・物理・多くのItem/World/Entity依存先は引き続き独自の接続処理であり、Minecraft全体の翻訳完了を意味しません。
 
+所持品の毎tick更新とホットバーの受取アニメーションも、原版InventoryPlayer・ItemStack・ItemとGuiIngameの対象メソッドへ接続しています。同じstackが複数枠にある場合も元順で更新し、個数0や負のstackを消しません。Timer・全プレイヤーtick・RenderItem/FontRenderer全体は未移植で、時刻の接続と画像・文字の描画はnative依存です。
+
 ## 対応範囲
 
 | 項目 | 現在の対応 |

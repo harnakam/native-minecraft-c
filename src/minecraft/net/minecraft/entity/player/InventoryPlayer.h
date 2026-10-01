@@ -12,6 +12,7 @@ typedef struct InventoryPlayer {
     InventoryPlayerCreative isCreativeMode;
 } InventoryPlayer;
 InventoryPlayer *InventoryPlayer_new(MCObjectHeap *,MCObject *,InventoryPlayerCreative);
+bool InventoryPlayer_isInstance(const MCObject *);
 ItemStack *InventoryPlayer_getCurrentItem(const InventoryPlayer *);
 int32_t InventoryPlayer_getHotbarSize(void);
 int32_t InventoryPlayer_getFirstEmptyStack(const InventoryPlayer *);
@@ -43,7 +44,9 @@ bool InventoryPlayer_isItemValidForSlot(const InventoryPlayer *,int32_t,const It
 int32_t InventoryPlayer_getField(const InventoryPlayer *,int32_t);
 void InventoryPlayer_setField(InventoryPlayer *,int32_t,int32_t);
 int32_t InventoryPlayer_getFieldCount(const InventoryPlayer *);
-/* Source subset needed by insertion, cursor, crafting and storage. Entity
+/* decrementAnimations is declared by InventoryPlayerAnimations.h with its
+   actual world-field and virtual Item dependencies explicit.
+   Source subset needed by insertion, cursor, crafting and storage. Entity
    capability dispatch is native; combat/world/drop/stat/NBTUtil matching and
    setCurrentItem enchantment dependencies are unported, without stubs. */
 #endif

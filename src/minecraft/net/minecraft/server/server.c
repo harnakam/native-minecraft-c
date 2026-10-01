@@ -1199,10 +1199,10 @@ static void free_world_state(mc_server *server) {
     free(server);
 }
 
-/* World time and the handler's drop throttle are ephemeral scalar state. An
-   idle tick has no stack/map/entity effects to encode or journal. Borrow the
-   actual owners and advance only those scalars; source gameplay mutations
-   still use the complete disposable graph and durable effect queue below. */
+/* World time, drop throttle and stack animations are ephemeral state. With no
+   entities or maps the closed registry inherits Item's original empty onUpdate,
+   so source inventory ticks need no allocation, packet or durable journal.
+   Map/entity effects still use the complete working graph below. */
 static int advance_idle_tick(mc_server *server) {
     MCObjectRootScope scope = {0};
     if (!MCObjectRootScope_begin(&scope, server->gameplay.heap))
@@ -1225,18 +1225,20 @@ static int advance_idle_tick(mc_server *server) {
     if (idle) {
         MCGameplayWorld *world = mc_server_graph_world(&server->gameplay);
         world->worldTime = world->worldTime == INT64_MAX ? INT64_MIN : world->worldTime + 1;
-        for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS; i++) {
+        for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS && !MCObjectHeap_failed(server->gameplay.heap); i++) {
             MCGameplayPlayer *p = (MCGameplayPlayer *)objects->players[i];
             if (p) {
                 NetHandlerPlayServer *handler = (NetHandlerPlayServer *)p->handler;
                 if (handler->itemDropThreshold > 0)
                     --handler->itemDropThreshold;
+                if (!mc_server_graph_tick_inventory(p))
+                    MCObjectHeap_fail(server->gameplay.heap);
             }
         }
         MCObjectHeap_touch(server->gameplay.heap);
     }
     MCObjectRootScope_end(&scope);
-    return objects ? (idle ? 1 : 0) : -1;
+    return objects && !MCObjectHeap_failed(server->gameplay.heap) ? (idle ? 1 : 0) : -1;
 }
 
 static void tick_items(mc_server *server, uint64_t now) {
@@ -1269,14 +1271,7 @@ static void tick_items(mc_server *server, uint64_t now) {
                 --h->itemDropThreshold;
             /* Original InventoryPlayer.decrementAnimations updates main36
                before EntityPlayerMP.onUpdateEntity reads all40 map packets. */
-            for (int n = 0; n < 36 && ok; n++) {
-                ItemStack *stack = p->inventory->mainInventory->items[n];
-                if (!stack || stack->item != ItemStack_registryItem(358))
-                    continue;
-                bool changed = false;
-                ok = ItemMap_onUpdate(stack, w, (MCObject *)p, n, n == p->inventory->currentItem,
-                                      &changed);
-            }
+            ok = mc_server_graph_tick_inventory(p);
             for (int n = 0; n < 40 && ok; n++) {
                 ItemStack *stack = n < 36 ? p->inventory->mainInventory->items[n]
                                           : p->inventory->armorInventory->items[n - 36];

@@ -40,7 +40,10 @@ def source_peer(kind):
                 if kind == "signed":
                     slots[36] = struct.pack(">hbhB", 276, 0, -7, 0)
                     slots[37] = struct.pack(">hbhB", 1, -128, 0, 0)
-                    slots[38] = struct.pack(">hbhB", 32767, -1, -3, 0)
+                    # Original decrementAnimations visits only mainInventory;
+                    # retain the unknown Item in armor for this codec test.
+                    # Its fatal mainInventory tick is covered independently.
+                    slots[8] = struct.pack(">hbhB", 32767, -1, -3, 0)
                 send_frame(sock, 0x30, b"\0" + struct.pack(">h", 45) + b"".join(slots), True)
                 if kind == "prefix":
                     send_frame(sock, 0x30, b"\0" + struct.pack(">h", 10) + EMPTY * 10, True)
@@ -120,7 +123,7 @@ class SourceGraphClientTests(unittest.TestCase):
         self.assertIn("CLIENT_SLOT index=37 id=1 count=-128 damage=0", output)
         # Original Item.getIdFromItem(NULL) is 0; the printed slot occurrence
         # still distinguishes this nonnull unknown-Item stack from NULL.
-        self.assertIn("CLIENT_SLOT index=38 id=0 count=-1 damage=0", output)
+        self.assertIn("CLIENT_SLOT index=8 id=0 count=-1 damage=0", output)
 
     def test_short_window_snapshot_updates_its_prefix_only(self):
         with source_peer("prefix") as (port, _):
