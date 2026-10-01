@@ -29,7 +29,7 @@ ItemStack *mc_client_window_slot(const mc_client *c,int index) {
 }
 ItemStack *mc_client_player_slot(const mc_client *c,int index) {
     MCGameplayPlayer *p=mc_client_graph_player(&c->gameplay);
-    return p && index>=0 && index<45 ? Slot_getStack(Container_getSlot(&p->inventoryContainer->container,index)) : NULL;
+    return p && index>=0 && index<45 ? Slot_getStack(Container_getSlot(p->inventoryContainer,index)) : NULL;
 }
 ItemStack *mc_client_cursor(const mc_client *c) {
     MCGameplayPlayer *p=mc_client_graph_player(&c->gameplay);
@@ -433,11 +433,11 @@ static void actor_native_state(mc_client *c) {
     MCObjectRootScope scope={0}; if (!MCObjectRootScope_begin(&scope,c->gameplay.heap)) return;
     MCClientBindings *b=mc_client_graph_bindings(&c->gameplay);
     if (b) {
-        b->player->posX=c->x; b->player->posY=c->y; b->player->posZ=c->z;
-        b->player->rotationYaw=c->yaw; b->player->rotationPitch=c->pitch;
-        b->player->entityId=c->entity_id; b->player->spectator=c->gamemode==3;
-        b->player->dimension=c->dimension;
-        b->player->worldObj->dimension=c->dimension;
+        if(!Entity_setPosition(&b->player->living.entity,c->x,c->y,c->z)) {MCObjectRootScope_end(&scope);return;}
+        b->player->living.entity.rotationYaw=c->yaw; b->player->living.entity.rotationPitch=c->pitch;
+        b->player->living.entity.entityId=c->entity_id; b->player->spectator=c->gamemode==3;
+        b->player->living.entity.dimension=c->dimension;
+        ((MCGameplayWorld *)(b->player->living.entity.worldObj))->dimension=c->dimension;
         if (c->gamemode!=1) b->creativeScreen=false;
         MCObjectHeap_touch(c->gameplay.heap);
     }
@@ -1084,9 +1084,9 @@ static int self_test(void) {
     for (unsigned gui=0;gui<3;gui++) for (unsigned window=0;window<3;window++) {
         CHECK(MCObjectRootScope_begin(&scope,c->gameplay.heap),"source close fixture scope");
         b=mc_client_graph_bindings(&c->gameplay);
-        CHECK(Container_putStackInSlot(&b->player->inventoryContainer->container,1,ItemStack_new(c->gameplay.heap,ItemStack_registryItem(41),1,0)) &&
+        CHECK(Container_putStackInSlot(b->player->inventoryContainer,1,ItemStack_new(c->gameplay.heap,ItemStack_registryItem(41),1,0)) &&
             InventoryPlayer_setItemStack(b->player->inventory,mc_client_player_slot(c,36)),"source close grid/cursor references");
-        b->screenOpen=gui!=0; b->creativeScreen=gui==2; b->screenContainer=b->screenOpen ? &b->player->inventoryContainer->container : NULL;
+        b->screenOpen=gui!=0; b->creativeScreen=gui==2; b->screenContainer=b->screenOpen ? b->player->inventoryContainer : NULL;
         MCObjectRootScope_end(&scope); gui_view(c);
         mc_buf forced; start_packet(&forced,0x2e); mc_put_u8(&forced,(uint8_t)(window==0 ? 0 : window==1 ? 7 : 255));
         handle_packet(c,&forced);

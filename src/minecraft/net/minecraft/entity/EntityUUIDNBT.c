@@ -1,4 +1,5 @@
 #include "entity/EntityUUIDNBT.h"
+#include "entity/player/EntityPlayer.h"
 #include "entity/item/EntityItem.h"
 #include "util/MCGameplayPlayer.h"
 
@@ -9,7 +10,7 @@ static bool uuid_ref(MCObjectHeap *heap, NativeJavaUUID *uuid) {
 }
 NativeJavaUUID *EntityUUIDNBT_nativeGetUniqueID(MCObject *entity) {
     NativeJavaUUID *uuid=NULL;
-    if (MCGameplayPlayer_isInstance(entity)) uuid=((MCGameplayPlayer *)entity)->entityUniqueID;
+    if (MCGameplayPlayer_isInstance(entity)) uuid=((MCGameplayPlayer *)entity)->living.entity.entityUniqueID;
     else if (EntityItem_isInstance(entity)) uuid=((EntityItem *)entity)->entity.entityUniqueID;
     else { fail(entity?entity->heap:NULL); return NULL; }
     /* The original field getter may return NULL; the following dereference in
@@ -20,7 +21,7 @@ NativeJavaUUID *EntityUUIDNBT_nativeGetUniqueID(MCObject *entity) {
 static bool native_set(MCObject *entity, NativeJavaUUID *uuid) {
     MCObjectHeap *heap=entity?entity->heap:NULL;
     if (!uuid_ref(heap,uuid)) return false;
-    if (MCGameplayPlayer_isInstance(entity)) ((MCGameplayPlayer *)entity)->entityUniqueID=uuid;
+    if (MCGameplayPlayer_isInstance(entity)) ((MCGameplayPlayer *)entity)->living.entity.entityUniqueID=uuid;
     else if (EntityItem_isInstance(entity)) ((EntityItem *)entity)->entity.entityUniqueID=uuid;
     else return fail(heap);
     MCObjectHeap_touch(heap); return true;
@@ -66,10 +67,12 @@ bool Entity_readUUIDFromNBTSegment(MCObject *entity, NBTTagCompound *tag, const 
     MCObjectRootScope_end(&scope); return ok && !MCObjectHeap_failed(heap);
 }
 bool EntityPlayer_restoreProfileUUIDSegment(MCGameplayPlayer *player) {
-    MCObjectHeap *heap=player?player->object.heap:NULL; MCObjectRootScope scope={0};
+    MCObjectHeap *heap=player?player->living.entity.object.heap:NULL; MCObjectRootScope scope={0};
     bool ok=MCGameplayPlayer_isInstance((MCObject *)player) && MCObjectRootScope_begin(&scope,heap);
-    if (ok) ok=MCObjectRootScope_pin(&scope,(MCObject *)player) && uuid_ref(heap,player->gameProfileUUID);
-    if (ok) { player->entityUniqueID=player->gameProfileUUID; MCObjectHeap_touch(heap); }
+    if (ok) ok=MCObjectRootScope_pin(&scope,(MCObject *)player);
+    NativeJavaUUID *uuid=ok?EntityPlayer_getUUID(player->gameProfile):NULL;
+    if (ok) ok=uuid_ref(heap,uuid);
+    if (ok) { player->living.entity.entityUniqueID=uuid; MCObjectHeap_touch(heap); }
     else fail(heap);
     MCObjectRootScope_end(&scope); return ok && !MCObjectHeap_failed(heap);
 }

@@ -26,25 +26,25 @@ static MCObject *packets(const MCGameplayPlayer *p) {
     if (!p)
         return NULL;
     if (!MCGameplayPlayer_isInstance((const MCObject *)p) || !p->pendingPackets ||
-        p->pendingPackets->heap != p->object.heap ||
+        p->pendingPackets->heap != p->living.entity.object.heap ||
         !MCPacketQueue_isInstance(p->pendingPackets, &profile)) {
-        MCObjectHeap_fail(p->object.heap);
+        MCObjectHeap_fail(p->living.entity.object.heap);
         return NULL;
     }
     return p->pendingPackets;
 }
 bool MCGameplayClientPackets_bind(MCGameplayPlayer *p) {
-    if (!p || MCObjectHeap_failed(p->object.heap))
+    if (!p || MCObjectHeap_failed(p->living.entity.object.heap))
         return false;
-    MCObjectHeap *heap = p->object.heap;
-    if (!MCGameplayPlayer_isInstance((MCObject *)p) || !p->worldObj ||
-        !MCGameplayWorld_isInstance((MCObject *)p->worldObj) || p->worldObj->object.heap != heap ||
-        !p->worldObj->remote || !p->worldObj->owners || p->worldObj->owners->object.heap != heap) {
+    MCObjectHeap *heap = p->living.entity.object.heap;
+    if (!MCGameplayPlayer_isInstance((MCObject *)p) || !((MCGameplayWorld *)(p->living.entity.worldObj)) ||
+        !MCGameplayWorld_isInstance((MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj))) || ((MCGameplayWorld *)(p->living.entity.worldObj))->object.heap != heap ||
+        !((MCGameplayWorld *)(p->living.entity.worldObj))->remote || !((MCGameplayWorld *)(p->living.entity.worldObj))->owners || ((MCGameplayWorld *)(p->living.entity.worldObj))->owners->object.heap != heap) {
         MCObjectHeap_fail(heap);
         return false;
     }
     if (!p->pendingPackets) {
-        p->pendingPackets = MCPacketQueue_new(heap, p->worldObj->owners, &profile);
+        p->pendingPackets = MCPacketQueue_new(heap, ((MCGameplayWorld *)(p->living.entity.worldObj))->owners, &profile);
         if (!p->pendingPackets)
             return false;
         MCObjectHeap_touch(heap);
@@ -58,7 +58,7 @@ bool MCGameplayClientPackets_addToSendQueue(MCGameplayPlayer *p, MCObject *packe
     for (size_t i = 0; i < profile.count; i++)
         if (codecs[i].isInstance(packet))
             return MCPacketQueue_append(q, packet, codecs[i].id);
-    MCObjectHeap_fail(p->object.heap);
+    MCObjectHeap_fail(p->living.entity.object.heap);
     return false;
 }
 int32_t MCGameplayClientPackets_count(const MCGameplayPlayer *p) {
@@ -77,12 +77,12 @@ bool MCGameplayClientPackets_validate(MCGameplayPlayer *p) {
     MCObject *q = packets(p);
     if (!q)
         return false;
-    if (!MCGameplayWorld_isInstance((MCObject *)p->worldObj) ||
-        p->worldObj->object.heap != p->object.heap) {
-        MCObjectHeap_fail(p->object.heap);
+    if (!MCGameplayWorld_isInstance((MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj))) ||
+        ((MCGameplayWorld *)(p->living.entity.worldObj))->object.heap != p->living.entity.object.heap) {
+        MCObjectHeap_fail(p->living.entity.object.heap);
         return false;
     }
-    return MCPacketQueue_validateForOwners(q, p->worldObj->owners);
+    return MCPacketQueue_validateForOwners(q, ((MCGameplayWorld *)(p->living.entity.worldObj))->owners);
 }
 bool MCGameplayClientPackets_validateFrame(MCGameplayObjects *objects, void *context) {
     (void)context;
@@ -95,7 +95,7 @@ bool MCGameplayClientPackets_validateFrame(MCGameplayObjects *objects, void *con
             if (!MCGameplayPlayer_isInstance(actor) || actor->heap != objects->object.heap)
                 return false;
             MCGameplayPlayer *p = (MCGameplayPlayer *)actor;
-            if ((MCObject *)p->worldObj != objects->world ||
+            if ((MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)) != objects->world ||
                 (p->pendingPackets && !MCGameplayClientPackets_validate(p)))
                 return false;
         }

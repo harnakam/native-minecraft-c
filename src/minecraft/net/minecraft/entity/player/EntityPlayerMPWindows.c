@@ -2,10 +2,10 @@
 #include "inventory/SlotCrafting.h"
 
 static bool fail(MCGameplayPlayer *player) {
-    MCObjectHeap_fail(player ? player->object.heap : NULL); return false;
+    MCObjectHeap_fail(player ? player->living.entity.object.heap : NULL); return false;
 }
 static bool active(MCGameplayPlayer *player) {
-    return player && !MCObjectHeap_failed(player->object.heap);
+    return player && !MCObjectHeap_failed(player->living.entity.object.heap);
 }
 static bool dependencies_ready(const EntityPlayerMPWindowsDependencies *d) {
     return d && d->sendWindowItems && d->sendSetSlot && d->sendCloseWindow;
@@ -17,12 +17,12 @@ static bool effect(MCGameplayPlayer *player,bool result) {
     return result ? active(player) : fail(player);
 }
 static bool same_heap(MCGameplayPlayer *player,const MCObject *object) {
-    return object && object->heap==player->object.heap;
+    return object && object->heap==player->living.entity.object.heap;
 }
 bool EntityPlayerMPWindows_bind(MCGameplayPlayer *player,const EntityPlayerMPWindowsDependencies *dependencies) {
     if (!active(player)) return false;
     if (!dependencies_ready(dependencies)) return fail(player);
-    player->windowDependencies=dependencies; MCObjectHeap_touch(player->object.heap); return true;
+    player->windowDependencies=dependencies; MCObjectHeap_touch(player->living.entity.object.heap); return true;
 }
 static bool listener_update(MCObject *target,Container *container,ContainerList *items) {
     return EntityPlayerMPWindows_updateCraftingInventory((MCGameplayPlayer *)target,container,items);
@@ -72,9 +72,9 @@ bool EntityPlayerMPWindows_updateHeldItem(MCGameplayPlayer *player) {
 bool EntityPlayerMPWindows_closeContainer(MCGameplayPlayer *player) {
     if (!active(player)) return false;
     if (!same_heap(player,(MCObject *)player->openContainer) || !same_heap(player,(MCObject *)player->inventory) ||
-        !same_heap(player,(MCObject *)player->inventoryContainer)) return fail(player);
+        !same_heap(player,(MCObject *)((ContainerPlayer *)(player->inventoryContainer)))) return fail(player);
     if (!effect(player,Container_onContainerClosed(player->openContainer,player->inventory))) return false;
-    player->openContainer=&player->inventoryContainer->container; MCObjectHeap_touch(player->object.heap); return true;
+    player->openContainer=player->inventoryContainer; MCObjectHeap_touch(player->living.entity.object.heap); return true;
 }
 bool EntityPlayerMPWindows_closeScreen(MCGameplayPlayer *player) {
     if (!bound(player)) return false;

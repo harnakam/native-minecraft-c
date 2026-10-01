@@ -26,9 +26,9 @@ static bool dependencies_ready(const NetHandlerPlayClientDependencies *d) {
 NetHandlerPlayClient *NetHandlerPlayClient_nativeNew(MCGameplayPlayer *player, MCObject *controller,
                                                      MCObject *context,
                                                      const NetHandlerPlayClientDependencies *d) {
-    MCObjectHeap *heap = player ? player->object.heap : NULL;
-    if (!heap || !MCGameplayPlayer_isInstance((MCObject *)player) || !player->worldObj ||
-        !same_heap(heap, (MCObject *)player->worldObj) || !player->worldObj->remote ||
+    MCObjectHeap *heap = player ? player->living.entity.object.heap : NULL;
+    if (!heap || !MCGameplayPlayer_isInstance((MCObject *)player) || !((MCGameplayWorld *)(player->living.entity.worldObj)) ||
+        !same_heap(heap, (MCObject *)((MCGameplayWorld *)(player->living.entity.worldObj))) || !((MCGameplayWorld *)(player->living.entity.worldObj))->remote ||
         !controller || !same_heap(heap, controller) || !same_heap(heap, context) ||
         !dependencies_ready(d)) {
         failed(heap);
@@ -42,7 +42,7 @@ NetHandlerPlayClient *NetHandlerPlayClient_nativeNew(MCGameplayPlayer *player, M
     if (h) {
         h->gameController = controller;
         h->dependencyContext = context;
-        h->clientWorldController = player->worldObj;
+        h->clientWorldController = ((MCGameplayWorld *)(player->living.entity.worldObj));
         h->dependencies = d;
         player->handler = (MCObject *)h;
         MCObjectHeap_touch(heap);
@@ -87,7 +87,7 @@ static MCGameplayPlayer *current_player(NetHandlerPlayClient *h) {
     return p;
 }
 static Container *inventory_container(NetHandlerPlayClient *h, MCGameplayPlayer *p) {
-    ContainerPlayer *c = p->inventoryContainer;
+    ContainerPlayer *c = ((ContainerPlayer *)(p->inventoryContainer));
     if (!c || !same_heap(h->object.heap, (MCObject *)c)) {
         failed(h->object.heap);
         return NULL;
@@ -195,10 +195,10 @@ bool NetHandlerPlayClient_handleConfirmTransaction(NetHandlerPlayClient *h,
     MCGameplayPlayer *p = current_player(h);
     bool ok = p != NULL;
     if (ok && S32PacketConfirmTransaction_getWindowId(packet) == 0) {
-        if (!same_heap(h->object.heap, (MCObject *)p->inventoryContainer))
+        if (!same_heap(h->object.heap, (MCObject *)((ContainerPlayer *)(p->inventoryContainer))))
             ok = false;
         else
-            container = p->inventoryContainer ? &p->inventoryContainer->container : NULL;
+            container = ((ContainerPlayer *)(p->inventoryContainer)) ? p->inventoryContainer : NULL;
     } else if (ok) {
         Container *c = open_container(h, p);
         ok = c != NULL;

@@ -1,12 +1,12 @@
 #include "entity/Entity.h"
 #include "entity/item/EntityItem.h"
+#include "util/MCGameplayPlayer.h"
 #include "util/MathHelper.h"
 
-/* Native closed subclass classification. Entity is abstract; its only current
-   translated concrete descendant is EntityItem. Future actual descendants add
-   their immutable descriptors here, not another inherited state mirror. */
+/* Native closed subclass classification of actual first-member descendants. */
 bool Entity_isInstance(const MCObject *object) {
-    return EntityItem_isInstance(object)&&MCObjectHeap_objectSize(object)>=sizeof(Entity);
+    return (EntityItem_isInstance(object)||MCGameplayPlayer_isInstance(object))&&
+        MCObjectHeap_objectSize(object)>=sizeof(Entity);
 }
 static bool valid(Entity *entity) {
     if(!Entity_isInstance((MCObject *)entity)){MCObjectHeap_fail(entity?entity->object.heap:NULL);return false;}
@@ -52,6 +52,37 @@ bool Entity_isSilent(Entity *entity) {
         return effect(entity,false);
     return DataWatcher_getWatchableObjectByte(entity->dataWatcher,4)==1;
 }
+bool Entity_setSilent(Entity *entity,bool silent) {
+    MCObjectRootScope scope={0};if(!begin(entity,&scope))return false;
+    MCObject *value=DataWatcher_boxByte(entity->object.heap,silent?1:0);
+    bool watcher=DataWatcher_isInstance((MCObject *)entity->dataWatcher)&&
+        ((MCObject *)entity->dataWatcher)->heap==entity->object.heap;
+    bool ok=effect(entity,value&&watcher&&DataWatcher_updateObject(entity->dataWatcher,4,value));
+    MCObjectRootScope_end(&scope);return ok;
+}
+bool Entity_getFlag(Entity *entity,int32_t flag) {
+    if(!valid(entity))return false;
+    if(!DataWatcher_isInstance((MCObject *)entity->dataWatcher)||
+       ((MCObject *)entity->dataWatcher)->heap!=entity->object.heap)return effect(entity,false);
+    int32_t value=DataWatcher_getWatchableObjectByte(entity->dataWatcher,0);
+    return ((uint32_t)value&(UINT32_C(1)<<((uint32_t)flag&31u)))!=0;
+}
+bool Entity_setFlag(Entity *entity,int32_t flag,bool set) {
+    MCObjectRootScope scope={0};if(!begin(entity,&scope))return false;
+    if(!DataWatcher_isInstance((MCObject *)entity->dataWatcher)||
+       ((MCObject *)entity->dataWatcher)->heap!=entity->object.heap) {
+        effect(entity,false);MCObjectRootScope_end(&scope);return false;
+    }
+    int32_t old=DataWatcher_getWatchableObjectByte(entity->dataWatcher,0);
+    uint32_t mask=UINT32_C(1)<<((uint32_t)flag&31u);
+    uint8_t bits=(uint8_t)(set?((uint32_t)old|mask):((uint32_t)old&~mask));
+    int32_t value=bits<=INT8_MAX?(int32_t)bits:-1-(int32_t)(UINT8_MAX-bits);
+    MCObject *boxed=!MCObjectHeap_failed(entity->object.heap)?DataWatcher_boxByte(entity->object.heap,value):NULL;
+    bool ok=boxed&&effect(entity,DataWatcher_updateObject(entity->dataWatcher,0,boxed));
+    MCObjectRootScope_end(&scope);return ok;
+}
+bool Entity_isSneaking(Entity *entity) {return Entity_getFlag(entity,1);}
+bool Entity_setSneaking(Entity *entity,bool sneaking) {return Entity_setFlag(entity,1,sneaking);}
 bool Entity_setPosition(Entity *entity,double x,double y,double z) {
     MCObjectRootScope scope={0};if(!begin(entity,&scope))return false;
     entity->posX=x;entity->posY=y;entity->posZ=z;MCObjectHeap_touch(entity->object.heap);

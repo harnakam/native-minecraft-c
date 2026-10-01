@@ -32,7 +32,7 @@ typedef struct MCGameplayWorld {
        Full StatList.objectUseStats initialization remains a separate port. */
     StatBase *emptyMapUseStat;
     bool remote;
-    int32_t spawnX,spawnZ,dimension,nextEntityId;
+    int32_t spawnX,spawnY,spawnZ,dimension,nextEntityId;
     NativeJavaRandom *rand;
     int32_t updateLCG,ambientTickCountdown;
     /* External native process service. Its lifetime spans this world and every

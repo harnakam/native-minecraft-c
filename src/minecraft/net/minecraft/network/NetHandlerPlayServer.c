@@ -94,7 +94,7 @@ static bool dependencies_ready(const NetHandlerPlayServerDependencies *d) {
 NetHandlerPlayServer *
 NetHandlerPlayServer_nativeNew(MCGameplayPlayer *player, MCObject *context,
                                const NetHandlerPlayServerDependencies *dependencies) {
-    MCObjectHeap *heap = player ? player->object.heap : NULL;
+    MCObjectHeap *heap = player ? player->living.entity.object.heap : NULL;
     if (!heap || !MCGameplayPlayer_isInstance((MCObject *)player) ||
         !dependencies_ready(dependencies) || !same_heap(heap, context)) {
         failed(heap);
@@ -269,7 +269,7 @@ static bool creative_tile_tag(NetHandlerPlayServer *handler, ItemStack *stack) {
         if (NBTTagCompound_hasKey_ascii(tag, "x") && NBTTagCompound_hasKey_ascii(tag, "y") &&
             NBTTagCompound_hasKey_ascii(tag, "z")) {
             MCObject *tile =
-                d->getTileEntity(handler->dependencyContext, handler->playerEntity->worldObj,
+                d->getTileEntity(handler->dependencyContext, ((MCGameplayWorld *)(handler->playerEntity->living.entity.worldObj)),
                                  NBTTagCompound_getInteger_ascii(tag, "x"),
                                  NBTTagCompound_getInteger_ascii(tag, "y"),
                                  NBTTagCompound_getInteger_ascii(tag, "z"));
@@ -314,9 +314,9 @@ bool NetHandlerPlayServer_processCreativeInventoryAction(NetHandlerPlayServer *h
         bool flag3 = !stack || (ItemStack_getMetadata(stack) >= 0 && stack->stackSize <= 64 &&
                                 stack->stackSize > 0);
         if (flag1 && flag2 && flag3) {
-            if (!player->inventoryContainer ||
-                !Container_putStackInSlot(&player->inventoryContainer->container, slot, stack) ||
-                !Container_setCanCraft(&player->inventoryContainer->container, (MCObject *)player,
+            if (!((ContainerPlayer *)(player->inventoryContainer)) ||
+                !Container_putStackInSlot(player->inventoryContainer, slot, stack) ||
+                !Container_setCanCraft(player->inventoryContainer, (MCObject *)player,
                                        true))
                 return end(handler, &scope, false);
         } else if (flag && flag2 && flag3 && handler->itemDropThreshold < 200) {

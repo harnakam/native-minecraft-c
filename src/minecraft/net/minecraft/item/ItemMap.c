@@ -193,7 +193,7 @@ bool ItemMap_updateMapData(MCGameplayWorld *world,MCObject *viewer,mc_map_info *
     bool ok=info!=NULL;
     if (ok) {
         ++info->update_counter; MCObjectHeap_touch(h);
-        ok=mc_ItemMap_survey(map,world->terrain,p->posX,p->posZ,world->dimension,world->hasNoSky,info->update_counter,changed);
+        ok=mc_ItemMap_survey(map,world->terrain,p->living.entity.posX,p->living.entity.posZ,world->dimension,world->hasNoSky,info->update_counter,changed);
     }
     if (!ok) MCObjectHeap_fail(h);
     MCObjectRootScope_end(&scope); return ok && !MCObjectHeap_failed(h);

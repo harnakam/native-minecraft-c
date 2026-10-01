@@ -11,13 +11,13 @@ static bool dependencies_ready(const EntityPlayerDropsDependencies *d) {
 }
 float EntityPlayer_getEyeHeight(const MCGameplayPlayer *p) {
     if (!p || !MCGameplayPlayer_isInstance((const MCObject *)p)) {
-        MCObjectHeap_fail(p ? p->object.heap : NULL);
+        MCObjectHeap_fail(p ? p->living.entity.object.heap : NULL);
         return 0;
     }
     float height = 1.62F;
     if (p->sleeping)
         height = 0.2F;
-    if (p->sneaking) {
+    if (Entity_isSneaking((Entity *)&p->living.entity)) {
         volatile float lowered = height - 0.08F;
         height = lowered;
     }
@@ -25,17 +25,17 @@ float EntityPlayer_getEyeHeight(const MCGameplayPlayer *p) {
 }
 EntityItem *EntityPlayer_dropOneItem(MCGameplayPlayer *p,bool all,
     const EntityPlayerDropsDependencies *d,MCObject *context) {
-    if(!p||!p->inventory) {MCObjectHeap_fail(p?p->object.heap:NULL);return NULL;}
+    if(!p||!p->inventory) {MCObjectHeap_fail(p?p->living.entity.object.heap:NULL);return NULL;}
     ItemStack *held=all?InventoryPlayer_getCurrentItem(p->inventory):NULL;
     ItemStack *stack=InventoryPlayer_decrStackSize(p->inventory,p->inventory->currentItem,
         all&&held?held->stackSize:1);
-    if(MCObjectHeap_failed(p->object.heap))return NULL;
+    if(MCObjectHeap_failed(p->living.entity.object.heap))return NULL;
     return EntityPlayer_dropItem(p,stack,false,true,d,context);
 }
 EntityItem *EntityPlayer_dropItem(MCGameplayPlayer *player,ItemStack *stack,bool around,bool trace,
     const EntityPlayerDropsDependencies *d,MCObject *context) {
     if (!player) return NULL;
-    MCObjectHeap *h=player->object.heap;
+    MCObjectHeap *h=player->living.entity.object.heap;
     if (!stack) return NULL;
     if (stack->object.heap!=h) {MCObjectHeap_fail(h);return NULL;}
     if (!stack->stackSize) return NULL;
@@ -44,9 +44,9 @@ EntityItem *EntityPlayer_dropItem(MCGameplayPlayer *player,ItemStack *stack,bool
     bool ok=MCObjectRootScope_pin(&scope,(MCObject *)player)&&MCObjectRootScope_pin(&scope,(MCObject *)stack)&&MCObjectRootScope_pin(&scope,context);
     EntityItem *entity=NULL;
     if (ok) {
-        double y=player->posY-0.30000001192092896;
+        double y=player->living.entity.posY-0.30000001192092896;
         float eye=d->getEyeHeight(context,player); y=y+(double)eye;
-        if (!MCObjectHeap_failed(h)) entity=EntityItem_new_stack(h,(MCObject *)player->worldObj,context,d->entity,d->constructor,player->posX,y,player->posZ,stack);
+        if (!MCObjectHeap_failed(h)) entity=EntityItem_new_stack(h,(MCObject *)((MCGameplayWorld *)(player->living.entity.worldObj)),context,d->entity,d->constructor,player->living.entity.posX,y,player->living.entity.posZ,stack);
         ok=entity!=NULL&&!MCObjectHeap_failed(h);
     }
     if (ok) {
@@ -68,8 +68,8 @@ EntityItem *EntityPlayer_dropItem(MCGameplayPlayer *player,ItemStack *stack,bool
         }
     } else if (ok) {
         float speed=0.3f;
-        float yaw=multiply(divide(player->rotationYaw,180.0f),3.1415927f);
-        float pitch=multiply(divide(player->rotationPitch,180.0f),3.1415927f);
+        float yaw=multiply(divide(player->living.entity.rotationYaw,180.0f),3.1415927f);
+        float pitch=multiply(divide(player->living.entity.rotationPitch,180.0f),3.1415927f);
         entity->entity.motionX=(double)multiply(multiply(-MathHelper_sin(yaw),MathHelper_cos(pitch)),speed);
         entity->entity.motionZ=(double)multiply(multiply(MathHelper_cos(yaw),MathHelper_cos(pitch)),speed);
         entity->entity.motionY=(double)add(multiply(-MathHelper_sin(pitch),speed),0.1f); MCObjectHeap_touch(h);

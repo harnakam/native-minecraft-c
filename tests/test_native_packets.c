@@ -119,7 +119,7 @@ static MCGameplayPlayer *setup(Fixture *f, MCObjectRootScope *scope) {
     CHECK(mc_server_graph_add_player(&f->tx.working, 0, "11111111-1111-1111-1111-111111111111",
                                      "Packet", 1, 0, 64, 0, false));
     MCGameplayPlayer *p = mc_server_graph_player(&f->tx.working, 0);
-    CHECK(p && MCGameplayWorld_isInstance((MCObject *)p->worldObj));
+    CHECK(p && MCGameplayWorld_isInstance((MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj))));
     return p;
 }
 static void finish(Fixture *f, MCObjectRootScope *scope) {

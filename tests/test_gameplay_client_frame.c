@@ -452,12 +452,12 @@ int main(void) {
         (MCGameplayObjects *)MCObjectHeap_plainClone(game.heap, (MCObject *)owners);
     CHECK(other);
     p->pendingPackets = NULL;
-    p->worldObj->owners = other;
+    ((MCGameplayWorld *)(p->living.entity.worldObj))->owners = other;
     MCObjectHeap_touch(game.heap);
     CHECK(MCGameplayClientPackets_bind(p) &&
           MCGameplayClientPackets_addToSendQueue(
               p, (MCObject *)C0DPacketCloseWindow_new(game.heap, 2)));
-    p->worldObj->owners = owners;
+    ((MCGameplayWorld *)(p->living.entity.worldObj))->owners = owners;
     MCObjectHeap_touch(game.heap);
     CHECK(MCGameplay_begin(&game, &tx));
     CHECK(!MCGameplay_acceptClientFrame(&tx, validate, NULL, error, sizeof error) && !tx.active &&

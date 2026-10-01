@@ -1,4 +1,5 @@
 #include "client/native_runtime.h"
+#include "entity/player/EntityPlayer.h"
 #include "client/native_timer_clock.h"
 #include "util/MCGameplayCrafting.h"
 #include "item/ItemStackCrafting.h"
@@ -57,8 +58,8 @@ static MCClientBindings *binding(MCObject *o) {
 static bool animation(MCObject *c,const Item *item,ItemStack *s,MCObject *w,MCObject *p,int32_t index,bool selected) {
     MCClientBindings *b=binding(c);
     if (!b || !ItemStack_registryIsKnownItem(item) ||
-        w!=(MCObject *)b->player->worldObj || p!=(MCObject *)b->player) { if (c) MCObjectHeap_fail(c->heap); return false; }
-    if (ItemStack_registryId(item)==358) { bool changed; return ItemMap_onUpdate(s,b->player->worldObj,p,index,selected,&changed); }
+        w!=(MCObject *)((MCGameplayWorld *)(b->player->living.entity.worldObj)) || p!=(MCObject *)b->player) { if (c) MCObjectHeap_fail(c->heap); return false; }
+    if (ItemStack_registryId(item)==358) { bool changed; return ItemMap_onUpdate(s,((MCGameplayWorld *)(b->player->living.entity.worldObj)),p,index,selected,&changed); }
     Item_onUpdate(item,s,w,p,index,selected); return !MCObjectHeap_failed(c->heap);
 }
 static const ItemStackAnimationDependencies item_animation={animation};
@@ -66,7 +67,7 @@ static const InventoryPlayerAnimationDependencies inventory_animation={MCGamepla
 bool mc_client_graph_tick_inventory(MCGameplay *g) {
     MCObjectRootScope scope={0}; if (!g || !MCObjectRootScope_begin(&scope,g->heap)) return false;
     MCClientBindings *b=mc_client_graph_bindings(g);
-    bool ok=b && b->player->worldObj->remote && InventoryPlayer_decrementAnimations(b->player->inventory,&inventory_animation,(MCObject *)b);
+    bool ok=b && ((MCGameplayWorld *)(b->player->living.entity.worldObj))->remote && InventoryPlayer_decrementAnimations(b->player->inventory,&inventory_animation,(MCObject *)b);
     if (!ok) MCObjectHeap_fail(g->heap);
     MCObjectRootScope_end(&scope); return ok && !MCObjectHeap_failed(g->heap);
 }
@@ -131,6 +132,10 @@ static bool display_null(MCObject *c,MCObject *game) {
 }
 static MCObject *get_entity(MCObject *c,MCGameplayWorld *w,int32_t id) {
     if (!binding(c) || !w || w->object.heap!=c->heap) return NULL;
+    for(size_t i=0;i<MC_TRANSFER_MAX_PLAYERS;i++) {
+        MCObject *o=w->owners->players[i];
+        if(Entity_isInstance(o)&&Entity_getEntityId((Entity *)o)==id)return o;
+    }
     for (size_t i=0;i<w->owners->itemCount;i++) {
         MCObject *o=w->owners->items[i];
         if (EntityItem_isInstance(o) && ((EntityItem *)o)->entity.entityId==id) return o;
@@ -138,7 +143,7 @@ static MCObject *get_entity(MCObject *c,MCGameplayWorld *w,int32_t id) {
     return NULL;
 }
 static DataWatcher *get_watcher(MCObject *c,MCObject *e) {
-    return binding(c) && EntityItem_isInstance(e) ? EntityItem_getDataWatcher((EntityItem *)e) : NULL;
+    return binding(c)&&Entity_isInstance(e)?Entity_getDataWatcher((Entity *)e):NULL;
 }
 static const NetHandlerPlayClientDependencies handler_deps={
     .checkThreadAndEnqueue=thread_check,.getPlayer=get_player,.isCreativeScreen=creative_screen,
@@ -171,7 +176,7 @@ static bool craft_stat(MCObject *o,const Item *item,int32_t amount) {
     MCGameplayPlayer *p=(MCGameplayPlayer *)o;
     if (!MCGameplayPlayer_isInstance(o)) return false;
     MCClientBindings *b=binding(p->effects); int32_t id=ItemStack_registryId(item);
-    StatBase *stat=id>=0 && id<(int32_t)MC_GAMEPLAY_CRAFT_STAT_COUNT ? p->worldObj->craftStats[id] : NULL;
+    StatBase *stat=id>=0 && id<(int32_t)MC_GAMEPLAY_CRAFT_STAT_COUNT ? ((MCGameplayWorld *)(p->living.entity.worldObj))->craftStats[id] : NULL;
     return b && EntityPlayerSP_addStat(b->sp,stat,amount);
 }
 static bool on_created(ItemStack *s,MCObject *w,MCObject *p) {
@@ -189,7 +194,7 @@ static bool achievement(MCObject *o,mc_crafting_achievement which) {
         "achievement.buildSword","achievement.enchantments","achievement.bookcase","achievement.overpowered"};
     if (!MCGameplayPlayer_isInstance(o) || (unsigned)which>=sizeof ids/sizeof *ids) return false;
     MCGameplayPlayer *p=(MCGameplayPlayer *)o; MCClientBindings *b=binding(p->effects);
-    StatBase *stat=StatList_getOneShotStat_ascii(p->worldObj->statList,ids[which]);
+    StatBase *stat=StatList_getOneShotStat_ascii(((MCGameplayWorld *)(p->living.entity.worldObj))->statList,ids[which]);
     return b && EntityPlayerSP_triggerAchievement(b->sp,stat);
 }
 static bool log_missing(MCObject *c,int32_t id) { (void)c; fprintf(stderr,"Remote item %d has no stack metadata\n",id); return true; }
@@ -198,14 +203,14 @@ static InventoryPlayer *entity_inventory(MCObject *c,MCObject *p) {
     return binding(c) && MCGameplayPlayer_isInstance(p) && p->heap==c->heap ? ((MCGameplayPlayer *)p)->inventory : NULL;
 }
 static const NBTString *entity_name(MCObject *c,MCObject *p) {
-    return binding(c) && MCGameplayPlayer_isInstance(p) && p->heap==c->heap ? ((MCGameplayPlayer *)p)->name : NULL;
+    return binding(c) && MCGameplayPlayer_isInstance(p) && p->heap==c->heap ? EntityPlayer_getName((MCGameplayPlayer *)p) : NULL;
 }
 static MCObject *find_player(MCObject *c,MCObject *world,const NBTString *name) {
     if (!binding(c) || !MCGameplayWorld_isInstance(world) || world->heap!=c->heap) return NULL;
     MCGameplayObjects *owners=((MCGameplayWorld *)world)->owners;
     for (size_t i=0;i<MC_TRANSFER_MAX_PLAYERS;i++) if (MCGameplayPlayer_isInstance(owners->players[i])) {
         MCGameplayPlayer *p=(MCGameplayPlayer *)owners->players[i];
-        if (NBTString_equals(p->name,name)) return (MCObject *)p;
+        if (NBTString_equals(EntityPlayer_getName(p),name)) return (MCObject *)p;
     }
     return NULL;
 }
@@ -214,7 +219,7 @@ static bool entity_achievement(MCObject *c,MCObject *p,EntityItemAchievement whi
         "achievement.blazeRod","achievement.diamondsToYou"};
     MCClientBindings *b=binding(c);
     if (!b || p!=(MCObject *)b->player || (unsigned)which>=sizeof ids/sizeof *ids) return false;
-    StatBase *stat=StatList_getOneShotStat_ascii(b->player->worldObj->statList,ids[which]);
+    StatBase *stat=StatList_getOneShotStat_ascii(((MCGameplayWorld *)(b->player->living.entity.worldObj))->statList,ids[which]);
     return stat && EntityPlayerSP_triggerAchievement(b->sp,stat);
 }
 static bool silent(MCObject *c,const EntityItem *e) {
@@ -277,15 +282,15 @@ static bool base_constructor(MCObject *c,EntityItem *e,MCObject *w) {
 }
 static double random_double(MCObject *c) {
     MCClientBindings *b=binding(c);double value=0;
-    if (!b||!NativeJavaRandomRuntime_mathRandom(b->player->worldObj->randomRuntime,&value)) {
+    if (!b||!NativeJavaRandomRuntime_mathRandom(((MCGameplayWorld *)(b->player->living.entity.worldObj))->randomRuntime,&value)) {
         MCObjectHeap_fail(c?c->heap:NULL);return 0;
     }
     return value;
 }
 static float random_float(MCObject *c,MCGameplayPlayer *p) {
     float value=0;
-    if (!binding(c)||!MCGameplayPlayer_isInstance((MCObject *)p)||p->object.heap!=c->heap||
-        !p->rand||p->rand->object.heap!=c->heap||!NativeJavaRandom_nextFloat(p->rand,&value)) {
+    if (!binding(c)||!MCGameplayPlayer_isInstance((MCObject *)p)||p->living.entity.object.heap!=c->heap||
+        !p->living.entity.rand||p->living.entity.rand->object.heap!=c->heap||!NativeJavaRandom_nextFloat(p->living.entity.rand,&value)) {
         MCObjectHeap_fail(c?c->heap:NULL);return 0;
     }
     return value;
@@ -294,11 +299,11 @@ static bool size_entity(MCObject *c,EntityItem *e,float w,float h) { return bind
 static bool position_entity(MCObject *c,EntityItem *e,double x,double y,double z) { return binding(c) && Entity_setPosition(&e->entity,x,y,z); }
 static const EntityItemConstructorDependencies constructors={base_constructor,random_double,size_entity,position_entity};
 static float eye(MCObject *c,MCGameplayPlayer *p) { (void)c; return EntityPlayer_getEyeHeight(p); }
-static NBTString *player_name(MCObject *c,MCGameplayPlayer *p) { return binding(c) ? p->name : NULL; }
+static NBTString *player_name(MCObject *c,MCGameplayPlayer *p) { return binding(c) ? EntityPlayer_getName(p) : NULL; }
 static bool join_entity(MCObject *c,MCGameplayPlayer *p,EntityItem *e) {
     MCClientBindings *b=binding(c); return b && b->player==p && EntityPlayerSP_joinEntityItemWithWorld(b->sp,e);
 }
-static bool drop_stat(MCObject *c,MCGameplayPlayer *p) { MCClientBindings *b=binding(c); return b && EntityPlayerSP_triggerAchievement(b->sp,p->worldObj->statList->dropStat); }
+static bool drop_stat(MCObject *c,MCGameplayPlayer *p) { MCClientBindings *b=binding(c); return b && EntityPlayerSP_triggerAchievement(b->sp,((MCGameplayWorld *)(p->living.entity.worldObj))->statList->dropStat); }
 static double sine(MCObject *c,double v) { (void)c; return sin(v); }
 static double cosine(MCObject *c,double v) { (void)c; return cos(v); }
 static const EntityPlayerDropsDependencies drops={&entity_deps,&constructors,eye,random_float,player_name,join_entity,drop_stat,sine,cosine};
@@ -311,7 +316,7 @@ static bool drop_stack(MCObject *o,ItemStack *s,bool scatter) {
 static StatBase *map_use_stat(MCObject *c,const Item *item) {
     MCClientBindings *b=binding(c);
     if (!b || ItemStack_registryId(item)!=395) { if (c) MCObjectHeap_fail(c->heap); return NULL; }
-    StatBase *stat=b->player->worldObj->emptyMapUseStat;
+    StatBase *stat=((MCGameplayWorld *)(b->player->living.entity.worldObj))->emptyMapUseStat;
     if (!stat) MCObjectHeap_fail(c->heap);
     return stat;
 }
@@ -350,18 +355,18 @@ bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name
     if (ok && w) ok=MCGameplayCrafting_configureWorld(w,display_name,(MCObject *)b);
     NBTString *n=ok ? NBTString_fromUTF8(g->heap,name) : NULL;
     StatFileWriter *stats=ok ? StatFileWriter_new(g->heap) : NULL;
-    MCGameplayPlayer *p=n && stats ? MCGameplayPlayer_new(w,n,stats,mc_client_graph_crafting()) : NULL;
+    uint8_t uuid[16];char text[37];mc_offline_uuid(name,uuid);mc_uuid_string(uuid,text);
+    NBTString *idText=n?NBTString_fromASCII(g->heap,text):NULL;
+    NativeJavaUUID *id=idText?NativeJavaUUID_fromString(g->heap,idText):NULL;
+    NativeGameProfile *profile=id?NativeGameProfile_new(g->heap,id,n):NULL;
+    MCGameplayPlayer *p=profile&&stats?MCGameplayPlayer_newWithProfile(w,profile,stats,mc_client_graph_crafting()):NULL;
     if (p && b) {
         b->player=p; p->effects=(MCObject *)b;
         b->origin=DataWatcher_blockPos(g->heap,0,0,0);
         NetHandlerPlayClient *h=NetHandlerPlayClient_nativeNew(p,(MCObject *)b,(MCObject *)b,&handler_deps);
         b->controller=h ? PlayerControllerMP_nativeNew(g->heap,h,(MCObject *)b,&controller_deps) : NULL;
         b->sp=h ? EntityPlayerSP_nativeNew(p,h,(MCObject *)b,(MCObject *)b,&sp_deps) : NULL;
-        uint8_t uuid[16]; char text[37]; mc_offline_uuid(name,uuid); mc_uuid_string(uuid,text);
-        NBTString *profile=NBTString_fromASCII(g->heap,text);
-        p->gameProfileUUID=profile?NativeJavaUUID_fromString(g->heap,profile):NULL;
-        if (p->gameProfileUUID) {p->entityUniqueID=p->gameProfileUUID;MCObjectHeap_touch(g->heap);}
-        ok=p->gameProfileUUID && b->origin && b->controller && b->sp && MCGameplay_setPlayer(g,0,text,(MCObject *)p) && MCGameplayClientPackets_bind(p) &&
+        ok=p->gameProfile->id && b->origin && b->controller && b->sp && MCGameplay_setPlayer(g,0,text,(MCObject *)p) && MCGameplayClientPackets_bind(p) &&
             PlayerControllerMP_bindActions(b->controller,(MCObject *)b,(MCObject *)b,&action_deps);
     } else ok=false;
     MCObjectRootScope_end(&scope);
@@ -370,9 +375,9 @@ bool mc_client_graph_init(MCGameplay *g,const mc_world *terrain,const char *name
 bool mc_client_graph_open(MCGameplay *g,int32_t window,bool workbench) {
     MCClientBindings *b=mc_client_graph_bindings(g); if (!b) return false;
     if (b->screenOpen && !display_null((MCObject *)b,(MCObject *)b)) return false;
-    Container *c=&b->player->inventoryContainer->container;
+    Container *c=b->player->inventoryContainer;
     if (workbench) {
-        ContainerWorkbench *w=ContainerWorkbench_new(b->player->inventory,(MCObject *)b->player->worldObj,NULL,mc_client_graph_crafting());
+        ContainerWorkbench *w=ContainerWorkbench_new(b->player->inventory,(MCObject *)((MCGameplayWorld *)(b->player->living.entity.worldObj)),NULL,mc_client_graph_crafting());
         if (!w) return false;
         c=&w->container;
     }
@@ -406,7 +411,7 @@ bool mc_client_graph_creative(MCGameplay *g,int32_t id,int32_t damage) {
 bool mc_client_graph_place(MCGameplay *g,int32_t x,int32_t y,int32_t z,int32_t face,bool air) {
     MCClientBindings *b=mc_client_graph_bindings(g); if (!b || !PlayerControllerMP_syncCurrentPlayItem(b->controller)) return false;
     ItemStack *s=InventoryPlayer_getCurrentItem(b->player->inventory);
-    if (air) { bool used=false; return PlayerControllerMP_sendUseItem(b->controller,b->player,b->player->worldObj,s,&used); }
+    if (air) { bool used=false; return PlayerControllerMP_sendUseItem(b->controller,b->player,((MCGameplayWorld *)(b->player->living.entity.worldObj)),s,&used); }
     DataWatcherBlockPos *pos=air ? NULL : DataWatcher_blockPos(g->heap,x,y,z);
     C08PacketPlayerBlockPlacement *p=air ? C08PacketPlayerBlockPlacement_new_useItem(g->heap,s) :
         pos ? C08PacketPlayerBlockPlacement_new(g->heap,pos,face,s,0.5f,0.5f,0.5f) : NULL;
@@ -428,7 +433,7 @@ bool mc_client_graph_spawn_item_packet(MCGameplay *g,int32_t id,double x,double 
     /* Original item spawn chooses the position constructor. Its inherited
        Entity segment is still an explicit native adapter; packet scalar
        fields/ID/velocity are applied afterward without another stack owner. */
-    EntityItem *e=EntityItem_new_position(g->heap,(MCObject *)b->player->worldObj,(MCObject *)b,
+    EntityItem *e=EntityItem_new_position(g->heap,(MCObject *)((MCGameplayWorld *)(b->player->living.entity.worldObj)),(MCObject *)b,
         &entity_deps,&constructors,x,y,z);
     if (!e) return false;
     e->entity.entityId=id;e->entity.rotationPitch=spawn_angle(pitch);e->entity.rotationYaw=spawn_angle(yaw);

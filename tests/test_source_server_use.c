@@ -68,7 +68,7 @@ static bool using_item(MCObject *o, MCGameplayPlayer *p) {
 }
 static bool send_container(MCObject *o, MCGameplayPlayer *p, Container *container) {
     Fixture *f = (Fixture *)o;
-    CHECK(p == f->player && container == &p->inventoryContainer->container);
+    CHECK(p == f->player && container == p->inventoryContainer);
     enter(f, 'P');
     if (f->failSend)
         return false;
@@ -83,7 +83,7 @@ static int32_t decrement(int32_t value) {
 static bool use(MCObject *o, const Item *i, ItemStack *s, MCObject *world, MCObject *actor,
                 ItemStack **out) {
     Fixture *f = (Fixture *)o;
-    CHECK(s == f->input && i == s->item && world == (MCObject *)f->player->worldObj &&
+    CHECK(s == f->input && i == s->item && world == (MCObject *)((MCGameplayWorld *)(f->player->living.entity.worldObj)) &&
           actor == (MCObject *)f->player);
     enter(f, 'U');
     if (f->failEvent == 'U')
@@ -200,7 +200,7 @@ static void vectors(void) {
                         /* Manager game type is independent from player capabilities. */
                         f->player->capabilities->isCreativeMode = !c;
                         bool changed = true;
-                        CHECK(ItemInWorldManager_tryUseItem(f->player, f->player->worldObj,
+                        CHECK(ItemInWorldManager_tryUseItem(f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)),
                                                             f->input, &deps, (MCObject *)f,
                                                             &changed));
                         CHECK(changed == (mode != 0));
@@ -255,7 +255,7 @@ static void short_circuit_and_failures(void) {
     Fixture *f = setup(&g, &scope, 0, 1, 0);
     f->spectator = true;
     bool changed = true;
-    CHECK(ItemInWorldManager_tryUseItem(f->player, f->player->worldObj, NULL, &deps, (MCObject *)f,
+    CHECK(ItemInWorldManager_tryUseItem(f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)), NULL, &deps, (MCObject *)f,
                                         &changed) &&
           !changed);
     CHECK(!strcmp(f->events, "S") && MCGameplayPackets_count(f->player) == 0 &&
@@ -267,7 +267,7 @@ static void short_circuit_and_failures(void) {
         f = setup(&g, &scope, 2, 1, 6);
         f->creative = c;
         changed = false;
-        CHECK(!ItemInWorldManager_tryUseItem(f->player, f->player->worldObj, f->input, &deps,
+        CHECK(!ItemInWorldManager_tryUseItem(f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)), f->input, &deps,
                                              (MCObject *)f, &changed));
         CHECK(!changed && !InventoryPlayer_getCurrentItem(f->player->inventory) &&
               !strcmp(f->events, "SUC"));
@@ -282,7 +282,7 @@ static void short_circuit_and_failures(void) {
           NBTTagCompound_setTag_ascii(tag, "Unbreakable", (NBTBase *)NBTTagByte_new(g.heap, 1)) &&
           ItemStack_setTagCompound(f->input, tag));
     changed = false;
-    CHECK(ItemInWorldManager_tryUseItem(f->player, f->player->worldObj, f->input, &deps,
+    CHECK(ItemInWorldManager_tryUseItem(f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)), f->input, &deps,
                                         (MCObject *)f, &changed));
     CHECK(changed && f->input->stackSize == 3 && f->input->itemDamage == 9);
     finish(&g, &scope, false);
@@ -291,7 +291,7 @@ static void short_circuit_and_failures(void) {
     f = setup(&g, &scope, 2, 1, 5);
     f->failSend = true;
     changed = false;
-    CHECK(!ItemInWorldManager_tryUseItem(f->player, f->player->worldObj, f->input, &deps,
+    CHECK(!ItemInWorldManager_tryUseItem(f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)), f->input, &deps,
                                          (MCObject *)f, &changed));
     CHECK(!changed && InventoryPlayer_getCurrentItem(f->player->inventory) == f->returned &&
           !strcmp(f->events, "SUCIP"));
@@ -307,7 +307,7 @@ static void callback_failure_stops_source_flow(void) {
         f->failEvent = events[i];
         f->usingItem = false;
         bool changed = false;
-        CHECK(!ItemInWorldManager_tryUseItem(f->player, f->player->worldObj, f->input, &deps,
+        CHECK(!ItemInWorldManager_tryUseItem(f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)), f->input, &deps,
                                              (MCObject *)f, &changed));
         CHECK(!changed && !strcmp(f->events, prefix[i]));
         CHECK(MCGameplayPackets_count(f->player) == 0);
@@ -338,7 +338,7 @@ static void native_map_and_drop_bindings(void) {
             CHECK(InventoryPlayer_setInventorySlotContents(one->inventory, 0, input));
             CHECK(InventoryPlayer_setInventorySlotContents(two->inventory, 0, input));
             CHECK(mc_server_graph_use_item(one));
-            CHECK(one->worldObj->maps.count == 1 && one->worldObj->maps.next_id == 1);
+            CHECK(((MCGameplayWorld *)(one->living.entity.worldObj))->maps.count == 1 && ((MCGameplayWorld *)(one->living.entity.worldObj))->maps.next_id == 1);
             ItemStack *held = InventoryPlayer_getCurrentItem(one->inventory);
             CHECK(count == 0 && creativeMode ? held == NULL : held != NULL);
             if (held)
@@ -382,7 +382,7 @@ static void native_map_and_drop_bindings(void) {
                 EntityItem *e = (EntityItem *)owners->items[0];
                 CHECK(EntityItem_isInstance((MCObject *)e));
                 ItemStack *watched = EntityItem_getEntityItem(e);
-                CHECK(e->delayBeforeCanPickup == 40 && e->thrower == one->name);
+                CHECK(e->delayBeforeCanPickup == 40 && e->thrower == one->gameProfile->name);
                 bool whole = all || counts[ci] <= 1;
                 CHECK(whole ? watched == input : watched != input);
                 CHECK(watched->stackSize == (whole ? counts[ci] : 1));
@@ -438,7 +438,7 @@ static void native_eye_height_and_drop_position(void) {
         MCGameplayPlayer *p = mc_server_graph_player(&tx.working, 0);
         CHECK(p);
         p->sleeping = (state & 2) != 0;
-        p->sneaking = (state & 1) != 0;
+        CHECK(Entity_setSneaking(&p->living.entity,(state & 1) != 0));
         CHECK(float_bits(EntityPlayer_getEyeHeight(p)) == eyeBits[state]);
         ItemStack *input = ItemStack_new(tx.working.heap, ItemStack_registryItem(1), 1, 0);
         CHECK(input && InventoryPlayer_setInventorySlotContents(p->inventory, 0, input));
@@ -449,7 +449,7 @@ static void native_eye_height_and_drop_position(void) {
         CHECK(double_bits(e->entity.posY) == dropYBits[state]);
         CHECK(e->entity.posX == 1.25 && e->entity.posZ == -9.75);
         CHECK(EntityItem_getEntityItem(e) == input && e->delayBeforeCanPickup == 40 &&
-              e->thrower == p->name && !InventoryPlayer_getCurrentItem(p->inventory));
+              e->thrower == p->gameProfile->name && !InventoryPlayer_getCurrentItem(p->inventory));
         CHECK(MCGameplayPackets_validate(p));
         CHECK(!MCObjectHeap_failed(tx.working.heap) && MCGameplay_get(&parent)->itemCount == 0);
         MCObjectRootScope_end(&scope);

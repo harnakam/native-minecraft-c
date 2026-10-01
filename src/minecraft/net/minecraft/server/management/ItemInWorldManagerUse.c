@@ -6,7 +6,7 @@ static bool fail(MCObjectHeap *heap) {
 bool ItemInWorldManager_tryUseItem(MCGameplayPlayer *p, MCGameplayWorld *world, ItemStack *stack,
                                    const ItemInWorldManagerUseDependencies *d, MCObject *context,
                                    bool *out) {
-    MCObjectHeap *heap = p ? p->object.heap : NULL;
+    MCObjectHeap *heap = p ? p->living.entity.object.heap : NULL;
     if (!p || !MCGameplayPlayer_isInstance((MCObject *)p) || !world ||
         !MCGameplayWorld_isInstance((MCObject *)world) || world->object.heap != heap ||
         !p->inventory || p->inventory->object.heap != heap || !out || !d || !d->isSpectator ||
@@ -68,7 +68,7 @@ bool ItemInWorldManager_tryUseItem(MCGameplayPlayer *p, MCGameplayWorld *world, 
                 bool usingItem = d->isUsingItem(context, p);
                 ok = !MCObjectHeap_failed(heap);
                 if (ok && !usingItem)
-                    ok = d->sendContainerToPlayer(context, p, &p->inventoryContainer->container);
+                    ok = d->sendContainerToPlayer(context, p, p->inventoryContainer);
             }
             result = true;
         }

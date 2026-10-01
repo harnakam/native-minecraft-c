@@ -11,7 +11,7 @@ ItemStack *ItemEmptyMap_onItemRightClick(const Item *self,ItemStack *input,
     if(!self||!ItemStack_isInstance((MCObject *)input)||
         !MCGameplayWorld_isInstance((MCObject *)world)||
         !MCGameplayPlayer_isInstance((MCObject *)player)||world->object.heap!=heap||
-        player->object.heap!=heap||(context&&context->heap!=heap)) {
+        player->living.entity.object.heap!=heap||(context&&context->heap!=heap)) {
         fail(heap);return NULL;
     }
     MCObjectRootScope scope={0};
@@ -31,7 +31,7 @@ ItemStack *ItemEmptyMap_onItemRightClick(const Item *self,ItemStack *input,
             mc_map_info *stored=ItemMapData_nativeSetItemData(world,&created);
             if(stored) {
                 stored->scale=0;
-                ItemMapData_calculateMapCenter(stored,player->posX,player->posZ,stored->scale);
+                ItemMapData_calculateMapCenter(stored,player->living.entity.posX,player->living.entity.posZ,stored->scale);
                 uint8_t dimension=(uint8_t)world->dimension;
                 memcpy(&stored->dimension,&dimension,sizeof(dimension));
                 stored->metadata_known=true;stored->dirty=true;MCObjectHeap_touch(heap);

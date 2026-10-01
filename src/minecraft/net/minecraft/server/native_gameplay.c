@@ -1,4 +1,5 @@
 #include "server/native_gameplay.h"
+#include "entity/player/EntityPlayer.h"
 #include "server/management/ItemInWorldManagerUse.h"
 #include "util/MCGameplayPackets.h"
 #include "entity/player/EntityPlayerDrops.h"
@@ -42,7 +43,7 @@ bool mc_server_graph_tick_inventory(MCGameplayPlayer *player) {
     static const ItemStackAnimationDependencies item = {item_on_update};
     static const InventoryPlayerAnimationDependencies inventory = {MCGameplayPlayer_world, &item};
     if (!MCGameplayPlayer_isInstance((MCObject *)player)) {
-        MCObjectHeap_fail(player ? player->object.heap : NULL);
+        MCObjectHeap_fail(player ? player->living.entity.object.heap : NULL);
         return false;
     }
     return InventoryPlayer_decrementAnimations(player->inventory, &inventory, NULL);
@@ -155,7 +156,7 @@ static RuntimeWorld *bindings(MCGameplayWorld *w) {
 }
 static RuntimeActor *actor_bindings(MCGameplayPlayer *p) {
     if (!p || !p->effects || p->effects->klass != &actorClass) {
-        fail(p ? p->object.heap : NULL);
+        fail(p ? p->living.entity.object.heap : NULL);
         return NULL;
     }
     return (RuntimeActor *)p->effects;
@@ -174,7 +175,7 @@ static bool emit(MCGameplayWorld *w, mc_buf *packet) {
     bool ok = !packet->failed;
     for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS && ok; i++) {
         MCGameplayPlayer *p = (MCGameplayPlayer *)w->owners->players[i];
-        if (p && !p->isDead)
+        if (p && !p->living.entity.isDead)
             ok = MCGameplayPackets_sendNative(p, packet);
     }
     mc_buf_free(packet);
@@ -240,7 +241,7 @@ bool mc_server_graph_send_motion(EntityItem *e) {
 }
 static MCObject *get_board(MCObject *ctx, MCGameplayPlayer *p) {
     (void)ctx;
-    RuntimeWorld *r = bindings(p->worldObj);
+    RuntimeWorld *r = bindings(((MCGameplayWorld *)(p->living.entity.worldObj)));
     return r ? (MCObject *)r->scoreboard : NULL;
 }
 static MCObject *criteria(MCObject *ctx, StatBase *stat) {
@@ -281,7 +282,7 @@ static MCObject *next(MCObject *ctx, MCObject *list) {
 }
 static NBTString *player_name(MCObject *ctx, MCGameplayPlayer *p) {
     (void)ctx;
-    return p->name;
+    return EntityPlayer_getName(p);
 }
 static MCObject *score(MCObject *ctx, MCObject *board, const NBTString *name, MCObject *objective) {
     (void)ctx;
@@ -318,7 +319,7 @@ static const EntityPlayerMPStatsDependencies statDependencies = {
     get_board, criteria,    objectives, iterator,  has_next,
     next,      player_name, score,      increment, points};
 static bool add_stat(MCGameplayPlayer *p, StatBase *stat, int32_t amount) {
-    return EntityPlayerMP_addStat(p, stat, amount, (MCObject *)p->worldObj, &statDependencies);
+    return EntityPlayerMP_addStat(p, stat, amount, (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)), &statDependencies);
 }
 static bool announcing(MCObject *ctx, MCObject *server) {
     (void)ctx;
@@ -343,7 +344,7 @@ static bool send_stats(MCObject *ctx, MCObject *object, StatisticsFileIntMap *ma
     size_t count = StatisticsFileIntMap_size(map);
     mc_put_varint(&out, (int32_t)count);
     PacketBuffer buffer;
-    bool ok = PacketBuffer_init(&buffer, p->object.heap, &out);
+    bool ok = PacketBuffer_init(&buffer, p->living.entity.object.heap, &out);
     for (size_t i = 0; i < count && ok; i++) {
         StatBase *s = NULL;
         int32_t value = 0;
@@ -359,13 +360,13 @@ static bool send_stats(MCObject *ctx, MCObject *object, StatisticsFileIntMap *ma
 static const StatisticsFileDependencies statisticsDependencies = {announcing, announcement,
                                                                   tick_counter, send_stats};
 static StatBase *achievement_stat(MCGameplayPlayer *p, const char *id) {
-    return StatList_getOneShotStat_ascii(p->worldObj->statList, id);
+    return StatList_getOneShotStat_ascii(((MCGameplayWorld *)(p->living.entity.worldObj))->statList, id);
 }
 static bool craft_stat(MCObject *object, const Item *item, int32_t amount) {
     MCGameplayPlayer *p = (MCGameplayPlayer *)object;
     int32_t id = ItemStack_registryId(item);
     StatBase *stat =
-        id >= 0 && id < (int32_t)MC_GAMEPLAY_CRAFT_STAT_COUNT ? p->worldObj->craftStats[id] : NULL;
+        id >= 0 && id < (int32_t)MC_GAMEPLAY_CRAFT_STAT_COUNT ? ((MCGameplayWorld *)(p->living.entity.worldObj))->craftStats[id] : NULL;
     return add_stat(p, stat, amount);
 }
 static bool created(ItemStack *stack, MCObject *world, MCObject *player) {
@@ -447,14 +448,14 @@ static InventoryPlayer *inventory(MCObject *ctx, MCObject *p) {
 }
 static const NBTString *name(MCObject *ctx, MCObject *p) {
     (void)ctx;
-    return ((MCGameplayPlayer *)p)->name;
+    return EntityPlayer_getName((MCGameplayPlayer *)p);
 }
 static MCObject *find_player(MCObject *ctx, MCObject *object, const NBTString *n) {
     (void)ctx;
     MCGameplayWorld *w = (MCGameplayWorld *)object;
     for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS; i++) {
         MCGameplayPlayer *p = (MCGameplayPlayer *)w->owners->players[i];
-        if (p && !p->isDead && NBTString_equals(p->name, n))
+        if (p && !p->living.entity.isDead && NBTString_equals(EntityPlayer_getName(p), n))
             return (MCObject *)p;
     }
     return NULL;
@@ -491,9 +492,9 @@ static bool sound(MCObject *ctx, MCObject *world, MCObject *object, const char *
     mc_buf out;
     start(&out, 0x29);
     mc_put_string(&out, soundName);
-    mc_put_i32(&out, (int32_t)(p->posX * 8));
-    mc_put_i32(&out, (int32_t)(p->posY * 8));
-    mc_put_i32(&out, (int32_t)(p->posZ * 8));
+    mc_put_i32(&out, (int32_t)(p->living.entity.posX * 8));
+    mc_put_i32(&out, (int32_t)(p->living.entity.posY * 8));
+    mc_put_i32(&out, (int32_t)(p->living.entity.posZ * 8));
     mc_put_f32(&out, volume);
     int32_t encoded = (int32_t)(pitch * 63.0F);
     if (encoded > 255)
@@ -510,8 +511,8 @@ static bool pickup(MCObject *ctx, MCObject *object, EntityItem *e, int32_t count
     mc_buf out;
     start(&out, 0x0d);
     mc_put_varint(&out, e->entity.entityId);
-    mc_put_varint(&out, p->entityId);
-    return emit(p->worldObj, &out);
+    mc_put_varint(&out, p->living.entity.entityId);
+    return emit(((MCGameplayWorld *)(p->living.entity.worldObj)), &out);
 }
 static bool dead(MCObject *ctx, EntityItem *e) {
     (void)ctx;
@@ -545,9 +546,9 @@ static float eye_height(MCObject *ctx, MCGameplayPlayer *p) {
 static float player_float(MCObject *ctx, MCGameplayPlayer *p) {
     (void)ctx;
     float value=0;
-    if (!MCGameplayPlayer_isInstance((MCObject *)p)||!p->rand||p->rand->object.heap!=p->object.heap||
-        !NativeJavaRandom_nextFloat(p->rand,&value)) {
-        MCObjectHeap_fail(p?p->object.heap:NULL);return 0;
+    if (!MCGameplayPlayer_isInstance((MCObject *)p)||!p->living.entity.rand||p->living.entity.rand->object.heap!=p->living.entity.object.heap||
+        !NativeJavaRandom_nextFloat(p->living.entity.rand,&value)) {
+        MCObjectHeap_fail(p?p->living.entity.object.heap:NULL);return 0;
     }
     return value;
 }
@@ -560,7 +561,7 @@ int32_t mc_server_graph_allocate_entity(MCGameplayWorld *w) {
             used = ((EntityItem *)w->owners->items[i])->entity.entityId == id;
         for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS && !used; i++) {
             MCGameplayPlayer *p = (MCGameplayPlayer *)w->owners->players[i];
-            used = p && p->entityId == id;
+            used = p && p->living.entity.entityId == id;
         }
         if (!used)
             return id;
@@ -570,7 +571,7 @@ int32_t mc_server_graph_allocate_entity(MCGameplayWorld *w) {
 }
 static bool join_item(MCObject *ctx, MCGameplayPlayer *p, EntityItem *e) {
     (void)ctx;
-    MCGameplayWorld *w = p->worldObj;
+    MCGameplayWorld *w = ((MCGameplayWorld *)(p->living.entity.worldObj));
     MCGameplayObjects *o = w->owners;
     if (o->itemCount == MC_GAMEPLAY_MAX_ITEMS)
         return fail(e->entity.object.heap);
@@ -578,14 +579,14 @@ static bool join_item(MCObject *ctx, MCGameplayPlayer *p, EntityItem *e) {
     MCObjectHeap_touch(e->entity.object.heap);
     for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS; i++) {
         MCGameplayPlayer *recipient = (MCGameplayPlayer *)o->players[i];
-        if (recipient && !recipient->isDead && !mc_server_graph_send_item(recipient, e))
+        if (recipient && !recipient->living.entity.isDead && !mc_server_graph_send_item(recipient, e))
             return false;
     }
     return true;
 }
 static bool drop_stat(MCObject *ctx, MCGameplayPlayer *p) {
     (void)ctx;
-    return add_stat(p, p->worldObj->statList->dropStat, 1);
+    return add_stat(p, ((MCGameplayWorld *)(p->living.entity.worldObj))->statList->dropStat, 1);
 }
 static double sine(MCObject *ctx, double v) {
     (void)ctx;
@@ -600,8 +601,8 @@ static const EntityPlayerDropsDependencies dropDependencies = {
     join_item,         drop_stat,     sine,       cosine};
 static bool drop(MCObject *object, ItemStack *stack, bool scatter) {
     MCGameplayPlayer *p = (MCGameplayPlayer *)object;
-    EntityPlayer_dropItem(p, stack, scatter, false, &dropDependencies, (MCObject *)p->worldObj);
-    return !MCObjectHeap_failed(p->object.heap);
+    EntityPlayer_dropItem(p, stack, scatter, false, &dropDependencies, (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)));
+    return !MCObjectHeap_failed(p->living.entity.object.heap);
 }
 static mc_crafting_dispatch craftingDispatch;
 const mc_crafting_dispatch *mc_server_graph_crafting(void) {
@@ -611,7 +612,7 @@ static MCPacketThreadResult packet_thread(MCObject *ctx, NetHandlerPlayServer *h
                                           MCObject *packet) {
     (void)ctx;
     (void)packet;
-    RuntimeWorld *w = bindings(h->playerEntity->worldObj);
+    RuntimeWorld *w = bindings(((MCGameplayWorld *)(h->playerEntity->living.entity.worldObj)));
     return w && same_thread(w->thread, current_thread()) ? MC_PACKET_THREAD_EXECUTE
                                                          : MC_PACKET_THREAD_FAILED;
 }
@@ -620,8 +621,8 @@ static bool active(MCObject *ctx, MCGameplayPlayer *p) {
     RuntimeActor *a = actor_bindings(p);
     if (!a)
         return false;
-    a->lastActiveTick = p->worldObj->worldTime;
-    MCObjectHeap_touch(p->object.heap);
+    a->lastActiveTick = ((MCGameplayWorld *)(p->living.entity.worldObj))->worldTime;
+    MCObjectHeap_touch(p->living.entity.object.heap);
     return true;
 }
 static bool close_container(MCObject *ctx, MCGameplayPlayer *p) {
@@ -660,7 +661,7 @@ static bool tile_nbt(MCObject *ctx, MCObject *object, NBTTagCompound *out) {
 static EntityItem *drop_choice(MCObject *ctx, MCGameplayPlayer *p, ItemStack *s, bool unused) {
     (void)ctx;
     return EntityPlayer_dropPlayerItemWithRandomChoice(p, s, unused, &dropDependencies,
-                                                       (MCObject *)p->worldObj);
+                                                       (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)));
 }
 static const NetHandlerPlayServerDependencies handlerDependencies = {
     packet_thread, active, close_container, confirm,    update_container,
@@ -689,6 +690,7 @@ bool mc_server_graph_init(MCGameplay *game, const mc_world *terrain, int32_t spa
         r->thread = current_thread();
         w->nativeContext = (MCObject *)r;
         w->spawnX = spawnX;
+        w->spawnY = terrain?mc_world_surface(terrain,spawnX,spawnZ)+1:0;
         w->spawnZ = spawnZ;
         w->nextEntityId = 1;
         /* The terrain generation seed is not World.rand/Entity.rand or Math's
@@ -707,21 +709,16 @@ static bool add_player(MCGameplay *game, size_t index, const char *uuid,
     MCObjectHeap *heap = game->heap;
     if (!w || !game->snapshot || index >= MC_TRANSFER_MAX_PLAYERS || w->owners->players[index])
         return fail(heap);
-    NBTString *n = NBTString_fromASCII(heap, nameText);
+    NBTString *n = NBTString_fromUTF8(heap, nameText);
+    NBTString *idText=NBTString_fromASCII(heap,uuid);
+    NativeJavaUUID *id=idText?NativeJavaUUID_fromString(heap,idText):NULL;
+    NativeGameProfile *profile=id&&n?NativeGameProfile_new(heap,id,n):NULL;
     RuntimeWorld *r = bindings(w);
     StatisticsFile *stats =
         r ? StatisticsFile_nativeNew(heap, (MCObject *)r, NBTString_literalASCII(heap, ""),
                                      (MCObject *)w, &statisticsDependencies)
           : NULL;
-    MCGameplayPlayer *p =
-        stats && n ? MCGameplayPlayer_new(w, n, (StatFileWriter *)stats, &craftingDispatch) : NULL;
-    if (p) {
-        NBTString *profile=NBTString_fromASCII(heap,uuid);
-        p->gameProfileUUID=profile?NativeJavaUUID_fromString(heap,profile):NULL;
-        if (!p->gameProfileUUID) return false;
-        p->entityUniqueID=p->gameProfileUUID;
-        MCObjectHeap_touch(heap);
-    }
+    MCGameplayPlayer *p=stats&&profile?MCGameplayPlayer_newWithProfile(w,profile,(StatFileWriter *)stats,&craftingDispatch):NULL;
     RuntimeActor *a = p ? (RuntimeActor *)MCObjectHeap_alloc(heap, sizeof(*a), &actorClass) : NULL;
     if (!a)
         return false;
@@ -729,11 +726,9 @@ static bool add_player(MCGameplay *game, size_t index, const char *uuid,
     p->effects = (MCObject *)a;
     if (!WorldSettingsGameType_configurePlayerCapabilities(creative?&WorldSettingsGameType_CREATIVE:&WorldSettingsGameType_SURVIVAL,p->capabilities)) return false;
     a->managerCreative = creative;
-    if (!preserveSourceID) p->entityId = entityId;
-    p->posX = x;
-    p->posY = y;
-    p->posZ = z;
-    p->dimension = w->dimension;
+    if (!preserveSourceID) p->living.entity.entityId = entityId;
+    if(!Entity_setPosition(&p->living.entity,x,y,z))return false;
+    p->living.entity.dimension = w->dimension;
     if (!MCGameplay_setPlayer(game, index, uuid, (MCObject *)p) || !MCGameplayPackets_bind(p) ||
         !NetHandlerPlayServer_nativeNew(p, (MCObject *)w, &handlerDependencies))
         return false;
@@ -748,8 +743,8 @@ bool mc_server_graph_add_player_auto(MCGameplay *game,size_t index,const char *u
     return add_player(game,index,uuid,name,0,x,y,z,creative,true);
 }
 bool mc_server_graph_drop(MCGameplayPlayer *p, bool all) {
-    EntityPlayer_dropOneItem(p, all, &dropDependencies, (MCObject *)p->worldObj);
-    return !MCObjectHeap_failed(p->object.heap);
+    EntityPlayer_dropOneItem(p, all, &dropDependencies, (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)));
+    return !MCObjectHeap_failed(p->living.entity.object.heap);
 }
 static StatBase *use_stat(MCObject *ctx, const Item *item) {
     (void)item;
@@ -763,7 +758,7 @@ static bool trigger(MCObject *ctx, MCGameplayPlayer *p, StatBase *stat) {
 static bool empty_drop(MCObject *ctx, MCGameplayPlayer *p, ItemStack *stack, bool unused,
                        EntityItem **out) {
     *out = drop_choice(ctx, p, stack, unused);
-    return !MCObjectHeap_failed(p->object.heap);
+    return !MCObjectHeap_failed(p->living.entity.object.heap);
 }
 static bool item_right_click(MCObject *ctx, const Item *item, ItemStack *stack, MCObject *world,
                              MCObject *player, ItemStack **out) {
@@ -814,14 +809,14 @@ bool mc_server_graph_use_item(MCGameplayPlayer *p) {
         manager_spectator, manager_creative, &use, item_duration, using_item, send_container};
     bool result = false;
     RuntimeActor *a = actor_bindings(p);
-    return a && ItemInWorldManager_tryUseItem(p, p->worldObj, stack, &d, (MCObject *)a, &result);
+    return a && ItemInWorldManager_tryUseItem(p, ((MCGameplayWorld *)(p->living.entity.worldObj)), stack, &d, (MCObject *)a, &result);
 }
 bool mc_server_graph_close(MCGameplayPlayer *p, bool sendClose) {
     return sendClose ? EntityPlayerMPWindows_closeScreen(p)
                      : EntityPlayerMPWindows_closeContainer(p);
 }
 bool mc_server_graph_open_workbench(MCGameplayPlayer *p, int32_t x, int32_t y, int32_t z) {
-    if (p->openContainer != &p->inventoryContainer->container && !mc_server_graph_close(p, true))
+    if (p->openContainer != p->inventoryContainer && !mc_server_graph_close(p, true))
         return false;
     RuntimeActor *a = actor_bindings(p);
     if (!a)
@@ -837,19 +832,19 @@ bool mc_server_graph_open_workbench(MCGameplayPlayer *p, int32_t x, int32_t y, i
     mc_buf_free(&open);
     mc_crafting_position pos = {x, y, z};
     ContainerWorkbench *bench =
-        ok ? ContainerWorkbench_new(p->inventory, (MCObject *)p->worldObj, &pos, &craftingDispatch)
+        ok ? ContainerWorkbench_new(p->inventory, (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)), &pos, &craftingDispatch)
            : NULL;
     if (!bench)
         return false;
     p->openContainer = &bench->container;
     bench->container.windowId = a->currentWindowId;
-    MCObjectHeap_touch(p->object.heap);
+    MCObjectHeap_touch(p->living.entity.object.heap);
     return Container_onCraftGuiOpened(&bench->container, EntityPlayerMPWindows_listener(p));
 }
 bool mc_server_graph_detect_changes(MCGameplayObjects *o) {
     for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS; i++) {
         MCGameplayPlayer *p = (MCGameplayPlayer *)o->players[i];
-        if (p && !p->isDead && !Container_detectAndSendChanges(p->openContainer))
+        if (p && !p->living.entity.isDead && !Container_detectAndSendChanges(p->openContainer))
             return false;
     }
     return true;
@@ -858,7 +853,7 @@ bool mc_server_graph_preflight_inventory(MCGameplayObjects *o) {
     const size_t budget = 2097152u - 8192u;
     for (size_t i = 0; i < MC_TRANSFER_MAX_PLAYERS; i++) {
         MCGameplayPlayer *p = (MCGameplayPlayer *)o->players[i];
-        if (!p || p->isDead)
+        if (!p || p->living.entity.isDead)
             continue;
         mc_buf packet;
         start(&packet, 0x30);

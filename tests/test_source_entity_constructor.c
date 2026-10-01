@@ -229,4 +229,21 @@ static void invalid_watcher(void) {
         release(w);MCObjectHeap_free(heap);
     }
 }
-int main(void){constructors_and_helpers();axis_values();failure_order();graph_identity();branch_dependencies();allocation_prefix();invalid_watcher();printf("source Entity constructor: %u checks passed\n",checks);return 0;}
+static void watcher_flags(void) {
+    MCObjectHeap *heap=MCObjectHeap_new(1024*1024);CHECK(heap);Witness *w=setup(heap,0);
+    EntityItem *item=EntityItem_new_world(heap,(MCObject *)w,(MCObject *)w,&item_methods,&constructors);CHECK(item);
+    Entity *e=&item->entity;
+    CHECK(!Entity_isSilent(e)&&!Entity_isSneaking(e));
+    CHECK(Entity_setSilent(e,true)&&Entity_isSilent(e));
+    CHECK(Entity_setSilent(e,false)&&!Entity_isSilent(e));
+    CHECK(Entity_setSneaking(e,true)&&Entity_isSneaking(e));
+    CHECK(DataWatcher_getWatchableObjectByte(e->dataWatcher,0)==2);
+    CHECK(Entity_setFlag(e,7,true)&&DataWatcher_getWatchableObjectByte(e->dataWatcher,0)==-126);
+    CHECK(Entity_getFlag(e,-1)&&Entity_getFlag(e,31)&&Entity_getFlag(e,63));
+    CHECK(Entity_getFlag(e,8)&&!Entity_getFlag(e,32));
+    CHECK(Entity_setFlag(e,31,false)&&DataWatcher_getWatchableObjectByte(e->dataWatcher,0)==-126);
+    CHECK(Entity_setFlag(e,39,false)&&DataWatcher_getWatchableObjectByte(e->dataWatcher,0)==2);
+    CHECK(Entity_setSneaking(e,false)&&!Entity_isSneaking(e));
+    CHECK(!MCObjectHeap_failed(heap)&&!MCObjectHeap_hasBorrowers(heap));release(w);MCObjectHeap_free(heap);
+}
+int main(void){watcher_flags();constructors_and_helpers();axis_values();failure_order();graph_identity();branch_dependencies();allocation_prefix();invalid_watcher();printf("source Entity constructor: %u checks passed\n",checks);return 0;}

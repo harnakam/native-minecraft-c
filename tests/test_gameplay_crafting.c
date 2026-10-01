@@ -49,7 +49,7 @@ static bool add_stat(MCObject *o, const Item *item, int32_t amount) {
     MCGameplayPlayer *p = (MCGameplayPlayer *)o;
     int32_t id = ItemStack_registryId(item);
     CHECK(id >= 0 && id < 2268);
-    StatBase *stat = p->worldObj->craftStats[id]; /* Original EntityPlayerMP.addStat ignores a null
+    StatBase *stat = ((MCGameplayWorld *)(p->living.entity.worldObj))->craftStats[id]; /* Original EntityPlayerMP.addStat ignores a null
                                                      source craft stat. */
     return !stat || StatFileWriter_increaseStat(p->stats, o, stat, amount);
 }
@@ -78,7 +78,7 @@ static bool achieve(MCObject *o, mc_crafting_achievement value) {
     MCObjectHeap_touch(o->heap);
     char name[80];
     snprintf(name, sizeof(name), "achievement.%s", names[value]);
-    StatBase *stat = StatList_getOneShotStat_ascii(p->worldObj->statList, name);
+    StatBase *stat = StatList_getOneShotStat_ascii(((MCGameplayWorld *)(p->living.entity.worldObj))->statList, name);
     CHECK(stat);
     return StatFileWriter_increaseStat(p->stats, o, stat, 1);
 }
@@ -115,7 +115,7 @@ static void init(Fixture *f) {
                                      StatFileWriter_new(f->game.heap), &dispatch);
     CHECK(f->player);
     f->player->effects = (MCObject *)f->effects;
-    f->player->posY = 10;
+    f->player->living.entity.posY = 10;
     CHECK(MCGameplay_setPlayer(&f->game, 0, "11111111-1111-1111-1111-111111111111",
                                (MCObject *)f->player));
 }
@@ -214,7 +214,7 @@ static void registration_and_all_static(void) {
 static void native_player_crafts(void) {
     Fixture f;
     init(&f);
-    ContainerPlayer *c = f.player->inventoryContainer;
+    ContainerPlayer *c = ((ContainerPlayer *)(f.player->inventoryContainer));
     InventoryCrafting *g = c->craftMatrix;
     put(g, 3, item(&f, 17, 2, 2));
     ItemStack *out = take(&f, &c->container);
@@ -303,20 +303,20 @@ static void source_maps_and_snapshot(void) {
     CHECK(MCGameplay_begin(&f.game, &tx));
     CHECK(MCObjectRootScope_begin(&f.scope, tx.working.heap));
     MCGameplayPlayer *p = (MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
-    CHECK(p->worldObj->manager != f.world->manager &&
-          p->worldObj->itemDisplayContext == p->effects &&
-          p->worldObj->itemDisplayContext != (MCObject *)f.effects);
-    CHECK(p->worldObj->statList != f.world->statList && p->worldObj->furnace != f.world->furnace);
-    CHECK(p->worldObj->craftStats[5] != f.world->craftStats[5] &&
-          p->worldObj->craftStats[5] == p->worldObj->statList->objectCraftStats[5]);
-    CHECK(p->worldObj->statList->dropStat != f.world->statList->dropStat &&
-          StatList_getOneShotStat_ascii(p->worldObj->statList, "stat.drop") ==
-              p->worldObj->statList->dropStat);
+    CHECK(((MCGameplayWorld *)(p->living.entity.worldObj))->manager != f.world->manager &&
+          ((MCGameplayWorld *)(p->living.entity.worldObj))->itemDisplayContext == p->effects &&
+          ((MCGameplayWorld *)(p->living.entity.worldObj))->itemDisplayContext != (MCObject *)f.effects);
+    CHECK(((MCGameplayWorld *)(p->living.entity.worldObj))->statList != f.world->statList && ((MCGameplayWorld *)(p->living.entity.worldObj))->furnace != f.world->furnace);
+    CHECK(((MCGameplayWorld *)(p->living.entity.worldObj))->craftStats[5] != f.world->craftStats[5] &&
+          ((MCGameplayWorld *)(p->living.entity.worldObj))->craftStats[5] == ((MCGameplayWorld *)(p->living.entity.worldObj))->statList->objectCraftStats[5]);
+    CHECK(((MCGameplayWorld *)(p->living.entity.worldObj))->statList->dropStat != f.world->statList->dropStat &&
+          StatList_getOneShotStat_ascii(((MCGameplayWorld *)(p->living.entity.worldObj))->statList, "stat.drop") ==
+              ((MCGameplayWorld *)(p->living.entity.worldObj))->statList->dropStat);
     ItemStack *alias = InventoryPlayer_getItemStack(p->inventory);
     CHECK(alias == InventoryPlayer_getStackInSlot(p->inventory, 0) && alias != s);
     alias->itemDamage = 1000;
-    CHECK(ItemMap_getMapData(alias, p->worldObj) && alias->itemDamage == 11 &&
-          p->worldObj->maps.count == 2);
+    CHECK(ItemMap_getMapData(alias, ((MCGameplayWorld *)(p->living.entity.worldObj))) && alias->itemDamage == 11 &&
+          ((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count == 2);
     CHECK(s->itemDamage == 10 && f.world->maps.count == 1);
     MCObjectRootScope_end(&f.scope);
     CHECK(MCGameplay_abort(&tx));
@@ -387,7 +387,7 @@ static void native_failures(void) {
     CHECK(MCGameplay_free(&f.game));
     mc_world_free(&f.terrain);
     init(&f);
-    CHECK(!MCGameplayCrafting_findMatchingRecipe(f.player->inventoryContainer->craftMatrix,
+    CHECK(!MCGameplayCrafting_findMatchingRecipe(((ContainerPlayer *)(f.player->inventoryContainer))->craftMatrix,
                                                  (MCObject *)f.effects));
     CHECK(MCObjectHeap_failed(f.game.heap));
     MCObjectRootScope_end(&f.scope);
@@ -410,9 +410,9 @@ static void native_failures(void) {
     CHECK(MCObjectRootScope_begin(&f.scope, tx.working.heap));
     MCGameplayPlayer *p = (MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
     ItemStack *ws = InventoryPlayer_getItemStack(p->inventory);
-    CHECK(!ItemMap_getMapData(ws, p->worldObj) && MCObjectHeap_failed(tx.working.heap));
-    CHECK(ws->itemDamage == MC_MAX_MAPS && p->worldObj->maps.next_id == MC_MAX_MAPS + 1 &&
-          p->worldObj->maps.count == MC_MAX_MAPS);
+    CHECK(!ItemMap_getMapData(ws, ((MCGameplayWorld *)(p->living.entity.worldObj))) && MCObjectHeap_failed(tx.working.heap));
+    CHECK(ws->itemDamage == MC_MAX_MAPS && ((MCGameplayWorld *)(p->living.entity.worldObj))->maps.next_id == MC_MAX_MAPS + 1 &&
+          ((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count == MC_MAX_MAPS);
     CHECK(s->itemDamage == 1000 && f.world->maps.next_id == MC_MAX_MAPS);
     MCObjectRootScope_end(&f.scope);
     CHECK(MCGameplay_abort(&tx));

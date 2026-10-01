@@ -129,7 +129,7 @@ static bool display_null(MCObject *ctx, MCObject *mc) {
     Fixture *f = (Fixture *)ctx;
     event(f, GUI);
     CHECK(!InventoryPlayer_getItemStack(f->player->inventory));
-    CHECK(f->player->openContainer == &f->player->inventoryContainer->container);
+    CHECK(f->player->openContainer == f->player->inventoryContainer);
     if (f->failGUI)
         return false;
     if (f->screenOpen && f->screenContainer) {
@@ -144,7 +144,7 @@ static bool use_item(MCObject *ctx, const Item *item, ItemStack *s, MCObject *wo
                      MCObject *player, ItemStack **out) {
     Fixture *f = (Fixture *)ctx;
     event(f, USE);
-    CHECK(item == s->item && world == (MCObject *)f->player->worldObj &&
+    CHECK(item == s->item && world == (MCObject *)((MCGameplayWorld *)(f->player->living.entity.worldObj)) &&
           player == (MCObject *)f->player);
     if (f->changeCount)
         --s->stackSize;
@@ -253,7 +253,7 @@ static void clear(Fixture *f) { f->packetCount = f->eventCount = 0; }
 static ContainerWorkbench *bench(Fixture *f) {
     mc_crafting_position pos = {0, 0, 0};
     ContainerWorkbench *b = ContainerWorkbench_new(
-        f->player->inventory, (MCObject *)f->player->worldObj, &pos, &crafting);
+        f->player->inventory, (MCObject *)((MCGameplayWorld *)(f->player->living.entity.worldObj)), &pos, &crafting);
     CHECK(b);
     b->container.windowId = 77;
     f->player->openContainer = &b->container;
@@ -277,23 +277,23 @@ static void test_drop_and_close(void) {
     CHECK(((C07PacketPlayerDigging *)f->packets[1])->status ==
           C07PacketPlayerDigging_action(C07_DROP_ALL_ITEMS));
     CHECK(InventoryPlayer_setItemStack(p->inventory, s));
-    CHECK(InventoryCrafting_setInventorySlotContents(p->inventoryContainer->craftMatrix, 0, s));
-    CHECK(InventoryCraftResult_setInventorySlotContents(p->inventoryContainer->craftResult, 0, s));
+    CHECK(InventoryCrafting_setInventorySlotContents(((ContainerPlayer *)(p->inventoryContainer))->craftMatrix, 0, s));
+    CHECK(InventoryCraftResult_setInventorySlotContents(((ContainerPlayer *)(p->inventoryContainer))->craftResult, 0, s));
     clear(f);
     CHECK(EntityPlayerSP_closeScreenAndDropStack(f->sp));
     CHECK(f->packetCount == 0 && f->eventCount == 1 && f->events[0] == GUI);
-    CHECK(InventoryCrafting_getStackInSlot(p->inventoryContainer->craftMatrix, 0) == s);
-    CHECK(InventoryCraftResult_getStackInSlot(p->inventoryContainer->craftResult, 0) == s);
+    CHECK(InventoryCrafting_getStackInSlot(((ContainerPlayer *)(p->inventoryContainer))->craftMatrix, 0) == s);
+    CHECK(InventoryCraftResult_getStackInSlot(((ContainerPlayer *)(p->inventoryContainer))->craftResult, 0) == s);
     CHECK(InventoryPlayer_setItemStack(p->inventory, s));
-    f->screenContainer = &p->inventoryContainer->container;
+    f->screenContainer = p->inventoryContainer;
     f->screenOpen = true;
     clear(f);
     CHECK(EntityPlayerSP_closeScreen(f->sp));
     CHECK(f->packetCount == 1 && ((C0DPacketCloseWindow *)f->packets[0])->windowId == 0);
     CHECK(f->events[0] == QUEUE && f->events[1] == GUI && f->events[2] == DROP);
     CHECK(f->drops[0] == s &&
-          !InventoryCrafting_getStackInSlot(p->inventoryContainer->craftMatrix, 0));
-    CHECK(!InventoryCraftResult_getStackInSlot(p->inventoryContainer->craftResult, 0));
+          !InventoryCrafting_getStackInSlot(((ContainerPlayer *)(p->inventoryContainer))->craftMatrix, 0));
+    CHECK(!InventoryCraftResult_getStackInSlot(((ContainerPlayer *)(p->inventoryContainer))->craftResult, 0));
     ContainerWorkbench *b = bench(f);
     CHECK(InventoryCrafting_setInventorySlotContents(b->craftMatrix, 0, s));
     f->screenContainer = &b->container;
@@ -318,7 +318,7 @@ static void test_close_failures_and_empty_stats(void) {
         CHECK(f->packetCount == 1);
         CHECK(InventoryPlayer_getItemStack(f->player->inventory) == (gui ? NULL : s));
         CHECK(f->player->openContainer ==
-              (gui ? &f->player->inventoryContainer->container : &b->container));
+              (gui ? f->player->inventoryContainer : &b->container));
         finish(&g, &scope, true);
     }
     MCGameplay g = {0};
@@ -368,7 +368,7 @@ static void test_sync_and_creative(void) {
     CHECK(PlayerControllerMP_sendPacketDropItem(c, s));
     CHECK(((C10PacketCreativeInventoryAction *)f->packets[2])->slotId == -1);
     MCGameplayPlayer *replacement = MCGameplayPlayer_new(
-        f->player->worldObj, NBTString_fromASCII(g.heap, "Second"), NULL, &crafting);
+        ((MCGameplayWorld *)(f->player->living.entity.worldObj)), NBTString_fromASCII(g.heap, "Second"), NULL, &crafting);
     CHECK(replacement);
     replacement->effects = (MCObject *)f;
     f->player = replacement;
@@ -398,7 +398,7 @@ static void test_use(void) {
         if (mode == 4)
             f->controller->currentGameType = &PlayerControllerMP_SPECTATOR;
         bool changed = true;
-        CHECK(PlayerControllerMP_sendUseItem(f->controller, p, p->worldObj, s, &changed));
+        CHECK(PlayerControllerMP_sendUseItem(f->controller, p, ((MCGameplayWorld *)(p->living.entity.worldObj)), s, &changed));
         if (mode == 4) {
             CHECK(!changed && f->eventCount == 0 && s->stackSize == 7);
         } else {
@@ -424,7 +424,7 @@ static void test_use(void) {
         CHECK(InventoryPlayer_setInventorySlotContents(f->player->inventory, 0, s));
         f->useReturn = s;
         bool changed = true;
-        CHECK(PlayerControllerMP_sendUseItem(f->controller, f->player, f->player->worldObj, s,
+        CHECK(PlayerControllerMP_sendUseItem(f->controller, f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)), s,
                                             &changed));
         CHECK(!changed && InventoryPlayer_getCurrentItem(f->player->inventory) == s);
         CHECK(s->stackSize == signed_counts[i] && f->packetCount == 1);
@@ -439,7 +439,7 @@ static void test_use(void) {
         ItemStack *s = stack(f, 3);
         CHECK(InventoryPlayer_setInventorySlotContents(f->player->inventory, 0, s));
         bool out = true;
-        CHECK(!PlayerControllerMP_sendUseItem(f->controller, f->player, f->player->worldObj,
+        CHECK(!PlayerControllerMP_sendUseItem(f->controller, f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)),
                                               missing ? NULL : s, &out));
         CHECK(out && f->packetCount == 1 &&
               C08PacketPlayerBlockPlacement_isInstance(f->packets[0]));
@@ -453,12 +453,12 @@ static void test_use(void) {
     ItemStack *s = stack(f, 4);
     f->useReturn = s;
     ItemStack *out = NULL;
-    CHECK(ItemStack_useItemRightClick(s, (MCObject *)f->player->worldObj, (MCObject *)f->player,
+    CHECK(ItemStack_useItemRightClick(s, (MCObject *)((MCGameplayWorld *)(f->player->living.entity.worldObj)), (MCObject *)f->player,
                                       &item_use, (MCObject *)f, &out) &&
           out == s);
     f->useReturn = NULL;
     out = s;
-    CHECK(ItemStack_useItemRightClick(s, (MCObject *)f->player->worldObj, (MCObject *)f->player,
+    CHECK(ItemStack_useItemRightClick(s, (MCObject *)((MCGameplayWorld *)(f->player->living.entity.worldObj)), (MCObject *)f->player,
                                       &item_use, (MCObject *)f, &out) &&
           !out);
     finish(&g, &scope, false);
@@ -467,7 +467,7 @@ static void test_use(void) {
     s = ItemStack_new(g.heap, NULL, 1, 0);
     CHECK(s);
     out = (ItemStack *)f;
-    CHECK(!ItemStack_useItemRightClick(s, (MCObject *)f->player->worldObj, (MCObject *)f->player,
+    CHECK(!ItemStack_useItemRightClick(s, (MCObject *)((MCGameplayWorld *)(f->player->living.entity.worldObj)), (MCObject *)f->player,
                                        &item_use, (MCObject *)f, &out) &&
           out == (ItemStack *)f);
     finish(&g, &scope, true);
@@ -524,7 +524,7 @@ static void test_required_and_foreign_dependencies(void) {
             f->useReturn = s;
             f->failUse = true;
             ItemStack *out = (ItemStack *)f;
-            CHECK(!ItemStack_useItemRightClick(s, (MCObject *)f->player->worldObj,
+            CHECK(!ItemStack_useItemRightClick(s, (MCObject *)((MCGameplayWorld *)(f->player->living.entity.worldObj)),
                                                (MCObject *)f->player, &item_use, (MCObject *)f,
                                                &out) &&
                   out == (ItemStack *)f);
@@ -534,7 +534,7 @@ static void test_required_and_foreign_dependencies(void) {
             f->controller->actionsDependencies = &d;
             CHECK(InventoryPlayer_setInventorySlotContents(f->player->inventory, 0, s));
             bool out = true;
-            CHECK(!PlayerControllerMP_sendUseItem(f->controller, f->player, f->player->worldObj, s,
+            CHECK(!PlayerControllerMP_sendUseItem(f->controller, f->player, ((MCGameplayWorld *)(f->player->living.entity.worldObj)), s,
                                                   &out) &&
                   out && f->packetCount == 1);
         }
@@ -559,7 +559,7 @@ static void test_required_and_foreign_dependencies(void) {
             f->useReturn = ItemStack_new(foreign, ItemStack_registryItem(1), 2, 0);
             CHECK(f->useReturn);
             ItemStack *out = s;
-            CHECK(!ItemStack_useItemRightClick(s, (MCObject *)f->player->worldObj,
+            CHECK(!ItemStack_useItemRightClick(s, (MCObject *)((MCGameplayWorld *)(f->player->living.entity.worldObj)),
                                                (MCObject *)f->player, &item_use, (MCObject *)f,
                                                &out) &&
                   out == s);

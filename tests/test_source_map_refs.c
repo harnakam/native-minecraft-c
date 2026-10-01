@@ -31,11 +31,11 @@ static MCGameplayPlayer *actor(MCGameplay *game,MCGameplayWorld *world,unsigned 
     CHECK(MCGameplayCrafting_nativeDispatch(&deps,&effects)); deps.findMatchingRecipe=recipe; deps.getRemainingItems=remaining;
     MCGameplayPlayer *p=MCGameplayPlayer_new(world,NBTString_fromASCII(game->heap,name),NULL,&deps); CHECK(p);
     char uuid[37]; snprintf(uuid,sizeof(uuid),"00000000-0000-0000-0000-%012u",index+1);
-    CHECK(MCGameplay_setPlayer(game,index,uuid,(MCObject *)p)); p->dimension=world->dimension;
+    CHECK(MCGameplay_setPlayer(game,index,uuid,(MCObject *)p)); p->living.entity.dimension=world->dimension;
     return p;
 }
 static ItemStack *held(MCGameplayPlayer *p,int32_t count,int32_t damage,int slot) {
-    ItemStack *s=ItemStack_new(p->object.heap,ItemStack_registryItem(358),count,damage); CHECK(s);
+    ItemStack *s=ItemStack_new(p->living.entity.object.heap,ItemStack_registryItem(358),count,damage); CHECK(s);
     CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,slot,s)); return s;
 }
 static mc_map_info *add_map(MCGameplayWorld *w,int32_t id,uint8_t scale) {
@@ -51,14 +51,14 @@ static unsigned rectangle(mc_buf *b,int32_t id,unsigned *x,unsigned *z,unsigned 
 }
 static void lifecycle(void) {
     MCGameplay game={0}; MCGameplayWorld *w=setup(&game,NULL);
-    MCGameplayPlayer *a=actor(&game,w,0,"A"),*b=actor(&game,w,1,"B"); a->entityId=0; b->entityId=-1;
+    MCGameplayPlayer *a=actor(&game,w,0,"A"),*b=actor(&game,w,1,"B"); a->living.entity.entityId=0; b->living.entity.entityId=-1;
     ItemStack *s=held(a,0,4,0),*second=held(b,-1,4,38); mc_map_info *m=add_map(w,4,0); bool changed=true;
     CHECK(ItemMap_onUpdate(s,w,(MCObject *)a,0,false,&changed) && !changed);
     CHECK(ItemMap_onUpdate(second,w,(MCObject *)b,2,false,&changed) && !changed);
     CHECK(m->icon_count==2 && InventoryPlayer_hasItemStack(a->inventory,s) && InventoryPlayer_hasItemStack(b->inventory,s));
     mc_MapInfo *ia=MapData_getMapInfo(m,w,a),*ib=MapData_getMapInfo(m,w,b); CHECK(ia && ib && ia!=ib);
     CHECK(ia->update_counter==0 && ib->update_counter==0);
-    b->entityId=0; CHECK(MapData_getMapInfo(m,w,b)==ia); b->entityId=-1;
+    b->living.entity.entityId=0; CHECK(MapData_getMapInfo(m,w,b)==ia); b->living.entity.entityId=-1;
     mc_buf packet={0}; unsigned x,z,h;
     CHECK(ItemMap_createMapDataPacket(s,w,a,&packet)==1 && rectangle(&packet,4,&x,&z,&h)==128 && h==128);
     CHECK(ItemMap_createMapDataPacket(second,w,b,&packet)==1 && rectangle(&packet,4,&x,&z,&h)==128);
@@ -72,7 +72,7 @@ static void lifecycle(void) {
     CHECK(ItemMap_createMapDataPacket(s,w,a,&packet)==0 && ia->packet_counter==(uint32_t)INT32_MAX+2);
     ia->packet_counter=(uint32_t)-5;
     CHECK(ItemMap_createMapDataPacket(s,w,a,&packet)==1 && ia->packet_counter==(uint32_t)-4);
-    a->isDead=b->isDead=true;
+    a->living.entity.isDead=b->living.entity.isDead=true;
     CHECK(MapData_updateVisiblePlayers(m,w,a,s));
     CHECK(MapData_getMapPacket(m,s,w,a,&packet)==0 && MapData_getMapPacket(m,second,w,b,&packet)==1);
     CHECK(MapData_updateVisiblePlayers(m,w,b,second));
@@ -87,9 +87,12 @@ static NBTTagCompound *decorations(ItemStack *s,NBTString *key,double x,double r
     CHECK(NBTTagList_appendTag(list,(NBTBase *)entry) && NBTTagCompound_setTag_ascii(root,"Decorations",(NBTBase *)list));
     CHECK(ItemStack_setTagCompound(s,root)); return entry;
 }
-static bool named_a(const MCObject *o,void *context) {(void)context;return NBTString_equalsASCII(((const MCGameplayPlayer *)o)->name,"A");}
+static bool named_a(const MCObject *o,void *context) {(void)context;return NBTString_equalsASCII(((const MCGameplayPlayer *)o)->gameProfile->name,"A");}
 static void nbt_and_graph_identity(void) {
     MCGameplay game={0}; MCGameplayWorld *w=setup(&game,NULL); MCGameplayPlayer *p=actor(&game,w,0,"A");
+    /* This MapData snapshot fixture starts at the map centre, independently
+       of EntityPlayer constructor spawn coordinates. */
+    CHECK(Entity_setPosition(&p->living.entity,0,1,0));
     ItemStack *s=held(p,1,4,0); mc_map_info *m=add_map(w,4,0);
     const uint16_t units[]={'x',0,0xd800,'x'}; NBTString *key=NBTString_fromUTF16(game.heap,units,4); CHECK(key);
     NBTTagCompound *entry=decorations(s,key,-63.01,90); NBTTagCompound *tag=s->stackTagCompound;
@@ -102,14 +105,14 @@ static void nbt_and_graph_identity(void) {
     CHECK(MCObjectHeap_collect(game.heap)); /* Player + isolated UTF16 key remain MapData strong edges. */
     CHECK(MapData_getMapInfo(m,w,p) && NBTString_length(key)==4 && NBTString_units(key)[2]==0xd800);
     MCGameplayTransaction tx={0}; CHECK(MCGameplay_begin(&game,&tx)); MCGameplayWorld *cw=(MCGameplayWorld *)MCGameplay_get(&tx.working)->world;
-    MCGameplayPlayer *cp=(MCGameplayPlayer *)MCObjectHeap_findObject(tx.working.heap,p->object.klass,named_a,NULL); CHECK(cp && cp!=p && cp->worldObj==cw);
+    MCGameplayPlayer *cp=(MCGameplayPlayer *)MCObjectHeap_findObject(tx.working.heap,p->living.entity.object.klass,named_a,NULL); CHECK(cp && cp!=p && ((MCGameplayWorld *)(cp->living.entity.worldObj))==cw);
     NBTTagCompound *ctag=InventoryPlayer_getStackInSlot(cp->inventory,0)->stackTagCompound;
     CHECK(ctag!=tag && NBTTagCompound_getTag_ascii(ctag,"cycle")== (NBTBase *)ctag);
     mc_map_info *cm=mc_maps_find(&cw->maps,4); CHECK(cm && cm->tracking!=m->tracking && cm->icon_count==2);
     CHECK(MCObjectHeap_collect(tx.working.heap)); mc_buf packet={0};
     CHECK(MapData_getMapPacket(cm,InventoryPlayer_getStackInSlot(cp->inventory,0),cw,cp,&packet)==1);
     mc_MapInfo *before=MapData_getMapInfo(m,w,p),*after=MapData_getMapInfo(cm,cw,cp); CHECK(before->dirty && !after->dirty && before!=after);
-    cp->posX=30; CHECK(MapData_updateVisiblePlayers(cm,cw,cp,InventoryPlayer_getStackInSlot(cp->inventory,0)) && cm->icons[0].x==60 && m->icons[0].x==0);
+    cp->living.entity.posX=30; CHECK(MapData_updateVisiblePlayers(cm,cw,cp,InventoryPlayer_getStackInSlot(cp->inventory,0)) && cm->icons[0].x==60 && m->icons[0].x==0);
     CHECK(MCGameplay_abort(&tx)); CHECK(MapData_getMapInfo(m,w,p)->dirty && m->icon_count==2);
     mc_buf_free(&packet); CHECK(MCGameplay_free(&game));
 }
@@ -121,7 +124,7 @@ static void branches_and_failures(void) {
     mc_map_info *m=mc_maps_find(&w->maps,0); CHECK(m && m->scale==3 && m->center_x==-576 && m->center_z==1472);
     mc_buf b={0}; CHECK(ItemMap_createMapDataPacket(s,w,p,&b)==0);
     CHECK(ItemMap_createMapDataPacket(s,w,NULL,&b)==0);
-    p->dimension=1; CHECK(ItemMap_onUpdate(s,w,(MCObject *)p,0,false,&changed) && !changed && m->icon_count==0);
+    p->living.entity.dimension=1; CHECK(ItemMap_onUpdate(s,w,(MCObject *)p,0,false,&changed) && !changed && m->icon_count==0);
     w->dimension=1; CHECK(ItemMap_updateMapData(w,(MCObject *)p,m,&changed) && !changed); /* mismatch bypasses terrain */
     w->dimension=0; MCGameplayTransaction tx={0}; CHECK(MCGameplay_begin(&game,&tx));
     MCGameplayWorld *cw=(MCGameplayWorld *)MCGameplay_get(&tx.working)->world; MCGameplayPlayer *cp=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
@@ -136,14 +139,14 @@ static void branches_and_failures(void) {
 }
 static void mutable_entity_keys(void) {
     MCGameplay game={0}; MCGameplayWorld *w=setup(&game,NULL); MCGameplayPlayer *p=actor(&game,w,0,"A"); ItemStack *s=held(p,1,4,0); mc_map_info *m=add_map(w,4,0);
-    p->entityId=0; mc_MapInfo *old=MapData_getMapInfo(m,w,p); CHECK(old); old->update_counter=11;
-    p->entityId=7; mc_MapInfo *newer=MapData_getMapInfo(m,w,p); CHECK(newer && newer!=old); newer->update_counter=17;
-    p->isDead=true; CHECK(MapData_updateVisiblePlayers(m,w,p,s));
-    p->isDead=false; p->entityId=0;
+    p->living.entity.entityId=0; mc_MapInfo *old=MapData_getMapInfo(m,w,p); CHECK(old); old->update_counter=11;
+    p->living.entity.entityId=7; mc_MapInfo *newer=MapData_getMapInfo(m,w,p); CHECK(newer && newer!=old); newer->update_counter=17;
+    p->living.entity.isDead=true; CHECK(MapData_updateVisiblePlayers(m,w,p,s));
+    p->living.entity.isDead=false; p->living.entity.entityId=0;
     /* Removal of the first list element removes the current hash-7 node; the
        hash-0 node still retains the original MapInfo outside playersArrayList. */
     CHECK(MapData_getMapInfo(m,w,p)==old && old->update_counter==11);
-    mc_buf b={0}; CHECK(MapData_getMapPacket(m,s,w,p,&b)==1); p->entityId=7;
+    mc_buf b={0}; CHECK(MapData_getMapPacket(m,s,w,p,&b)==1); p->living.entity.entityId=7;
     mc_MapInfo *third=MapData_getMapInfo(m,w,p); CHECK(third && third!=old && third!=newer && third->update_counter==0);
     CHECK(!MCObjectHeap_failed(game.heap)); mc_buf_free(&b); CHECK(MCGameplay_free(&game));
 }
@@ -185,7 +188,7 @@ static void facts(void) {
     for (unsigned xi=0;xi<sizeof xs/sizeof *xs;xi++) for (unsigned yi=0;yi<sizeof yaws/sizeof *yaws;yi++)
     for (int dim=-1;dim<=1;dim++) for (int scale=0;scale<=4;scale+=4) for (int ti=0;ti<2;ti++) {
         MCGameplay game={0}; MCGameplayWorld *w=setup(&game,NULL); w->dimension=dim; w->worldTime=ti?INT64_MAX:0;
-        MCGameplayPlayer *p=actor(&game,w,0,"A"); p->posX=xs[xi]; p->posZ=-xs[xi]; p->rotationYaw=yaws[yi];
+        MCGameplayPlayer *p=actor(&game,w,0,"A"); p->living.entity.posX=xs[xi]; p->living.entity.posZ=-xs[xi]; p->living.entity.rotationYaw=yaws[yi];
         ItemStack *s=held(p,(int32_t)(xi%3)-1,4,xi%2==0?0:38); mc_map_info *m=add_map(w,4,(uint8_t)scale);
         const uint16_t units[]={'k','e','y',0,0xd800}; NBTString *key=NBTString_fromUTF16(game.heap,units,5); CHECK(key);
         NBTTagCompound *entry=decorations(s,key,xs[xi],(double)yaws[yi]); CHECK(NBTTagCompound_setDouble_ascii(entry,"z",-xs[xi]));
@@ -200,4 +203,26 @@ static void facts(void) {
     }
     fprintf(stderr,"native map refs: %u vectors, %u assertions\n",rows,checks);
 }
-int main(int argc,char **argv) { if (argc==2 && !strcmp(argv[1],"--facts")) { facts();return 0; } lifecycle(); nbt_and_graph_identity(); branches_and_failures(); mutable_entity_keys(); packet_failure_rollback(); nullable_hash_key(); survey(); printf("source map refs: %u checks passed\n",checks); return 0; }
+static void nullable_profile_name(void) {
+    MCGameplay game={0};MCGameplayWorld *w=setup(&game,NULL);
+    MCGameplayPlayer *p=actor(&game,w,0,"NameFixture");
+    NativeGameProfile *profile=NativeGameProfile_new(game.heap,p->living.entity.entityUniqueID,NULL);CHECK(profile);
+    p->gameProfile=profile;MCObjectHeap_touch(game.heap);
+    CHECK(EntityPlayer_getName(p)==NULL&&!MCObjectHeap_failed(game.heap));
+    ItemStack *s=held(p,1,4,0);mc_map_info *m=add_map(w,4,0);
+    CHECK(MapData_updateVisiblePlayers(m,w,p,s)&&m->icon_count==1);
+    CHECK(InventoryPlayer_setInventorySlotContents(p->inventory,0,NULL));
+    CHECK(MapData_updateVisiblePlayers(m,w,p,s)&&m->icon_count==0);
+    CHECK(!MCObjectHeap_failed(game.heap)&&MCGameplay_free(&game));
+    w=setup(&game,NULL);p=actor(&game,w,0,"SkippedName");s=held(p,1,4,0);m=add_map(w,4,0);
+    p->gameProfile=NULL;p->living.entity.dimension=w->dimension+1;MCObjectHeap_touch(game.heap);
+    CHECK(MapData_updateVisiblePlayers(m,w,p,s)&&m->icon_count==0&&!MCObjectHeap_failed(game.heap));
+    p->living.entity.dimension=w->dimension;p->living.entity.isDead=true;MCObjectHeap_touch(game.heap);
+    CHECK(MapData_updateVisiblePlayers(m,w,p,s)&&m->icon_count==0&&!MCObjectHeap_failed(game.heap));
+    CHECK(MCGameplay_free(&game));
+    w=setup(&game,NULL);p=actor(&game,w,0,"BrokenProfile");s=held(p,1,4,0);m=add_map(w,4,0);
+    p->gameProfile=NULL;MCObjectHeap_touch(game.heap);
+    CHECK(!MapData_updateVisiblePlayers(m,w,p,s)&&MCObjectHeap_failed(game.heap));
+    CHECK(m->icon_count==0&&!MCObjectHeap_hasBorrowers(game.heap));CHECK(MCGameplay_free(&game));
+}
+int main(int argc,char **argv) { if (argc==2 && !strcmp(argv[1],"--facts")) { facts();return 0; } nullable_profile_name(); lifecycle(); nbt_and_graph_identity(); branches_and_failures(); mutable_entity_keys(); packet_failure_rollback(); nullable_hash_key(); survey(); printf("source map refs: %u checks passed\n",checks); return 0; }

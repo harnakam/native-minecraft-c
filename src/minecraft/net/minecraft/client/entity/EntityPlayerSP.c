@@ -30,7 +30,7 @@ static bool end(EntityPlayerSP *p, MCObjectRootScope *scope, bool ok) {
 EntityPlayerSP *EntityPlayerSP_nativeNew(MCGameplayPlayer *actor, NetHandlerPlayClient *handler,
                                          MCObject *mc, MCObject *ctx,
                                          const EntityPlayerSPDependencies *d) {
-    MCObjectHeap *h = actor ? actor->object.heap : NULL;
+    MCObjectHeap *h = actor ? actor->living.entity.object.heap : NULL;
     MCObjectRootScope scope = {0};
     if (!MCGameplayPlayer_isInstance((MCObject *)actor) ||
         !NetHandlerPlayClient_isInstance((MCObject *)handler) || !mc || !d || !d->addToSendQueue ||
@@ -111,7 +111,7 @@ bool EntityPlayerSP_closeScreenAndDropStack(EntityPlayerSP *p) {
         /* Original EntityPlayer.closeScreen superclass body: only this assignment.
            Minecraft's GUI dependency subsequently closes its retained old GUI. */
         actor->openContainer =
-            actor->inventoryContainer ? &actor->inventoryContainer->container : NULL;
+            ((ContainerPlayer *)(actor->inventoryContainer)) ? actor->inventoryContainer : NULL;
         MCObjectHeap_touch(p->object.heap);
         ok = p->dependencies && p->dependencies->displayGuiScreenNull && p->mc &&
              MCObjectRootScope_pin(&scope, p->mc) &&

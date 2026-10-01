@@ -3,7 +3,7 @@ static bool ready(const EntityPlayerMPStatsDependencies *d){return d&&d->getWorl
 static bool ref(MCObjectHeap *h,MCObject *o,bool nullable){if((!o&&!nullable)||(o&&o->heap!=h)||MCObjectHeap_failed(h)){MCObjectHeap_fail(h);return false;}return true;}
 static bool execute(MCGameplayPlayer *p,StatBase *stat,int32_t amount,bool reset,MCObject *context,const EntityPlayerMPStatsDependencies *d) {
     if(!stat)return true;
-    MCObjectHeap *h=p?p->object.heap:stat->object.heap;
+    MCObjectHeap *h=p?p->living.entity.object.heap:stat->object.heap;
     if(!MCGameplayPlayer_isInstance((MCObject *)p)||stat->object.heap!=h||!ready(d)||
         !ref(h,context,true)||!StatisticsFile_isInstance((MCObject *)p->stats)||((MCObject *)p->stats)->heap!=h) {MCObjectHeap_fail(h);return false;}
     MCObjectRootScope scope={0};if(!MCObjectRootScope_begin(&scope,h))return false;

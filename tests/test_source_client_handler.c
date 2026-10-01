@@ -89,8 +89,8 @@ static bool close_screen(MCObject *ctx, MCGameplayPlayer *p) {
     if (c->failClose)
         return false;
     CHECK(InventoryPlayer_setItemStack(p->inventory, NULL));
-    p->openContainer = &p->inventoryContainer->container;
-    MCObjectHeap_touch(p->object.heap);
+    p->openContainer = p->inventoryContainer;
+    MCObjectHeap_touch(p->living.entity.object.heap);
     return true;
 }
 static bool send_queue(MCObject *ctx, NetHandlerPlayClient *h,
@@ -230,13 +230,13 @@ static void failed_finish(MCGameplay *g, MCObjectRootScope *s) {
     CHECK(MCGameplay_free(g));
 }
 static ItemStack *stack(MCGameplayPlayer *p, int32_t count) {
-    ItemStack *s = ItemStack_new(p->object.heap, ItemStack_registryItem(1), count, 0);
+    ItemStack *s = ItemStack_new(p->living.entity.object.heap, ItemStack_registryItem(1), count, 0);
     CHECK(s);
     return s;
 }
 static S2FPacketSetSlot *slot_packet(MCGameplayPlayer *p, int32_t window, int32_t index,
                                      ItemStack *s) {
-    S2FPacketSetSlot *packet = S2FPacketSetSlot_new_empty(p->object.heap);
+    S2FPacketSetSlot *packet = S2FPacketSetSlot_new_empty(p->living.entity.object.heap);
     CHECK(packet);
     packet->windowId = window;
     packet->slot = index;
@@ -244,17 +244,17 @@ static S2FPacketSetSlot *slot_packet(MCGameplayPlayer *p, int32_t window, int32_
     return packet;
 }
 static S30PacketWindowItems *items_packet(MCGameplayPlayer *p, int32_t window, int32_t count) {
-    S30PacketWindowItems *packet = S30PacketWindowItems_new_empty(p->object.heap);
+    S30PacketWindowItems *packet = S30PacketWindowItems_new_empty(p->living.entity.object.heap);
     CHECK(packet);
     packet->windowId = window;
-    packet->itemStacks = ItemStackArray_new(p->object.heap, count);
+    packet->itemStacks = ItemStackArray_new(p->living.entity.object.heap, count);
     CHECK(packet->itemStacks);
     return packet;
 }
 static ContainerWorkbench *bench(MCGameplayPlayer *p, int32_t window) {
     mc_crafting_position pos = {0, 0, 0};
     ContainerWorkbench *b =
-        ContainerWorkbench_new(p->inventory, (MCObject *)p->worldObj, &pos, &crafting);
+        ContainerWorkbench_new(p->inventory, (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)), &pos, &crafting);
     CHECK(b);
     b->container.windowId = window;
     p->openContainer = &b->container;
@@ -288,7 +288,7 @@ static void cursor_and_hotbar(void) {
         reset_events(c);
         packet = slot_packet(p, 0, 36, s);
         CHECK(NetHandlerPlayClient_handleSetSlot(h, packet));
-        CHECK(at(&p->inventoryContainer->container, 36) == s && at(&b->container, 37) == s &&
+        CHECK(at(p->inventoryContainer, 36) == s && at(&b->container, 37) == s &&
               s->animationsToGo == 5);
         CHECK(c->eventCount == 5 && c->events[2] == SCREEN && c->events[3] == SELECTED &&
               c->events[4] == TAB);
@@ -301,9 +301,9 @@ static void cursor_and_hotbar(void) {
         CHECK(NetHandlerPlayClient_handleSetSlot(h, slot_packet(p, 0, 36, larger)));
         CHECK(larger->animationsToGo == (counts[n] == INT32_MAX ? 29 : 5));
         CHECK(NetHandlerPlayClient_handleSetSlot(h, slot_packet(p, 0, 36, NULL)));
-        CHECK(!at(&p->inventoryContainer->container, 36));
+        CHECK(!at(p->inventoryContainer, 36));
         CHECK(NetHandlerPlayClient_handleSetSlot(h, slot_packet(p, 0, 44, s)));
-        CHECK(at(&p->inventoryContainer->container, 44) == s);
+        CHECK(at(p->inventoryContainer, 44) == s);
         finish(&g, &scope);
     }
 }
@@ -322,7 +322,7 @@ static void routing_and_creative_predicates(void) {
         CHECK(c->eventCount == (creative ? 5u : 3u));
         ContainerWorkbench *b = bench(p, 7);
         CHECK(NetHandlerPlayClient_handleSetSlot(h, slot_packet(p, 0, 10, s)));
-        CHECK(!at(&p->inventoryContainer->container, 10));
+        CHECK(!at(p->inventoryContainer, 10));
         CHECK(NetHandlerPlayClient_handleSetSlot(h, slot_packet(p, 7, 1, s)));
         CHECK(at(&b->container, 1) == s && s->animationsToGo == 0);
         CHECK(NetHandlerPlayClient_handleSetSlot(h, slot_packet(p, 6, INT32_MAX, s)));
@@ -425,7 +425,7 @@ static void confirmations_close_and_thread_order(void) {
         CHECK(S2EPacketCloseWindow_processPacket(close, NetHandlerPlayClient_asHandler(h)));
         CHECK(c->eventCount == 3 && c->events[2] == CLOSE &&
               !InventoryPlayer_getItemStack(p->inventory) &&
-              p->openContainer == &p->inventoryContainer->container);
+              p->openContainer == p->inventoryContainer);
         CHECK(InventoryCrafting_getStackInSlot(b->craftMatrix, 0) == s && c->sentCount == 2);
         finish(&g, &scope);
     }
@@ -456,7 +456,7 @@ static void replacement_and_snapshot_aliases(void) {
     NetHandlerPlayClient *h;
     MCGameplayPlayer *p = setup(&g, &scope, &c, &h);
     MCGameplayPlayer *replacement = MCGameplayPlayer_new(
-        p->worldObj, NBTString_fromASCII(g.heap, "Replacement"), NULL, &crafting);
+        ((MCGameplayWorld *)(p->living.entity.worldObj)), NBTString_fromASCII(g.heap, "Replacement"), NULL, &crafting);
     CHECK(replacement);
     CHECK(MCGameplay_setPlayer(&g, 1, "22222222-2222-2222-2222-222222222222",
                                (MCObject *)replacement));
@@ -531,7 +531,7 @@ static void dependency_failures(void) {
             d.closeScreenAndDropStack = NULL;
             CHECK(!NetHandlerPlayClient_nativeNew(p, (MCObject *)c, (MCObject *)c, &d));
         } else if (failure == 7) {
-            p->worldObj->remote = false;
+            ((MCGameplayWorld *)(p->living.entity.worldObj))->remote = false;
             CHECK(!NetHandlerPlayClient_nativeNew(p, (MCObject *)c, (MCObject *)c, &dependencies));
         } else {
             CHECK(!NetHandlerPlayClient_handleSetSlot(h, NULL));
@@ -688,7 +688,7 @@ static void metadata_owner(MCGameplay *game, MCGameplayPlayer *p, Controller *c,
     c->trackedEntityId = INT32_MIN;
     CHECK(MCGameplay_addItem(game, (MCObject *)c));
     c->watcher =
-        DataWatcher_new(p->object.heap, (MCObject *)c, &watcher_dependencies, (MCObject *)c);
+        DataWatcher_new(p->living.entity.object.heap, (MCObject *)c, &watcher_dependencies, (MCObject *)c);
     CHECK(c->watcher && DataWatcher_addObjectByDataType(c->watcher, 10, 5));
     WatchableObject *watched = DataWatcher_nativeGetWatchedObject(c->watcher, 10);
     CHECK(watched && WatchableObject_setObject(watched, (MCObject *)initial));
@@ -827,7 +827,7 @@ static void metadata_wire_graph_rollback(void) {
         MCGameplayPlayer *wp = (MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
         NetHandlerPlayClient *wh = (NetHandlerPlayClient *)wp->handler;
         Controller *wc = (Controller *)wh->gameController;
-        CHECK(wh->clientWorldController == wp->worldObj && wc->metadataWorld == wp->worldObj);
+        CHECK(wh->clientWorldController == ((MCGameplayWorld *)(wp->living.entity.worldObj)) && wc->metadataWorld == ((MCGameplayWorld *)(wp->living.entity.worldObj)));
         CHECK(c->eventCount == 0 &&
               DataWatcher_getWatchableObjectItemStack(c->watcher, 10) == old &&
               InventoryPlayer_getStackInSlot(p->inventory, 0) == old);

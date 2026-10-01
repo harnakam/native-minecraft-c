@@ -2,6 +2,7 @@
 #define C919_PACKET_BUFFER_H
 #include "network/protocol.h"
 #include "item/ItemStack.h"
+#include "nbt/NBTTagByteArray.h"
 /* Ephemeral native ByteBuf/IO allocation view. This ports original item/NBT,
    String and VarInt methods, not the complete delegated Netty ByteBuf class. The view
    and mc_buf remain with their native owner and must not cross heap adoption. */
@@ -16,6 +17,10 @@ bool PacketBuffer_readItemStackFromBuffer(PacketBuffer *,ItemStack **output);
    unpaired UTF-16 surrogates encode as the JDK replacement byte. */
 bool PacketBuffer_writeString(PacketBuffer *,const NBTString *);
 bool PacketBuffer_readStringFromBuffer(PacketBuffer *,int32_t maxLength,NBTString **output);
+/* Shared native JDK8 String.getBytes(UTF_8) dependency. Fresh managed byte[];
+   no packet String length limit or length prefix. Native heap/Java array-size
+   bounds apply. Input/output remain borrowed until retained by the caller. */
+NBTByteArrayStorage *PacketBuffer_nativeEncodeUTF8(MCObjectHeap *,const NBTString *);
 bool PacketBuffer_readVarIntFromBuffer(PacketBuffer *,int32_t *output);
 bool PacketBuffer_writeVarIntToBuffer(PacketBuffer *,int32_t value);
 /* Read failures leave *output untouched, with the buffer/heap error set.

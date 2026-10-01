@@ -204,7 +204,7 @@ bool PlayerControllerMP_windowClick(PlayerControllerMP *self, int32_t windowId, 
         return false;
     MCObjectHeap *heap = self->object.heap;
     if (!PlayerControllerMP_isInstance((MCObject *)self) ||
-        !MCGameplayPlayer_isInstance((MCObject *)playerIn) || playerIn->object.heap != heap ||
+        !MCGameplayPlayer_isInstance((MCObject *)playerIn) || playerIn->living.entity.object.heap != heap ||
         !playerIn->openContainer || playerIn->openContainer->object.heap != heap ||
         !playerIn->inventory || playerIn->inventory->object.heap != heap ||
         !NetHandlerPlayClient_isInstance((MCObject *)self->netClientHandler) ||

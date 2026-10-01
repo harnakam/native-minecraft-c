@@ -199,7 +199,7 @@ MCPacketQueueResult MCPacketQueue_flush(MCGameplay *game, size_t index,
     MCGameplayPlayer *player = (MCGameplayPlayer *)actor;
     if (!profile->durable && (!MCGameplayWorld_isInstance(owners->world) ||
                               !((MCGameplayWorld *)owners->world)->remote ||
-                              (MCObject *)player->worldObj != owners->world)) {
+                              (MCObject *)((MCGameplayWorld *)(player->living.entity.worldObj)) != owners->world)) {
         MCObjectRootScope_end(&scope);
         return MC_PACKET_QUEUE_FAILED;
     }

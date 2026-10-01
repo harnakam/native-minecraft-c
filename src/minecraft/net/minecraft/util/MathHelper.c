@@ -35,6 +35,9 @@ float MathHelper_cos(float value) {
 double MathHelper_clamp_double(double value,double minimum,double maximum) {
     return value<minimum ? minimum : (value>maximum ? maximum : value);
 }
+float MathHelper_clamp_float(float value,float minimum,float maximum) {
+    return value<minimum ? minimum : (value>maximum ? maximum : value);
+}
 
 NativeJavaUUID *MathHelper_getRandomUuid(NativeJavaRandom *random) {
     if (!random) return NULL;

@@ -23,8 +23,8 @@ static MCGameplayPlayer *player(const MCGameplayObjects *o,size_t index) {
     if (!w||index>=MC_TRANSFER_MAX_PLAYERS||!o->players[index]||!same(heap,o->players[index])||
         !MCGameplayPlayer_isInstance(o->players[index])) {fail(heap);return NULL;}
     MCGameplayPlayer *p=(MCGameplayPlayer *)o->players[index];
-    if (p->worldObj!=w||!p->inventory||!same(heap,(MCObject *)p->inventory)||
-        !p->inventoryContainer||!same(heap,(MCObject *)p->inventoryContainer)||
+    if (((MCGameplayWorld *)(p->living.entity.worldObj))!=w||!p->inventory||!same(heap,(MCObject *)p->inventory)||
+        !((ContainerPlayer *)(p->inventoryContainer))||!same(heap,(MCObject *)((ContainerPlayer *)(p->inventoryContainer)))||
         !p->openContainer||!same(heap,(MCObject *)p->openContainer)) {fail(heap);return NULL;}
     return p;
 }
@@ -91,13 +91,13 @@ bool MCGameplayStorage_encodePlayer(const MCGameplayObjects *objects,size_t inde
     ok=ok&&inventory&&InventoryPlayer_writeToNBT(p->inventory,inventory)&&strip_player(root)&&
         NBTTagCompound_setTag_ascii(root,"Inventory",(NBTBase *)inventory)&&
         NBTTagCompound_setInteger_ascii(root,"SelectedItemSlot",p->inventory->currentItem);
-    NBTTagList *grid=ok?grid_list(p->inventoryContainer->craftMatrix,4):NULL;
+    NBTTagList *grid=ok?grid_list(((ContainerPlayer *)(p->inventoryContainer))->craftMatrix,4):NULL;
     if (ok)ok=grid&&NBTTagCompound_setTag_ascii(root,"C919Crafting",(NBTBase *)grid);
     NBTTagCompound *cursor=ok?NBTTagCompound_new(heap):NULL;
     ItemStack *held=ok?InventoryPlayer_getItemStack(p->inventory):NULL;
     if (ok)ok=cursor&&same(heap,(MCObject *)held)&&(!held||ItemStack_writeToNBT(held,cursor))&&
         NBTTagCompound_setTag_ascii(root,"C919Cursor",(NBTBase *)cursor);
-    if (ok&&p->openContainer!=&p->inventoryContainer->container) {
+    if (ok&&p->openContainer!=p->inventoryContainer) {
         if (!ContainerWorkbench_isInstance((MCObject *)p->openContainer))ok=fail(heap);
         else {
             ContainerWorkbench *bench=(ContainerWorkbench *)p->openContainer;
@@ -178,10 +178,10 @@ static bool load_grid(NBTTagCompound *root,const char *name,InventoryCrafting *g
     return !MCObjectHeap_failed(heap);
 }
 bool MCGameplayStorage_loadPlayer(MCGameplayPlayer *p,const mc_nbt *input,const mc_crafting_dispatch *d) {
-    MCObjectHeap *heap=p?p->object.heap:NULL;MCObjectRootScope scope={0};
-    if (!p||!MCGameplayPlayer_isInstance((MCObject *)p)||!p->inventory||!p->inventoryContainer||!p->worldObj||
-        !same(heap,(MCObject *)p->inventory)||!same(heap,(MCObject *)p->inventoryContainer)||
-        !same(heap,(MCObject *)p->worldObj))return fail(heap);
+    MCObjectHeap *heap=p?p->living.entity.object.heap:NULL;MCObjectRootScope scope={0};
+    if (!p||!MCGameplayPlayer_isInstance((MCObject *)p)||!p->inventory||!((ContainerPlayer *)(p->inventoryContainer))||!((MCGameplayWorld *)(p->living.entity.worldObj))||
+        !same(heap,(MCObject *)p->inventory)||!same(heap,(MCObject *)((ContainerPlayer *)(p->inventoryContainer)))||
+        !same(heap,(MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj))))return fail(heap);
     if (!MCObjectRootScope_begin(&scope,heap))return false;
     NBTTagCompound *root=NULL;NBTString *name=NULL;bool ok=decode_named(heap,input,&root,&name);
     /* The inherited read can fail before the original player profile reset.
@@ -191,8 +191,8 @@ bool MCGameplayStorage_loadPlayer(MCGameplayPlayer *p,const mc_nbt *input,const 
     NBTTagList *inventory=ok?NBTTagCompound_getTagList_ascii(root,"Inventory",10):NULL;
     if (ok)ok=inventory&&InventoryPlayer_readFromNBT(p->inventory,inventory)==ITEMSTACK_NBT_OK;
     if (ok) {p->inventory->currentItem=NBTTagCompound_getInteger_ascii(root,"SelectedItemSlot");MCObjectHeap_touch(heap);}
-    if (ok)ok=load_grid(root,"C919Crafting",p->inventoryContainer->craftMatrix,4)&&
-        ContainerPlayer_onCraftMatrixChanged(p->inventoryContainer,mc_IInventory_crafting(p->inventoryContainer->craftMatrix));
+    if (ok)ok=load_grid(root,"C919Crafting",((ContainerPlayer *)(p->inventoryContainer))->craftMatrix,4)&&
+        ContainerPlayer_onCraftMatrixChanged(((ContainerPlayer *)(p->inventoryContainer)),mc_IInventory_crafting(((ContainerPlayer *)(p->inventoryContainer))->craftMatrix));
     if (ok) {
         ItemStack *cursor=NULL;
         if (NBTTagCompound_hasKey_ascii(root,"C919Cursor")) {
@@ -202,9 +202,9 @@ bool MCGameplayStorage_loadPlayer(MCGameplayPlayer *p,const mc_nbt *input,const 
         if (ok)ok=InventoryPlayer_setItemStack(p->inventory,cursor);
     }
     if (ok) {
-        p->openContainer=&p->inventoryContainer->container;MCObjectHeap_touch(heap);
+        p->openContainer=p->inventoryContainer;MCObjectHeap_touch(heap);
         if (NBTTagCompound_hasKey_ascii(root,"C919Workbench")) {
-            ContainerWorkbench *bench=ContainerWorkbench_new(p->inventory,(MCObject *)p->worldObj,NULL,d);
+            ContainerWorkbench *bench=ContainerWorkbench_new(p->inventory,(MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)),NULL,d);
             ok=bench&&load_grid(root,"C919Workbench",bench->craftMatrix,9);
             if (ok) {p->openContainer=&bench->container;MCObjectHeap_touch(heap);}
         }

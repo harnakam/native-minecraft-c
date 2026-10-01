@@ -83,6 +83,11 @@ DataWatcher *Entity_getDataWatcher(Entity *);
 NativeJavaUUID *Entity_getUniqueID(Entity *);
 CommandResultStats *Entity_getCommandStats(Entity *);
 bool Entity_isSilent(Entity *);
+bool Entity_setSilent(Entity *,bool);
+bool Entity_getFlag(Entity *,int32_t);
+bool Entity_setFlag(Entity *,int32_t,bool);
+bool Entity_isSneaking(Entity *);
+bool Entity_setSneaking(Entity *,bool);
 
 /* Original inherited Entity method. EntityItem has no override. This body is
    intentionally empty in Entity.java; it supplies no native success hook.

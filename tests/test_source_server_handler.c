@@ -58,7 +58,7 @@ static bool close_container(MCObject *o, MCGameplayPlayer *p) {
     record((Effects *)o, 'C');
     if (!Container_onContainerClosed(p->openContainer, p->inventory))
         return false;
-    p->openContainer = &p->inventoryContainer->container;
+    p->openContainer = p->inventoryContainer;
     return true;
 }
 static bool confirm(MCObject *o, MCGameplayPlayer *p, int32_t w, int16_t a, bool b) {
@@ -385,7 +385,7 @@ static void creative_and_tile(void) {
     CHECK(strcmp(e->calls, "TD") == 0 && f.handler->itemDropThreshold == 20 && e->drop == NULL);
     packet->slotId = -1;
     packet->stack->stackTagCompound = NULL;
-    e->entity = EntityItem_nativeNew(f.game.heap, (MCObject *)p->worldObj, NULL, &unusedEntityDeps);
+    e->entity = EntityItem_nativeNew(f.game.heap, (MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj)), NULL, &unusedEntityDeps);
     CHECK(e->entity && EntityItem_nativeInitializeDataWatcher(e->entity, NULL, NULL));
     CHECK(e->entity);
     reset(e);
@@ -436,7 +436,7 @@ static void queued_close_clone_and_failure(void) {
     MCGameplayPlayer *wp = (MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
     NetHandlerPlayServer *wh = (NetHandlerPlayServer *)wp->handler;
     CHECK(wh != f.handler && wh->playerEntity == wp && wh->dependencyContext == wp->effects &&
-          wp->worldObj != (MCGameplayWorld *)p->worldObj);
+          ((MCGameplayWorld *)(wp->living.entity.worldObj)) != (MCGameplayWorld *)((MCGameplayWorld *)(p->living.entity.worldObj)));
     CHECK(MCGameplay_abort(&tx));
     CHECK(MCObjectRootScope_begin(&f.scope, f.game.heap));
     reset(e);

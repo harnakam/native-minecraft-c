@@ -140,13 +140,13 @@ static void spawn_player(mc_buf *packet, const server_peer *peer) {
     MCObjectReadScope_begin(&scope, peer->game->heap);
     MCGameplayPlayer *p = actor(peer);
     packet_start(packet, 0x0c);
-    mc_put_varint(packet, p->entityId);
+    mc_put_varint(packet, p->living.entity.entityId);
     mc_put_bytes(packet, peer->uuid, 16);
-    mc_put_i32(packet, (int32_t)floor(p->posX * 32));
-    mc_put_i32(packet, (int32_t)floor(p->posY * 32));
-    mc_put_i32(packet, (int32_t)floor(p->posZ * 32));
-    mc_put_u8(packet, angle_byte(p->rotationYaw));
-    mc_put_u8(packet, angle_byte(p->rotationPitch));
+    mc_put_i32(packet, (int32_t)floor(p->living.entity.posX * 32));
+    mc_put_i32(packet, (int32_t)floor(p->living.entity.posY * 32));
+    mc_put_i32(packet, (int32_t)floor(p->living.entity.posZ * 32));
+    mc_put_u8(packet, angle_byte(p->living.entity.rotationYaw));
+    mc_put_u8(packet, angle_byte(p->living.entity.rotationPitch));
     ItemStack *held = InventoryPlayer_getCurrentItem(p->inventory);
     mc_put_i16(packet, held ? (int16_t)ItemStack_registryId(held->item) : 0);
     mc_put_u8(packet, 0x7f);
@@ -172,7 +172,7 @@ static void send_equipment(mc_server *server, server_peer *peer) {
     for (int equipment = 0; equipment < 5; equipment++) {
         mc_buf out;
         packet_start(&out, 4);
-        mc_put_varint(&out, p->entityId);
+        mc_put_varint(&out, p->living.entity.entityId);
         mc_put_i16(&out, (int16_t)equipment);
         ItemStack *stack = equipment == 0 ? InventoryPlayer_getCurrentItem(p->inventory)
                                           : p->inventory->armorInventory->items[equipment - 1];
@@ -193,7 +193,7 @@ static void send_equipment_to(server_peer *recipient, const server_peer *subject
     for (int equipment = 0; equipment < 5; equipment++) {
         mc_buf out;
         packet_start(&out, 4);
-        mc_put_varint(&out, p->entityId);
+        mc_put_varint(&out, p->living.entity.entityId);
         mc_put_i16(&out, (int16_t)equipment);
         ItemStack *stack = equipment == 0 ? InventoryPlayer_getCurrentItem(p->inventory)
                                           : p->inventory->armorInventory->items[equipment - 1];
@@ -401,7 +401,7 @@ static void remove_peer(mc_server *server, server_peer *peer) {
         MCObjectRootScope scope = {0};
         if (MCObjectRootScope_begin(&scope, server->gameplay.heap)) {
             MCGameplayPlayer *p = actor(peer);
-            p->isDead = true;
+            p->living.entity.isDead = true;
             MCGameplay_setPlayer(&server->gameplay, peer->ownerIndex, NULL, NULL);
             MCObjectRootScope_end(&scope);
         }
@@ -498,7 +498,7 @@ static void join_game(mc_server *server, server_peer *peer) {
     ok = ok && mc_server_graph_add_player_auto(&tx.working,peer->ownerIndex,uuid,peer->name,
         peer->x,peer->y,peer->z,peer->gamemode==1);
     MCGameplayPlayer *p=ok?mc_server_graph_player(&tx.working,peer->ownerIndex):NULL;
-    int32_t id=p?p->entityId:0;
+    int32_t id=p?p->living.entity.entityId:0;
     char directory[4096], path[4096], error[256] = "Could not load source player";
     struct stat info;
     mc_nbt input = {0};
@@ -512,19 +512,19 @@ static void join_game(mc_server *server, server_peer *peer) {
             for (int i = 0; i < 9 && ok; i++)
                 ok = InventoryPlayer_setInventorySlotContents(
                     p->inventory, i,
-                    ItemStack_new(p->object.heap, ItemStack_registryItem(creative_palette[i]), 64,
+                    ItemStack_new(p->living.entity.object.heap, ItemStack_registryItem(creative_palette[i]), 64,
                                   0));
     } else if (ok)
         ok = false;
     mc_nbt_free(&input);
-    if (ok && p->openContainer != &p->inventoryContainer->container)
+    if (ok && p->openContainer != p->inventoryContainer)
         ok = mc_server_graph_close(p, false);
     if (ok) {
         S39PacketPlayerAbilities *abilities=S39PacketPlayerAbilities_new(tx.working.heap,p->capabilities);
         ok=abilities && MCGameplayPackets_sendAbilities(p,abilities);
     }
     if (ok)
-        ok = Container_onCraftGuiOpened(&p->inventoryContainer->container,
+        ok = Container_onCraftGuiOpened(p->inventoryContainer,
                                         EntityPlayerMPWindows_listener(p));
     MCObjectRootScope_end(&scope);
     if (!ok) {
@@ -640,7 +640,7 @@ static bool table_usable(const mc_server *server, const server_peer *peer) {
     if (!p)
         return false;
     MCObjectRootScope scope = {0};
-    if (!MCObjectRootScope_begin(&scope, p->object.heap))
+    if (!MCObjectRootScope_begin(&scope, p->living.entity.object.heap))
         return false;
     bool ok = Container_canInteractWith(p->openContainer, p->inventory);
     MCObjectRootScope_end(&scope);
@@ -757,11 +757,9 @@ static void handle_movement(mc_server *server, server_peer *peer, mc_buf *packet
     MCObjectRootScope scope = {0};
     if (MCObjectRootScope_begin(&scope, server->gameplay.heap)) {
         MCGameplayPlayer *p = actor(peer);
-        p->posX = x;
-        p->posY = y;
-        p->posZ = z;
-        p->rotationYaw = yaw;
-        p->rotationPitch = pitch;
+        if(!Entity_setPosition(&p->living.entity,x,y,z))peer->closing=true;
+        p->living.entity.rotationYaw = yaw;
+        p->living.entity.rotationPitch = pitch;
         MCObjectRootScope_end(&scope);
     }
 
@@ -1002,7 +1000,7 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
             peer->sneaking = action == 0;
             MCObjectRootScope scope = {0};
             if (MCObjectRootScope_begin(&scope, server->gameplay.heap)) {
-                actor(peer)->sneaking = peer->sneaking;
+                if (!Entity_setSneaking(&actor(peer)->living.entity,peer->sneaking)) peer->closing = true;
                 MCObjectRootScope_end(&scope);
             }
         }
@@ -1300,13 +1298,13 @@ static void tick_items(mc_server *server, uint64_t now) {
                 ok = mc_server_graph_send_motion(e);
             for (size_t n = 0; n < MC_TRANSFER_MAX_PLAYERS && ok && !e->entity.isDead; n++) {
                 MCGameplayPlayer *p = (MCGameplayPlayer *)o->players[n];
-                if (!p || p->isDead)
+                if (!p || p->living.entity.isDead)
                     continue;
-                if (e->entity.posX + e->entity.width * 0.5 > p->posX - 1.3 &&
-                    e->entity.posX - e->entity.width * 0.5 < p->posX + 1.3 &&
-                    e->entity.posZ + e->entity.width * 0.5 > p->posZ - 1.3 &&
-                    e->entity.posZ - e->entity.width * 0.5 < p->posZ + 1.3 &&
-                    e->entity.posY + e->entity.height > p->posY - 0.5 && e->entity.posY < p->posY + 2.3)
+                if (e->entity.posX + e->entity.width * 0.5 > p->living.entity.posX - 1.3 &&
+                    e->entity.posX - e->entity.width * 0.5 < p->living.entity.posX + 1.3 &&
+                    e->entity.posZ + e->entity.width * 0.5 > p->living.entity.posZ - 1.3 &&
+                    e->entity.posZ - e->entity.width * 0.5 < p->living.entity.posZ + 1.3 &&
+                    e->entity.posY + e->entity.height > p->living.entity.posY - 0.5 && e->entity.posY < p->living.entity.posY + 2.3)
                     ok = EntityItem_onCollideWithPlayer(e, (MCObject *)p);
             }
         }
@@ -1335,7 +1333,7 @@ static void tick_items(mc_server *server, uint64_t now) {
             ok = packet != NULL;
             for (size_t n = 0; n < MC_TRANSFER_MAX_PLAYERS && ok; n++) {
                 MCGameplayPlayer *p = (MCGameplayPlayer *)o->players[n];
-                if (p && !p->isDead)
+                if (p && !p->living.entity.isDead)
                     ok = MCGameplayPackets_sendMetadata(p, packet);
             }
         }
@@ -1352,6 +1350,23 @@ static void tick_items(mc_server *server, uint64_t now) {
             if (playing(&server->peers[i]))
                 sync_items(server, &server->peers[i]);
     }
+}
+
+static bool collect_gameplay_if_due(mc_server *server,uint64_t now,uint64_t *last_collection) {
+    if (server->fatal)
+        return false;
+    if (now-*last_collection<1000)
+        return true;
+    /* Native loop safe point, after peer and item callbacks release borrowers.
+       Source setPosition allocates an AABB even when inventory ticks are idle;
+       only the current box and other registered roots must remain alive. */
+    if (!MCObjectHeap_collect(server->gameplay.heap)) {
+        fputs("Source gameplay collection failed.\n",stderr);
+        server->fatal=true;
+        return false;
+    }
+    *last_collection=now;
+    return true;
 }
 
 static void usage(void) {
@@ -1494,6 +1509,7 @@ int mc_server_main(int argc, char **argv) {
     signal(SIGTERM, stop_server);
     server_running = 1;
     uint64_t started = mc_time_ms();
+    uint64_t last_collection = started;
     server->last_item_tick = started;
     printf("C919 offline server listening on %s:%u, world %s, seed %u, gamemode %u.\n", bind,
            (unsigned)port, path, server->world.seed, (unsigned)gamemode);
@@ -1527,6 +1543,7 @@ int mc_server_main(int argc, char **argv) {
             if (server->peers[i].used)
                 tick_peer(server, &server->peers[i], now);
         tick_items(server, now);
+        collect_gameplay_if_due(server,now,&last_collection);
         mc_sleep_ms(2);
     }
     if (!server->fatal && !mc_world_save(&server->world, path, error, sizeof error)) {

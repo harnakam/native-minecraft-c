@@ -2,6 +2,7 @@
 #include "nbt/NBTBase.h"
 #include "nbt/NBTSizeTracker.h"
 #include "nbt/NBTString.h"
+#include "nbt/NBTInternal.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -145,11 +146,49 @@ static uint32_t string_scalar(const uint16_t *units, size_t length, size_t *i) {
         c = '?';
     return c;
 }
+static size_t utf8_scalar_bytes(uint32_t c,uint8_t bytes[4]) {
+    if (c<128) {bytes[0]=(uint8_t)c;return 1;}
+    if (c<2048) {bytes[0]=(uint8_t)(0xc0|(c>>6));bytes[1]=(uint8_t)(0x80|(c&63));return 2;}
+    if (c<65536) {
+        bytes[0]=(uint8_t)(0xe0|(c>>12));bytes[1]=(uint8_t)(0x80|((c>>6)&63));
+        bytes[2]=(uint8_t)(0x80|(c&63));return 3;
+    }
+    bytes[0]=(uint8_t)(0xf0|(c>>18));bytes[1]=(uint8_t)(0x80|((c>>12)&63));
+    bytes[2]=(uint8_t)(0x80|((c>>6)&63));bytes[3]=(uint8_t)(0x80|(c&63));return 4;
+}
+static bool valid_string(MCObjectHeap *heap,const NBTString *text) {
+    size_t size=MCObjectHeap_objectSize((const MCObject *)text);
+    return NBTString_isInstance((const MCObject *)text) && text->object.heap==heap &&
+        size>=sizeof(*text) && NBTString_length(text)<=(size-sizeof(*text))/sizeof(uint16_t);
+}
+NBTByteArrayStorage *PacketBuffer_nativeEncodeUTF8(MCObjectHeap *heap,const NBTString *text) {
+    MCObjectRootScope scope={0};NBTByteArrayStorage *output=NULL;
+    if (!MCObjectRootScope_begin(&scope,heap)) return NULL;
+    if (!valid_string(heap,text) || !MCObjectRootScope_pin(&scope,(MCObject *)text)) goto failed;
+    size_t length=NBTString_length(text),bytes=0,i=0;
+    const uint16_t *units=NBTString_units(text);
+    while (i<length) {
+        uint32_t c=string_scalar(units,length,&i);
+        size_t count=c<128?1u:c<2048?2u:c<65536?3u:4u;
+        if (bytes>(size_t)INT32_MAX-count) goto failed;
+        bytes+=count;
+    }
+    output=NBTByteArrayStorage_new(heap,NULL,(int32_t)bytes);
+    if (!output) goto failed;
+    int8_t *data=NBTByteArrayStorage_data(output);i=0;size_t position=0;
+    while (i<length) {
+        uint8_t encoded[4];size_t count=utf8_scalar_bytes(string_scalar(units,length,&i),encoded);
+        memcpy(data+position,encoded,count);position+=count;
+    }
+    MCObjectHeap_touch(heap);MCObjectRootScope_end(&scope);return output;
+failed:
+    MCObjectHeap_fail(heap);MCObjectRootScope_end(&scope);return NULL;
+}
 bool PacketBuffer_writeString(PacketBuffer *p, const NBTString *text) {
     MCObjectRootScope scope = {0};
     if (!begin(p, &scope))
         return false;
-    bool ok = NBTString_isInstance((const MCObject *)text) &&
+    bool ok = valid_string(p->heap,text) &&
               MCObjectRootScope_pin(&scope, (MCObject *)text);
     if (!ok) {
         MCObjectHeap_fail(p->heap);
@@ -167,22 +206,8 @@ bool PacketBuffer_writeString(PacketBuffer *p, const NBTString *text) {
         return finish(p, &scope, false);
     i = 0;
     while (i < length && !p->buffer->failed) {
-        uint32_t c = string_scalar(units, length, &i);
-        if (c < 128)
-            mc_put_u8(p->buffer, (uint8_t)c);
-        else if (c < 2048) {
-            mc_put_u8(p->buffer, (uint8_t)(0xc0 | (c >> 6)));
-            mc_put_u8(p->buffer, (uint8_t)(0x80 | (c & 63)));
-        } else if (c < 65536) {
-            mc_put_u8(p->buffer, (uint8_t)(0xe0 | (c >> 12)));
-            mc_put_u8(p->buffer, (uint8_t)(0x80 | ((c >> 6) & 63)));
-            mc_put_u8(p->buffer, (uint8_t)(0x80 | (c & 63)));
-        } else {
-            mc_put_u8(p->buffer, (uint8_t)(0xf0 | (c >> 18)));
-            mc_put_u8(p->buffer, (uint8_t)(0x80 | ((c >> 12) & 63)));
-            mc_put_u8(p->buffer, (uint8_t)(0x80 | ((c >> 6) & 63)));
-            mc_put_u8(p->buffer, (uint8_t)(0x80 | (c & 63)));
-        }
+        uint8_t encoded[4];size_t count=utf8_scalar_bytes(string_scalar(units,length,&i),encoded);
+        for (size_t j=0;j<count && !p->buffer->failed;j++) mc_put_u8(p->buffer,encoded[j]);
     }
     return finish(p, &scope, !p->buffer->failed);
 }

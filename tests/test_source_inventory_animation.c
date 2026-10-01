@@ -400,7 +400,7 @@ static void actual_server_binding_updates_shared_source_refs(void) {
     MCGameplayPlayer *second = mc_server_graph_player(game, 1);
     MCGameplayWorld *world = mc_server_graph_world(game);
     CHECK(first && second && world && !world->remote);
-    CHECK(first->worldObj == world && second->worldObj == world);
+    CHECK(((MCGameplayWorld *)(first->living.entity.worldObj)) == world && ((MCGameplayWorld *)(second->living.entity.worldObj)) == world);
     ItemStack *shared = make(game->heap, 1, 0, 5);
     ItemStack *armor = make(game->heap, 310, -1, 8);
     ItemStack *cursor = make(game->heap, 1, 0, 9);

@@ -226,7 +226,7 @@ failed:
     mc_buf_free(&decoded); return -1;
 }
 
-/* MD5 is used only for the protocol's historical offline UUID convention. */
+/* Native MD5 dependency for UUID.nameUUIDFromBytes and offline profiles. */
 typedef struct { uint32_t h[4]; uint64_t length; uint8_t tail[64]; size_t used; } md5_state;
 static uint32_t rotate_left(uint32_t v,unsigned n) { return (v<<n)|(v>>(32-n)); }
 static void md5_block(md5_state *s,const uint8_t block[64]) {
@@ -263,16 +263,24 @@ static void md5_update(md5_state *s,const uint8_t *data,size_t size) {
         if (s->used==64) { md5_block(s,s->tail); s->used=0; }
     }
 }
+static void md5_uuid_finish(md5_state *state,uint8_t uuid[16]) {
+    uint64_t bits=state->length*8; uint8_t padding[72]={0x80};
+    size_t count=state->used<56 ? 56-state->used : 120-state->used;
+    for (unsigned i=0;i<8;i++) padding[count+i]=(uint8_t)(bits>>(8*i));
+    md5_update(state,padding,count+8);
+    for (unsigned i=0;i<16;i++) uuid[i]=(uint8_t)(state->h[i/4]>>(8*(i%4)));
+    uuid[6]=(uint8_t)((uuid[6]&15)|48); uuid[8]=(uint8_t)((uuid[8]&63)|128);
+}
+bool mc_name_uuid_from_bytes(const uint8_t *data,size_t length,uint8_t uuid[16]) {
+    if (!uuid || (length && !data)) return false;
+    md5_state state={{0x67452301,0xefcdab89,0x98badcfe,0x10325476},0,{0},0};
+    md5_update(&state,data,length);md5_uuid_finish(&state,uuid);return true;
+}
 void mc_offline_uuid(const char *name,uint8_t uuid[16]) {
     md5_state state={{0x67452301,0xefcdab89,0x98badcfe,0x10325476},0,{0},0};
     const char *prefix="OfflinePlayer:"; md5_update(&state,(const uint8_t*)prefix,strlen(prefix));
     if (name) md5_update(&state,(const uint8_t*)name,strlen(name));
-    uint64_t bits=state.length*8; uint8_t padding[72]={0x80};
-    size_t count=state.used<56 ? 56-state.used : 120-state.used;
-    for (unsigned i=0;i<8;i++) padding[count+i]=(uint8_t)(bits>>(8*i));
-    md5_update(&state,padding,count+8);
-    for (unsigned i=0;i<16;i++) uuid[i]=(uint8_t)(state.h[i/4]>>(8*(i%4)));
-    uuid[6]=(uint8_t)((uuid[6]&15)|48); uuid[8]=(uint8_t)((uuid[8]&63)|128);
+    md5_uuid_finish(&state,uuid);
 }
 void mc_uuid_string(const uint8_t uuid[16],char out[37]) {
     static const char hex[]="0123456789abcdef"; size_t pos=0;

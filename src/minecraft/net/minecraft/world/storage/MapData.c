@@ -177,11 +177,11 @@ static bool source_view(mc_map_info *map,MCGameplayWorld *world) {
     return mc_maps_find(&world->maps,map->id)==map;
 }
 static size_t source_key_index(mc_MapData_tracking *t,const MCGameplayPlayer *p) {
-    size_t i=0; int32_t hash=p ? p->entityId : 0;
+    size_t i=0; int32_t hash=p ? p->living.entity.entityId : 0;
     /* Source Entity.equals/hashCode uses entityId; HashMap retains its original
        node hash and key reference even if a public entity ID later changes. */
     while (i<t->source_keys && !(t->source_key[i].hash==hash &&
-        (t->source_key[i].player==p || (p && t->source_key[i].player && t->source_key[i].player->entityId==p->entityId)))) ++i;
+        (t->source_key[i].player==p || (p && t->source_key[i].player && t->source_key[i].player->living.entity.entityId==p->living.entity.entityId)))) ++i;
     return i;
 }
 static source_info *find_source_info(mc_map_info *map,MCGameplayPlayer *p) {
@@ -195,8 +195,8 @@ static void source_info_trace(MCObject *object,MCObjectVisitor visit,void *conte
 }
 static const MCObjectClass source_info_class={"native.MapInfoSourceView",MCObjectHeap_plainClone,source_info_trace,NULL};
 mc_MapInfo *MapData_getMapInfo(mc_map_info *map,MCGameplayWorld *owner,MCGameplayPlayer *p) {
-    MCObjectHeap *h=owner ? owner->object.heap : p ? p->object.heap : NULL;
-    if (!source_view(map,owner) || (p && (!MCGameplayPlayer_isInstance((MCObject *)p) || p->object.heap!=h)) || !tracking(map)) {
+    MCObjectHeap *h=owner ? owner->object.heap : p ? p->living.entity.object.heap : NULL;
+    if (!source_view(map,owner) || (p && (!MCGameplayPlayer_isInstance((MCObject *)p) || p->living.entity.object.heap!=h)) || !tracking(map)) {
         MCObjectHeap_fail(h); return NULL;
     }
     source_info *known=find_source_info(map,p);
@@ -205,10 +205,10 @@ mc_MapInfo *MapData_getMapInfo(mc_map_info *map,MCGameplayWorld *owner,MCGamepla
     if (t->source_viewers==MC_MAP_MAX_VIEWERS || t->source_keys==MC_MAP_MAX_VIEWERS) { MCObjectHeap_fail(h); return NULL; }
     source_info *info=(source_info *)MCObjectHeap_alloc(h,sizeof(*info),&source_info_class);
     if (!info) return NULL;
-    info->player=p; info->info.entity_id=p ? p->entityId : 0;
+    info->player=p; info->info.entity_id=p ? p->living.entity.entityId : 0;
     info->info.dirty=true; info->info.max_x=info->info.max_z=127;
     t->source_info[t->source_viewers++]=info;
-    t->source_key[t->source_keys++]=(source_key){p,p ? p->entityId : 0,info};
+    t->source_key[t->source_keys++]=(source_key){p,p ? p->living.entity.entityId : 0,info};
     MCObjectHeap_touch(h); return &info->info;
 }
 static size_t key_index(const mc_MapData_tracking *t,const NBTString *key) {
@@ -231,7 +231,7 @@ static void source_remove(mc_map_info *map,const NBTString *key) {
 }
 static bool source_decorate(mc_map_info *map,MCGameplayWorld *world,int type,NBTString *key,double x,double z,double rot) {
     MCObjectHeap *h=world->object.heap;
-    if (!NBTString_isInstance((MCObject *)key) || ((MCObject *)key)->heap!=h) return false;
+    if (key&&(!NBTString_isInstance((MCObject *)key)||((MCObject *)key)->heap!=h)) return false;
     mc_MapData_tracking *t=map->tracking; size_t i=key_index(t,key); mc_map_icon icon;
     MCObjectHeap_touch(h);
     if (!icon_value(map,&type,x,z,rot,world->worldTime,&icon)) { source_remove(map,key); return true; }
@@ -242,10 +242,9 @@ static bool source_decorate(mc_map_info *map,MCGameplayWorld *world,int type,NBT
     t->source_markers[i].icon=icon; source_sync(map); return true;
 }
 static bool valid_source_player(MCGameplayPlayer *p,MCObjectHeap *h) {
-    return MCGameplayPlayer_isInstance((MCObject *)p) && p->object.heap==h &&
-        MCGameplayWorld_isInstance((MCObject *)p->worldObj) && p->worldObj->object.heap==h &&
-        p->inventory && p->inventory->object.heap==h && p->inventory->mainInventory && p->inventory->armorInventory &&
-        NBTString_isInstance((MCObject *)p->name) && ((MCObject *)p->name)->heap==h;
+    return MCGameplayPlayer_isInstance((MCObject *)p) && p->living.entity.object.heap==h &&
+        MCGameplayWorld_isInstance((MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj))) && ((MCGameplayWorld *)(p->living.entity.worldObj))->object.heap==h &&
+        p->inventory && p->inventory->object.heap==h && p->inventory->mainInventory && p->inventory->armorInventory;
 }
 bool MapData_updateVisiblePlayers(mc_map_info *map,MCGameplayWorld *owner,MCGameplayPlayer *p,ItemStack *stack) {
     MCObjectHeap *h=owner ? owner->object.heap : NULL; MCObjectRootScope scope={0};
@@ -256,14 +255,20 @@ bool MapData_updateVisiblePlayers(mc_map_info *map,MCGameplayWorld *owner,MCGame
     if (ok) ok=valid_source_player(p,h);
     if (ok) {
         MCObjectHeap_touch(h);
-        if (!InventoryPlayer_hasItemStack(p->inventory,stack)) source_remove(map,p->name);
+        if (!InventoryPlayer_hasItemStack(p->inventory,stack)) {
+            NBTString *name=EntityPlayer_getName(p);
+            if(MCObjectHeap_failed(h))ok=false;else source_remove(map,name);
+        }
         mc_MapData_tracking *t=map->tracking;
         for (size_t i=0;i<t->source_viewers && ok;i++) {
             MCGameplayPlayer *viewer=t->source_info[i]->player;
             if (!valid_source_player(viewer,h)) { ok=false; break; }
-            if (!viewer->isDead && (InventoryPlayer_hasItemStack(viewer->inventory,stack) || stack->itemFrame)) {
-                if (!stack->itemFrame && viewer->dimension==map->dimension)
-                    ok=source_decorate(map,viewer->worldObj,0,viewer->name,viewer->posX,viewer->posZ,(double)viewer->rotationYaw);
+            if (!viewer->living.entity.isDead && (InventoryPlayer_hasItemStack(viewer->inventory,stack) || stack->itemFrame)) {
+                if (!stack->itemFrame && viewer->living.entity.dimension==map->dimension) {
+                    MCGameplayWorld *world=(MCGameplayWorld *)viewer->living.entity.worldObj;
+                    NBTString *name=EntityPlayer_getName(viewer);
+                    ok=!MCObjectHeap_failed(h)&&source_decorate(map,world,0,name,viewer->living.entity.posX,viewer->living.entity.posZ,(double)viewer->living.entity.rotationYaw);
+                }
             } else {
                 /* Source ArrayList.remove then for-loop increment skips the
                    shifted successor, including consecutive dead players. */
@@ -286,7 +291,7 @@ bool MapData_updateVisiblePlayers(mc_map_info *map,MCGameplayWorld *owner,MCGame
             NBTString *key=entry ? NBTTagCompound_getString_ascii(entry,"id") : NULL;
             if (!key) { ok=false; break; }
             if (key_index(map->tracking,key)==map->tracking->source_decorations)
-                ok=source_decorate(map,p->worldObj,NBTTagCompound_getByte_ascii(entry,"type"),key,
+                ok=source_decorate(map,((MCGameplayWorld *)(p->living.entity.worldObj)),NBTTagCompound_getByte_ascii(entry,"type"),key,
                     NBTTagCompound_getDouble_ascii(entry,"x"),NBTTagCompound_getDouble_ascii(entry,"z"),NBTTagCompound_getDouble_ascii(entry,"rot"));
         }
     }
@@ -297,7 +302,7 @@ bool MapData_updateVisiblePlayers(mc_map_info *map,MCGameplayWorld *owner,MCGame
 int MapData_getMapPacket(mc_map_info *map,ItemStack *stack,MCGameplayWorld *world,MCGameplayPlayer *p,mc_buf *packet) {
     MCObjectHeap *h=world ? world->object.heap : NULL;
     if (!source_view(map,world) || !ItemStack_isInstance((MCObject *)stack) || stack->object.heap!=h ||
-        (p && (!MCGameplayPlayer_isInstance((MCObject *)p) || p->object.heap!=h)) || !packet || MCObjectHeap_failed(h)) {
+        (p && (!MCGameplayPlayer_isInstance((MCObject *)p) || p->living.entity.object.heap!=h)) || !packet || MCObjectHeap_failed(h)) {
         MCObjectHeap_fail(h); return -1;
     }
     source_info *s=find_source_info(map,p); if (!s) return 0;

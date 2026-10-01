@@ -35,7 +35,7 @@ static bool valid_array(ItemStackArray *a,MCObjectHeap *h) {
 bool GuiIngame_renderHotbarItem(GuiIngameHotbar *g,int32_t index,int32_t x,int32_t y,float partialTicks,MCGameplayPlayer *p) {
     MCObjectHeap *h=g ? g->object.heap : NULL;
     if (!g || g->object.klass!=&klass || !complete(g->dependencies) || !MCGameplayPlayer_isInstance((MCObject *)p) ||
-        p->object.heap!=h || !InventoryPlayer_isInstance((MCObject *)p->inventory) || p->inventory->object.heap!=h ||
+        p->living.entity.object.heap!=h || !InventoryPlayer_isInstance((MCObject *)p->inventory) || p->inventory->object.heap!=h ||
         !valid_array(p->inventory->mainInventory,h) ||
         index<0 || index>=p->inventory->mainInventory->length || !references(g,h)) {
         MCObjectHeap_fail(h); return false;

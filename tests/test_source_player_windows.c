@@ -24,7 +24,7 @@ static const MCObjectClass effect_class={"fixture.windows.required-effect-record
 static bool record(MCGameplayPlayer *player,int kind,int32_t window,int32_t index,ContainerList *list,ItemStack *stack) {
     Effects *effects=(Effects *)player->effects;CHECK(effects&&effects->count<64);
     effects->events[effects->count++]=(Event){kind,window,index,list,stack,player->openContainer};
-    CHECK(!MCObjectHeap_collect(player->object.heap));MCObjectHeap_touch(player->object.heap);
+    CHECK(!MCObjectHeap_collect(player->living.entity.object.heap));MCObjectHeap_touch(player->living.entity.object.heap);
     return effects->failKind!=kind;
 }
 static bool items(MCGameplayPlayer *player,int32_t window,ContainerList *list) {
@@ -55,9 +55,9 @@ static MCGameplayPlayer *setup(MCGameplay *game,MCObjectRootScope *scope,bool re
     MCGameplayPlayer *player=MCGameplayPlayer_new(world,NBTString_fromASCII(game->heap,"Owner"),NULL,&crafting_dependencies);CHECK(player);CHECK(MCGameplay_setPlayer(game,0,"11111111-1111-1111-1111-111111111111",(MCObject *)player));
     Effects *effects=(Effects *)MCObjectHeap_alloc(game->heap,sizeof(*effects),&effect_class);CHECK(effects);player->effects=(MCObject *)effects;CHECK(EntityPlayerMPWindows_bind(player,&window_dependencies));return player;
 }
-static ItemStack *stack(MCGameplayPlayer *player,int32_t count) {ItemStack *s=ItemStack_new(player->object.heap,ItemStack_registryItem(1),count,0);CHECK(s);return s;}
+static ItemStack *stack(MCGameplayPlayer *player,int32_t count) {ItemStack *s=ItemStack_new(player->living.entity.object.heap,ItemStack_registryItem(1),count,0);CHECK(s);return s;}
 static ContainerWorkbench *workbench(MCGameplayPlayer *player,int32_t window) {
-    mc_crafting_position position={0,0,0};ContainerWorkbench *c=ContainerWorkbench_new(player->inventory,(MCObject *)player->worldObj,&position,&crafting_dependencies);CHECK(c);c->container.windowId=window;player->openContainer=&c->container;return c;
+    mc_crafting_position position={0,0,0};ContainerWorkbench *c=ContainerWorkbench_new(player->inventory,(MCObject *)((MCGameplayWorld *)(player->living.entity.worldObj)),&position,&crafting_dependencies);CHECK(c);c->container.windowId=window;player->openContainer=&c->container;return c;
 }
 static void finish(MCGameplay *game,MCObjectRootScope *scope) {CHECK(!MCObjectHeap_failed(game->heap));MCObjectRootScope_end(scope);CHECK(MCGameplay_free(game));}
 static void listener_and_shared_refs(void) {
@@ -90,9 +90,9 @@ static void windows_and_close_order(void) {
         CHECK(EntityPlayerMPWindows_sendSlotContents(p,&bench->container,1,shared));CHECK(effects->count==1&&effects->events[0].window==ids[n]&&effects->events[0].stack==shared);effects->count=0;
         CHECK(EntityPlayerMPWindows_closeScreen(p));CHECK(effects->count==(remote?2u:3u)&&effects->events[0].kind==CLOSE_WINDOW&&effects->events[0].window==ids[n]);
         CHECK(effects->events[1].kind==DROP&&effects->events[1].stack==shared&&effects->events[1].open==&bench->container);if(!remote)CHECK(effects->events[2].kind==DROP&&effects->events[2].stack==shared);
-        CHECK(p->openContainer==&p->inventoryContainer->container&&!InventoryPlayer_getItemStack(p->inventory));CHECK(InventoryCrafting_getStackInSlot(bench->craftMatrix,0)==(remote?shared:NULL));CHECK(InventoryCraftResult_getStackInSlot(bench->craftResult,0)==output);
-        effects->count=0;CHECK(InventoryPlayer_setItemStack(p->inventory,shared));CHECK(InventoryCrafting_setInventorySlotContents(p->inventoryContainer->craftMatrix,0,shared));CHECK(InventoryCraftResult_setInventorySlotContents(p->inventoryContainer->craftResult,0,output));CHECK(EntityPlayerMPWindows_closeContainer(p));
-        CHECK(effects->count==2&&effects->events[0].kind==DROP&&effects->events[1].kind==DROP);CHECK(!InventoryCrafting_getStackInSlot(p->inventoryContainer->craftMatrix,0)&&!InventoryCraftResult_getStackInSlot(p->inventoryContainer->craftResult,0));finish(&game,&scope);
+        CHECK(p->openContainer==p->inventoryContainer&&!InventoryPlayer_getItemStack(p->inventory));CHECK(InventoryCrafting_getStackInSlot(bench->craftMatrix,0)==(remote?shared:NULL));CHECK(InventoryCraftResult_getStackInSlot(bench->craftResult,0)==output);
+        effects->count=0;CHECK(InventoryPlayer_setItemStack(p->inventory,shared));CHECK(InventoryCrafting_setInventorySlotContents(((ContainerPlayer *)(p->inventoryContainer))->craftMatrix,0,shared));CHECK(InventoryCraftResult_setInventorySlotContents(((ContainerPlayer *)(p->inventoryContainer))->craftResult,0,output));CHECK(EntityPlayerMPWindows_closeContainer(p));
+        CHECK(effects->count==2&&effects->events[0].kind==DROP&&effects->events[1].kind==DROP);CHECK(!InventoryCrafting_getStackInSlot(((ContainerPlayer *)(p->inventoryContainer))->craftMatrix,0)&&!InventoryCraftResult_getStackInSlot(((ContainerPlayer *)(p->inventoryContainer))->craftResult,0));finish(&game,&scope);
     }
 }
 static void failures_and_suppressed_dependencies(void) {

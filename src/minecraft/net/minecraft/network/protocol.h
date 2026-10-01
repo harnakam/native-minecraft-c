@@ -60,6 +60,9 @@ bool mc_conn_poll(mc_conn *c);
 bool mc_conn_send(mc_conn *c, const mc_buf *packet);
 /* 1: complete owning packet, 0: incomplete, -1: protocol/transport failure. */
 int mc_conn_next(mc_conn *c, mc_buf *packet);
+/* Native UUID.nameUUIDFromBytes dependency: all bytes, including NUL, enter
+   MD5 before the source version-3/variant bits are set. No packet/name limit. */
+bool mc_name_uuid_from_bytes(const uint8_t *data,size_t length,uint8_t uuid[16]);
 void mc_offline_uuid(const char *name, uint8_t uuid[16]);
 void mc_uuid_string(const uint8_t uuid[16], char out[37]);
 void mc_json_escape(const char *input, char *output, size_t capacity);
