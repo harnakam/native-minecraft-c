@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 /* Exercise the actual native server provider seams and Source MP receiver.
    The executable core resolves these included bindings once, as with the
    existing actual-server lifetime fixture. No terrain/collision callback mock. */
@@ -96,7 +97,7 @@ static void actual_terrain_dependencies(void) {
     list=mp_collisions((MCObject *)mp,(MCObject *)world,mp,mp_box(NULL,mp));CHECK(list);
     CHECK(NativeReferenceList_size((NativeReferenceList *)list)==0);
     BlockPos *pos=DataWatcher_blockPos(tx.working.heap,0,99,0);CHECK(pos);
-    CHECK(mp_top_solid(NULL,(MCObject *)world,pos)->y==6);
+    CHECK(mp_top_solid(NULL,(MCObject *)world,pos)->vec3i.y==6);
     CHECK(WorldBorder_setCenter(world->worldBorder,0,0)&&WorldBorder_setTransition(world->worldBorder,4));
     double distance;CHECK(mp_border_distance(NULL,(MCObject *)world->worldBorder,0,0,&distance)&&distance==2);
     mp->theItemInWorldManager->gameType=&WorldSettingsGameType_SPECTATOR;

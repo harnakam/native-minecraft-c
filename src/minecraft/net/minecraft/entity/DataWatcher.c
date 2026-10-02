@@ -15,8 +15,6 @@ static const MCObjectClass boxClass[4] = {
     {"native.java.lang.Short", MCObjectHeap_plainClone, NULL, NULL},
     {"native.java.lang.Integer", MCObjectHeap_plainClone, NULL, NULL},
     {"native.java.lang.Float", MCObjectHeap_plainClone, NULL, NULL}};
-static const MCObjectClass posClass = {"native.BlockPos.value", MCObjectHeap_plainClone, NULL,
-                                       NULL};
 static const MCObjectClass rotationClass = {"native.Rotations.value", MCObjectHeap_plainClone, NULL,
                                             NULL};
 static int32_t signed_bits(uint32_t n) {
@@ -34,7 +32,7 @@ static int32_t value_type(const MCObject *v) {
         return 4;
     if (ItemStack_isInstance(v))
         return 5;
-    if (v->klass == &posClass)
+    if (BlockPos_isRuntimeClass(v))
         return 6;
     if (v->klass == &rotationClass)
         return 7;
@@ -65,15 +63,9 @@ MCObject *DataWatcher_boxFloat(MCObjectHeap *h, float n) {
         v->value.real = n;
     return (MCObject *)v;
 }
-bool DataWatcher_blockPosIsInstance(const MCObject *o) { return o && o->klass == &posClass; }
+bool DataWatcher_blockPosIsInstance(const MCObject *o) { return BlockPos_isInstance(o); }
 DataWatcherBlockPos *DataWatcher_blockPos(MCObjectHeap *h, int32_t x, int32_t y, int32_t z) {
-    DataWatcherBlockPos *p = (DataWatcherBlockPos *)MCObjectHeap_alloc(h, sizeof(*p), &posClass);
-    if (p) {
-        p->x = x;
-        p->y = y;
-        p->z = z;
-    }
-    return p;
+    return BlockPos_newInt(h, x, y, z);
 }
 DataWatcherRotations *DataWatcher_rotations(MCObjectHeap *h, float x, float y, float z) {
     DataWatcherRotations *p =
@@ -613,8 +605,9 @@ bool DataWatcher_addObject(DataWatcher *w, int32_t id, MCObject *value) {
     MCObjectRootScope scope = {0};
     if (!begin(w, &scope))
         return false;
-    int type = value_type(value);
-    bool ok = MCObjectRootScope_pin(&scope, value) && type >= 0 && id <= 31 && !find(w, id);
+    bool ok = MCObjectRootScope_pin(&scope, value);
+    int type = ok ? value_type(value) : -1;
+    ok = ok && type >= 0 && id <= 31 && !find(w, id);
     WatchableObject *object = ok ? WatchableObject_new(w->object.heap, type, id, value) : NULL;
     ok = object && put(w, id, object);
     if (ok) {
@@ -694,6 +687,11 @@ static bool equal(DataWatcher *w, const MCObject *a, const MCObject *b, bool *re
         *result = false;
         return true;
     }
+    /* ObjectUtils invokes the new value's actual equals method. Vec3i.equals
+       accepts its whole hierarchy, independently of watcher dataTypes' exact
+       Class keys, and performs ordered virtual X/Y/Z comparisons. */
+    if (Vec3i_isInstance(a))
+        return Vec3i_equals((Vec3i *)a, (MCObject *)b, result) == NATIVE_ARRAY_OK;
     int type = value_type(a);
     if (type >= 0) {
         if (type != value_type(b)) {
@@ -716,12 +714,6 @@ static bool equal(DataWatcher *w, const MCObject *a, const MCObject *b, bool *re
         case 5:
             *result = false;
             break;
-        case 6: {
-            const DataWatcherBlockPos *x = (const DataWatcherBlockPos *)a,
-                                      *y = (const DataWatcherBlockPos *)b;
-            *result = x->x == y->x && x->y == y->y && x->z == y->z;
-            break;
-        }
         default: {
             const DataWatcherRotations *x = (const DataWatcherRotations *)a,
                                        *y = (const DataWatcherRotations *)b;
@@ -854,7 +846,7 @@ static bool buffer_end(PacketBuffer *p, MCObjectRootScope *scope, bool ok) {
     MCObjectRootScope_end(scope);
     return !p->buffer->failed;
 }
-static bool write_one(PacketBuffer *p, WatchableObject *w) {
+static bool write_one(PacketBuffer *p, WatchableObject *w, MCObjectRootScope *scope) {
     if (!w || w->object.heap != p->heap) {
         MCObjectHeap_fail(p->heap);
         return false;
@@ -865,7 +857,8 @@ static bool write_one(PacketBuffer *p, WatchableObject *w) {
         return false;
     MCObject *v = w->watchedObject;
     int type = w->objectType;
-    if (type >= 0 && type <= 7 && type != 5 && (!v || value_type(v) != type)) {
+    if (type >= 0 && type <= 7 && type != 5 && type != 6 &&
+        (!v || value_type(v) != type)) {
         MCObjectHeap_fail(p->heap);
         return false;
     }
@@ -895,10 +888,22 @@ static bool write_one(PacketBuffer *p, WatchableObject *w) {
         }
         return PacketBuffer_writeItemStackToBuffer(p, (ItemStack *)v);
     case 6: {
-        DataWatcherBlockPos *a = (DataWatcherBlockPos *)v;
-        mc_put_i32(b, a->x);
-        mc_put_i32(b, a->y);
-        mc_put_i32(b, a->z);
+        if (!v || v->heap != p->heap || !MCObjectRootScope_pin(scope, v) ||
+            !BlockPos_isInstance(v)) {
+            MCObjectHeap_fail(p->heap);
+            return false;
+        }
+        Vec3i *a = (Vec3i *)v;
+        int32_t coordinate;
+        if (Vec3i_getX(a, &coordinate) != NATIVE_ARRAY_OK)
+            return false;
+        mc_put_i32(b, coordinate);
+        if (b->failed || Vec3i_getY(a, &coordinate) != NATIVE_ARRAY_OK)
+            return false;
+        mc_put_i32(b, coordinate);
+        if (b->failed || Vec3i_getZ(a, &coordinate) != NATIVE_ARRAY_OK)
+            return false;
+        mc_put_i32(b, coordinate);
         break;
     }
     case 7: {
@@ -926,7 +931,7 @@ bool DataWatcher_writeWatchedListToPacketBuffer(WatchableObjectList *l, PacketBu
                 ok = false;
                 break;
             }
-            ok = write_one(p, WatchableObjectList_get(l, i));
+            ok = write_one(p, WatchableObjectList_get(l, i), &scope);
         }
     if (ok)
         mc_put_u8(p->buffer, 127);
@@ -940,7 +945,7 @@ bool DataWatcher_writeTo(DataWatcher *w, PacketBuffer *p) {
     if (ok && w->table)
         for (int32_t i = 0; i < w->table->capacity && ok; i++)
             for (MapNode *n = w->table->buckets[i]; n && ok; n = n->next)
-                ok = write_one(p, n->value);
+                ok = write_one(p, n->value, &scope);
     if (ok)
         mc_put_u8(p->buffer, 127);
     return buffer_end(p, &scope, ok);

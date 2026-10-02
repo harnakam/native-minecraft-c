@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "entity/SharedMonsterAttributes.h"
 #include "entity/player/EntityPlayer.h"
 #include "util/CombatTracker.h"

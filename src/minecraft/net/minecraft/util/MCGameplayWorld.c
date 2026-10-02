@@ -127,7 +127,9 @@ static bool height(MCObject *context,MCObject *object,int32_t x,int32_t z,int32_
 }
 static MCObject *block_chunk(MCObject *context,World *world,BlockPos *pos) {
     if(!BlockPos_isInstance((MCObject *)pos)||((MCObject *)pos)->heap!=world->object.heap){fail(world->object.heap);return NULL;}
-    return get_chunk(context,world,mc_floor_div16(pos->x),mc_floor_div16(pos->z));
+    int32_t x,z;
+    if(Vec3i_getX(&pos->vec3i,&x)!=NATIVE_ARRAY_OK||Vec3i_getZ(&pos->vec3i,&z)!=NATIVE_ARRAY_OK){fail(world->object.heap);return NULL;}
+    return get_chunk(context,world,mc_floor_div16(x),mc_floor_div16(z));
 }
 static bool top_segment(MCObject *context,MCObject *object,int32_t *out) {
     (void)context;const mc_chunk *chunk=chunk_value(object);if(!chunk||!out)return fail(object?object->heap:NULL);
@@ -140,7 +142,9 @@ static const MCObjectClass materialClass={"native.MaterialPropertyView",MCObject
 static MCObject *chunk_block(MCObject *context,MCObject *object,BlockPos *pos) {
     (void)context;const mc_chunk *chunk=chunk_value(object);
     if(!chunk||!BlockPos_isInstance((MCObject *)pos)||((MCObject *)pos)->heap!=object->heap){fail(object?object->heap:NULL);return NULL;}
-    uint16_t state=pos->y<0||pos->y>=256?0:chunk->blocks[((size_t)pos->y<<8)|((size_t)(pos->z&15)<<4)|(size_t)(pos->x&15)];
+    int32_t x,y,z;
+    if(Vec3i_getX(&pos->vec3i,&x)!=NATIVE_ARRAY_OK||Vec3i_getY(&pos->vec3i,&y)!=NATIVE_ARRAY_OK||Vec3i_getZ(&pos->vec3i,&z)!=NATIVE_ARRAY_OK){fail(object->heap);return NULL;}
+    uint16_t state=y<0||y>=256?0:chunk->blocks[((size_t)y<<8)|((size_t)(z&15)<<4)|(size_t)(x&15)];
     if(!mc_block_valid(state)){fail(object->heap);return NULL;}
     NativeBlock *block=(NativeBlock *)MCObjectHeap_alloc(object->heap,sizeof(*block),&blockClass);if(block)block->state=state;return (MCObject *)block;
 }

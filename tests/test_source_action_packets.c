@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "network/play/client/C07PacketPlayerDigging.h"
 #include "network/play/client/C09PacketHeldItemChange.h"
 #include <limits.h>
@@ -47,8 +48,8 @@ static void digging_vectors(void) {
     C07PacketPlayerDigging *q = C07PacketPlayerDigging_new_empty(h);
     CHECK(q && !q->position && !q->status && !q->facing);
     CHECK(C07PacketPlayerDigging_readPacketData(q, &io) && b.pos == b.len);
-    CHECK(q->position != pos && q->position->x == -33554432 && q->position->y == -2048 &&
-          q->position->z == 33554431 && q->facing == p->facing && q->status == p->status);
+    CHECK(q->position != pos && q->position->vec3i.x == -33554432 && q->position->vec3i.y == -2048 &&
+          q->position->vec3i.z == 33554431 && q->facing == p->facing && q->status == p->status);
     mc_buf_free(&b);
     for (int action = 0; action < 6; action++)
         for (unsigned face = 0; face < 256; face++) {
@@ -126,7 +127,7 @@ static void source_partial_failure(void) {
         CHECK(!C07PacketPlayerDigging_readPacketData(p, &io) && input.failed &&
               !MCObjectHeap_failed(h));
         CHECK(p->status == C07PacketPlayerDigging_action(length ? 1 : 4));
-        CHECK(length < 9 ? p->position == old : p->position != old && p->position->x == 0);
+        CHECK(length < 9 ? p->position == old : p->position != old && p->position->vec3i.x == 0);
         CHECK(p->facing == C07PacketPlayerDigging_facing(5));
         CHECK(input.pos == (length == 0 ? 0 : length < 9 ? 1 : 9));
         MCObjectHeap_free(h);

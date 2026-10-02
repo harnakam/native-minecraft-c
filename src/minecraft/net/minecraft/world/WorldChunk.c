@@ -92,8 +92,9 @@ static bool coordinate(World *world, MCObjectRootScope *scope, BlockPos *pos,
     bool (*method)(MCObject *, BlockPos *, int32_t *) =
         methods ? (x_axis ? methods->positionGetX : methods->positionGetZ) : NULL;
     if (!method) {
-        *out = x_axis ? pos->x : pos->z;
-        return true;
+        NativeArrayResult r = x_axis ? Vec3i_getX(&pos->vec3i, out)
+                                     : Vec3i_getZ(&pos->vec3i, out);
+        return r == NATIVE_ARRAY_OK || lookup_fail(world->object.heap);
     }
     MCObject *context = world->dependencyContext;
     bool ok = method(context, pos, out);

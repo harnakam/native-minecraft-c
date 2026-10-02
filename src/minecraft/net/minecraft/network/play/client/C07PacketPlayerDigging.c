@@ -68,11 +68,10 @@ bool C07PacketPlayerDigging_readPacketData(C07PacketPlayerDigging *p, PacketBuff
         goto done;
     }
     p->status = action;
-    int x, y, z;
-    mc_get_position(b->buffer, &x, &y, &z);
+    int64_t packed = mc_get_i64(b->buffer);
     if (b->buffer->failed)
         goto done;
-    DataWatcherBlockPos *pos = DataWatcher_blockPos(b->heap, x, y, z);
+    DataWatcherBlockPos *pos = BlockPos_fromLong(b->heap, packed);
     if (!pos)
         goto done;
     p->position = pos;
@@ -100,7 +99,13 @@ bool C07PacketPlayerDigging_writePacketData(C07PacketPlayerDigging *p, PacketBuf
         MCObjectHeap_fail(p->object.heap);
         goto done;
     }
-    mc_put_position(b->buffer, p->position->x, p->position->y, p->position->z);
+    int64_t packed;
+    ok = BlockPos_toLong(p->position, &packed) == NATIVE_ARRAY_OK;
+    if (!ok) {
+        MCObjectHeap_fail(p->object.heap);
+        goto done;
+    }
+    mc_put_i64(b->buffer, packed);
     if (b->buffer->failed)
         goto done;
     ok = facing_valid(p->facing);

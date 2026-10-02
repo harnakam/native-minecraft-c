@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 /* Reuse the recording fixture's actual translated Entity/Living/Player calls;
    no production superclass, world or effect is replaced by a success stub. */
 #define main source_parent_constructor_fixture_main
@@ -98,7 +99,7 @@ static MCObject *mp_border(MCObject *context,MCObject *worldObject) {
 }
 static bool mp_distance(MCObject *context,MCObject *borderObject,double x,double z,double *out) {
     MPFixture *f=mp_fixture(context);CHECK(borderObject==f->border);if(!mp_record(f,MP_DISTANCE))return false;
-    CHECK(f->capturedSpawn&&x==f->capturedSpawn->x&&z==f->capturedSpawn->z);*out=f->distance;return true;
+    CHECK(f->capturedSpawn&&x==f->capturedSpawn->vec3i.x&&z==f->capturedSpawn->vec3i.z);*out=f->distance;return true;
 }
 static bool mp_random(MCObject *context,NativeJavaRandom *random,int32_t bound,int32_t *out) {
     MPFixture *f=mp_fixture(context);CHECK(random==((Witness *)context)->player->living.entity.rand);
@@ -111,8 +112,8 @@ static bool mp_random(MCObject *context,NativeJavaRandom *random,int32_t bound,i
 }
 static BlockPos *mp_top(MCObject *context,MCObject *worldObject,BlockPos *pos) {
     MPFixture *f=mp_fixture(context);CHECK(worldObject==context);if(!mp_record(f,MP_TOP))return NULL;
-    CHECK(pos&&pos->y==f->capturedSpawn->y);
-    f->topPosition=DataWatcher_blockPos(context->heap,pos->x,f->topY,pos->z);return f->topPosition;
+    CHECK(pos&&pos->vec3i.y==f->capturedSpawn->vec3i.y);
+    f->topPosition=DataWatcher_blockPos(context->heap,pos->vec3i.x,f->topY,pos->vec3i.z);return f->topPosition;
 }
 static MCObject *mp_configuration(MCObject *context,MCObject *serverObject) {
     MPFixture *f=mp_fixture(context);CHECK(serverObject==f->server);if(!mp_record(f,MP_CONFIG))return NULL;
@@ -287,7 +288,7 @@ static void mp_success(void) {
         else {CHECK(f->count==14&&f->events[6]==MP_INFO&&f->events[7]==MP_MODE&&f->randomCalls==0);}
         BlockPos *pos=ordinaryBranch?f->topPosition:f->capturedSpawn;
         Entity *e=&f->parent->player->living.entity;
-        CHECK(e->posX==(double)pos->x+0.5&&e->posY==(double)pos->y&&e->posZ==(double)pos->z+0.5);
+        CHECK(e->posX==(double)pos->vec3i.x+0.5&&e->posY==(double)pos->vec3i.y&&e->posZ==(double)pos->vec3i.z+0.5);
         CHECK(f->queries==1&&f->positions==0&&f->listCalls==2);
         mp_free(f);
     }
@@ -300,17 +301,17 @@ static void mp_random_and_capture(void) {
     for(unsigned i=0;i<sizeof cases/sizeof *cases;i++) {
         MPFixture *f=mp_new_fixture();f->noSky=false;f->protection=cases[i].protection;f->distance=cases[i].distance;
         CHECK(mp_construct(f));mp_final(f);CHECK(f->observedBound[0]==cases[i].bound&&f->observedBound[1]==cases[i].bound);
-        CHECK(f->topPosition->x==f->capturedSpawn->x+f->draw[0]-cases[i].bound/2);
-        CHECK(f->topPosition->z==f->capturedSpawn->z+f->draw[1]-cases[i].bound/2);
+        CHECK(f->topPosition->vec3i.x==f->capturedSpawn->vec3i.x+f->draw[0]-cases[i].bound/2);
+        CHECK(f->topPosition->vec3i.z==f->capturedSpawn->vec3i.z+f->draw[1]-cases[i].bound/2);
         mp_free(f);
     }
     MPFixture *f=mp_new_fixture();f->noSky=false;f->mode=NULL;f->replaceRandom=true;f->mutateSpawn=true;
     f->mutateConfiguration=true;f->nullStats=true;
     CHECK(mp_construct(f));mp_final(f);
     CHECK(f->drawRandom[0]!=f->drawRandom[1]&&f->drawRandom[1]==f->replacementRandom);
-    CHECK(f->capturedSpawn!=f->mpSpawn&&f->capturedSpawn->x==12&&f->mpSpawn->x==999);
+    CHECK(f->capturedSpawn!=f->mpSpawn&&f->capturedSpawn->vec3i.x==12&&f->mpSpawn->vec3i.x==999);
     CHECK(f->capturedConfiguration!=f->configuration&&f->configuration==f->alternative);
-    CHECK(f->topPosition->x==12+f->draw[0]-10&&f->topPosition->z==-7+f->draw[1]-10);
+    CHECK(f->topPosition->vec3i.x==12+f->draw[0]-10&&f->topPosition->vec3i.z==-7+f->draw[1]-10);
     mp_free(f);
     /* The source wrap creates a negative bound, and Random throws before the
        second draw or top-solid lookup; no native clamp substitutes for it. */

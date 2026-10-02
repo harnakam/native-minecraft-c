@@ -45,7 +45,7 @@ C08PacketPlayerBlockPlacement *C08PacketPlayerBlockPlacement_new(MCObjectHeap *h
     PlacementStatics *fields=class_statics(heap);
     bool valid=fields&&MCObjectRootScope_pin(&scope,(MCObject *)positionIn)&&
         MCObjectRootScope_pin(&scope,(MCObject *)stackIn);
-    if (valid && ((positionIn&&positionIn->object.klass!=fields->field_179726_a->object.klass)||
+    if (valid && ((positionIn&&!BlockPos_isInstance((MCObject *)positionIn))||
                   (stackIn&&!ItemStack_isInstance((MCObject *)stackIn)))) {
         MCObjectHeap_fail(heap); valid=false;
     }
@@ -67,9 +67,8 @@ C08PacketPlayerBlockPlacement *C08PacketPlayerBlockPlacement_new_useItem(MCObjec
 }
 bool C08PacketPlayerBlockPlacement_readPacketData(C08PacketPlayerBlockPlacement *packet,PacketBuffer *buffer) {
     MCObjectRootScope scope={0}; if (!mc_packet_begin((MCObject *)packet,buffer,&scope)) return false;
-    int x,y,z;
-    mc_get_position(buffer->buffer,&x,&y,&z); if (buffer->buffer->failed) goto done;
-    DataWatcherBlockPos *position=DataWatcher_blockPos(buffer->heap,x,y,z); if (!position) goto done;
+    int64_t packed=mc_get_i64(buffer->buffer); if (buffer->buffer->failed) goto done;
+    DataWatcherBlockPos *position=BlockPos_fromLong(buffer->heap,packed); if (!position) goto done;
     packet->position=position;
     int32_t value=mc_get_u8(buffer->buffer); if (buffer->buffer->failed) goto done;
     packet->placedBlockDirection=value;
@@ -87,11 +86,13 @@ static uint8_t java_float_to_byte(float value) {
 }
 bool C08PacketPlayerBlockPlacement_writePacketData(C08PacketPlayerBlockPlacement *packet,PacketBuffer *buffer) {
     MCObjectRootScope scope={0}; if (!mc_packet_begin((MCObject *)packet,buffer,&scope)) return false;
-    PlacementStatics *fields=class_statics(packet->object.heap);
-    bool ok=fields&&packet->position&&MCObjectRootScope_pin(&scope,(MCObject *)packet->position)&&
-        packet->position->object.klass==fields->field_179726_a->object.klass;
+    bool ok=packet->position&&MCObjectRootScope_pin(&scope,(MCObject *)packet->position)&&
+        BlockPos_isInstance((MCObject *)packet->position);
     if (!ok) { MCObjectHeap_fail(packet->object.heap); goto done; }
-    mc_put_position(buffer->buffer,packet->position->x,packet->position->y,packet->position->z);
+    int64_t packed;
+    ok=BlockPos_toLong(packet->position,&packed)==NATIVE_ARRAY_OK;
+    if (!ok) { MCObjectHeap_fail(packet->object.heap); goto done; }
+    mc_put_i64(buffer->buffer,packed);
     if (buffer->buffer->failed) goto done;
     mc_put_u8(buffer->buffer,(uint8_t)packet->placedBlockDirection);
     if (buffer->buffer->failed) goto done;

@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "client/multiplayer/ChunkProviderClient.h"
 #include "util/MCGameplayWorld.h"
 #include <stdio.h>
@@ -461,9 +462,9 @@ static void malformed_arguments(void) {
         CHECK(heap && foreign);
         Witness *w = fixture(heap);
         w->world->dependencies = NULL;
-        MCObject untracked = {heap, w->pos->object.klass};
+        MCObject untracked = {heap, w->pos->vec3i.object.klass};
         if (mode == 0)
-            w->pos = (BlockPos *)MCObjectHeap_alloc(heap, sizeof(MCObject), w->pos->object.klass);
+            w->pos = (BlockPos *)MCObjectHeap_alloc(heap, sizeof(MCObject), w->pos->vec3i.object.klass);
         else if (mode == 1)
             w->pos = DataWatcher_blockPos(foreign, 0, 0, 0);
         else if (mode == 2)
@@ -566,7 +567,7 @@ static void dense_is_not_source_chunk(void) {
     BlockPos *pos = DataWatcher_blockPos(game.heap, 0, 123, 0);
     CHECK(pos);
     BlockPos *height = World_getHeight(world, pos);
-    CHECK(height && height->y == 0 && !MCObjectHeap_failed(game.heap));
+    CHECK(height && height->vec3i.y == 0 && !MCObjectHeap_failed(game.heap));
     CHECK(!World_getChunkFromChunkCoords(world, 0, 0));
     CHECK(MCObjectHeap_failed(game.heap) && !MCObjectHeap_hasBorrowers(game.heap));
     MCGameplay_free(&game);

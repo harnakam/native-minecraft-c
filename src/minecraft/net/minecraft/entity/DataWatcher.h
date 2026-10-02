@@ -2,17 +2,17 @@
 #define C919_SOURCE_DATA_WATCHER_H
 #include "network/PacketBuffer.h"
 #include "nbt/NBTString.h"
+#include "util/BlockPos.h"
 
 typedef struct DataWatcher DataWatcher;
 typedef struct WatchableObject WatchableObject;
 typedef struct WatchableObjectList WatchableObjectList;
-/* Immutable native views for the Java boxed primitive and coordinate classes.
-   They retain actual values and direct references; boxed valueOf caches and
-   complete BlockPos/Rotations class bodies are separate dependencies. */
-typedef struct {
-    MCObject object;
-    int32_t x, y, z;
-} DataWatcherBlockPos;
+/* BlockPos is the actual managed Source hierarchy, including its mutable
+   subclass. Automatic watcher type registration still uses exact BlockPos.class;
+   declared type 6 writes use the broader Source checkcast and virtual getters.
+   The alias retains callers' exact references, without a second coordinate owner.
+   Boxed valueOf caches and complete Rotations remain native dependencies. */
+typedef BlockPos DataWatcherBlockPos;
 typedef struct {
     MCObject object;
     float x, y, z;

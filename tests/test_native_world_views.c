@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "util/MCGameplayWorld.h"
 #include "block/block.h"
 #include <stdio.h>
@@ -51,19 +52,19 @@ static void source_methods_over_native_views(void) {
     MCGameplayWorld *world=MCGameplayWorld_new(game.heap,MCGameplay_get(&game),terrain,NULL);CHECK(world);
     CHECK(MCGameplay_setWorld(&game,(MCObject *)world));
     BlockPos *query=DataWatcher_blockPos(game.heap,0,93,0);CHECK(query);
-    BlockPos *height=World_getHeight(world,query);CHECK(height&&height->y==6);
-    BlockPos *top=World_getTopSolidOrLiquidBlock(world,query);CHECK(top&&top->y==251);
+    BlockPos *height=World_getHeight(world,query);CHECK(height&&height->vec3i.y==6);
+    BlockPos *top=World_getTopSolidOrLiquidBlock(world,query);CHECK(top&&top->vec3i.y==251);
     CHECK(mc_world_set(terrain,0,250,0,0)&&mc_world_set(terrain,0,200,0,18u<<4));
     height=World_getHeight(world,query);top=World_getTopSolidOrLiquidBlock(world,query);
-    CHECK(height&&height->y==201&&top&&top->y==6);
+    CHECK(height&&height->vec3i.y==201&&top&&top->vec3i.y==6);
     CHECK(mc_world_set(terrain,0,210,0,9u<<4));
     height=World_getHeight(world,query);top=World_getTopSolidOrLiquidBlock(world,query);
-    CHECK(height&&height->y==211&&top&&top->y==6);
+    CHECK(height&&height->vec3i.y==211&&top&&top->vec3i.y==6);
     query=DataWatcher_blockPos(game.heap,32,18,0);CHECK(query);
-    height=World_getHeight(world,query);CHECK(height&&height->y==0);
+    height=World_getHeight(world,query);CHECK(height&&height->vec3i.y==0);
     CHECK(World_setSeaLevel(world,75));
     query=DataWatcher_blockPos(game.heap,30000000,0,0);CHECK(query);
-    height=World_getHeight(world,query);CHECK(height&&height->x==30000000&&height->y==76);
+    height=World_getHeight(world,query);CHECK(height&&height->vec3i.x==30000000&&height->vec3i.y==76);
     MCObjectRootScope_end(&scope);CHECK(MCObjectHeap_collect(game.heap));
     MCGameplayTransaction transaction={0};CHECK(MCGameplay_begin(&game,&transaction));
     World *copy=(World *)MCGameplay_get(&transaction.working)->world;
@@ -71,7 +72,7 @@ static void source_methods_over_native_views(void) {
     CHECK(copy->worldBorder!=world->worldBorder&&copy->worldBorder->object.heap==transaction.working.heap);
     CHECK(MCObjectRootScope_begin(&scope,transaction.working.heap));
     query=DataWatcher_blockPos(transaction.working.heap,0,0,0);CHECK(query);
-    height=World_getHeight(copy,query);CHECK(height&&height->y==211);
+    height=World_getHeight(copy,query);CHECK(height&&height->vec3i.y==211);
     MCObjectRootScope_end(&scope);CHECK(MCGameplay_abort(&transaction));
     CHECK(MCGameplay_free(&game));mc_world_free(terrain);free(terrain);
 }

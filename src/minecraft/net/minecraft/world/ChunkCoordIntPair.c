@@ -34,11 +34,11 @@ int32_t ChunkCoordIntPair_getCenterZPosition(ChunkCoordIntPair *pair){return val
 int32_t ChunkCoordIntPair_getXEnd(ChunkCoordIntPair *pair){return valid(pair)?signed_bits(((uint32_t)pair->chunkXPos<<4)+15u):0;}
 int32_t ChunkCoordIntPair_getZEnd(ChunkCoordIntPair *pair){return valid(pair)?signed_bits(((uint32_t)pair->chunkZPos<<4)+15u):0;}
 BlockPos *ChunkCoordIntPair_getBlock(ChunkCoordIntPair *pair,int32_t x,int32_t y,int32_t z) {
-    return valid(pair)?DataWatcher_blockPos(pair->object.heap,signed_bits(((uint32_t)pair->chunkXPos<<4)+(uint32_t)x),y,
+    return valid(pair)?BlockPos_newInt(pair->object.heap,signed_bits(((uint32_t)pair->chunkXPos<<4)+(uint32_t)x),y,
         signed_bits(((uint32_t)pair->chunkZPos<<4)+(uint32_t)z)):NULL;
 }
 BlockPos *ChunkCoordIntPair_getCenterBlock(ChunkCoordIntPair *pair,int32_t y) {
     if(!valid(pair))return NULL;
     int32_t x=ChunkCoordIntPair_getCenterXPos(pair),z=ChunkCoordIntPair_getCenterZPosition(pair);
-    return DataWatcher_blockPos(pair->object.heap,x,y,z);
+    return BlockPos_newInt(pair->object.heap,x,y,z);
 }

@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "network/play/client/C08PacketPlayerBlockPlacement.h"
 #include "nbt/NBTTagCompound.h"
 #include "nbt/NBTTagInt.h"
@@ -67,7 +68,7 @@ static void static_reference_lifetime(void) {
     MCObjectHeap *heap=heap_new();
     C08PacketPlayerBlockPlacement *a=C08PacketPlayerBlockPlacement_new_useItem(heap,NULL);
     C08PacketPlayerBlockPlacement *b=C08PacketPlayerBlockPlacement_new_useItem(heap,NULL); CHECK(a&&b);
-    CHECK(a->position==b->position&&a->position->x==-1&&a->position->y==-1&&a->position->z==-1);
+    CHECK(a->position==b->position&&a->position->vec3i.x==-1&&a->position->vec3i.y==-1&&a->position->vec3i.z==-1);
     DataWatcherBlockPos *equal=DataWatcher_blockPos(heap,-1,-1,-1); CHECK(equal);
     C08PacketPlayerBlockPlacement *full=C08PacketPlayerBlockPlacement_new(heap,equal,255,NULL,0,0,0); CHECK(full);
     CHECK(full->position==equal&&full->position!=a->position);
@@ -108,7 +109,7 @@ static void actual_wire_vectors(void) {
         CHECK(C08PacketPlayerBlockPlacement_writePacketData(packet,&io)); bytes_equal(&buffer,cases[i].wire);
         C08PacketPlayerBlockPlacement *read=C08PacketPlayerBlockPlacement_new_empty(heap); CHECK(read);
         CHECK(C08PacketPlayerBlockPlacement_readPacketData(read,&io)&&buffer.pos==buffer.len);
-        CHECK(read->position!=position&&read->position->x==cases[i].rx&&read->position->y==cases[i].ry&&read->position->z==cases[i].rz);
+        CHECK(read->position!=position&&read->position->vec3i.x==cases[i].rx&&read->position->vec3i.y==cases[i].ry&&read->position->vec3i.z==cases[i].rz);
         CHECK(read->placedBlockDirection==(int32_t)(uint8_t)cases[i].direction&&!read->stack);
         CHECK(read->facingX==(float)buffer.data[11]/16&&read->facingY==(float)buffer.data[12]/16&&read->facingZ==(float)buffer.data[13]/16);
         mc_buf_clear(&buffer);
@@ -144,7 +145,7 @@ static void partial_read_assignment(void) {
         mc_buf buffer={(uint8_t *)bytes,length,length,0,false}; PacketBuffer io; view(&io,heap,&buffer);
         CHECK(!C08PacketPlayerBlockPlacement_readPacketData(packet,&io)&&buffer.failed);
         CHECK(!MCObjectHeap_failed(heap)&&!MCObjectHeap_hasBorrowers(heap));
-        CHECK(length<8 ? packet->position==oldpos : packet->position!=oldpos&&packet->position->x==-1&&packet->position->y==-1&&packet->position->z==-1);
+        CHECK(length<8 ? packet->position==oldpos : packet->position!=oldpos&&packet->position->vec3i.x==-1&&packet->position->vec3i.y==-1&&packet->position->vec3i.z==-1);
         CHECK(packet->placedBlockDirection==(length>=9 ? 255 : 77));
         CHECK(length<15 ? packet->stack==oldcopy : packet->stack!=oldcopy&&packet->stack->stackSize==-128&&packet->stack->itemDamage==7);
         CHECK(packet->facingX==(length>=16 ? 1.f : 4.f));
@@ -156,7 +157,7 @@ static void partial_read_assignment(void) {
     C08PacketPlayerBlockPlacement *packet=C08PacketPlayerBlockPlacement_new_useItem(heap,source); CHECK(packet);
     mc_buf buffer={(uint8_t *)empty,11,11,0,false}; PacketBuffer io; view(&io,heap,&buffer);
     CHECK(!C08PacketPlayerBlockPlacement_readPacketData(packet,&io));
-    CHECK(!packet->stack&&packet->placedBlockDirection==129&&packet->position->x==0);
+    CHECK(!packet->stack&&packet->placedBlockDirection==129&&packet->position->vec3i.x==0);
     MCObjectHeap_free(heap);
 }
 
@@ -177,7 +178,7 @@ static void process_lifetime_and_errors(void) {
     CHECK(C08PacketPlayerBlockPlacement_processPacket(packet,(INetHandlerPlayServer){(MCObject *)handler,&methods}));
     CHECK(handler->last==packet&&handler->calls==1&&!MCObjectHeap_hasBorrowers(heap));
     MCObjectRoot root={0}; CHECK(MCObjectRoot_init(&root,heap,(MCObject *)handler)); CHECK(MCObjectHeap_collect(heap));
-    CHECK(handler->last==packet&&packet->position->x==-1);
+    CHECK(handler->last==packet&&packet->position->vec3i.x==-1);
     handler->refuse=true; CHECK(!C08PacketPlayerBlockPlacement_processPacket(packet,(INetHandlerPlayServer){(MCObject *)handler,&methods}));
     CHECK(MCObjectHeap_failed(heap)&&!MCObjectHeap_hasBorrowers(heap)); MCObjectHeap_free(heap);
     heap=heap_new(); packet=C08PacketPlayerBlockPlacement_new_empty(heap); CHECK(packet);
@@ -220,7 +221,7 @@ static void writer_failure_and_heap_guards(void) {
     mc_buf_free(&buffer); MCObjectHeap_free(heap); MCObjectHeap_free(foreign);
     heap=heap_new(); foreign=heap_new(); DataWatcherBlockPos *pos=DataWatcher_blockPos(foreign,1,2,3); CHECK(pos);
     CHECK(!C08PacketPlayerBlockPlacement_new(heap,pos,1,NULL,0,0,0)&&MCObjectHeap_failed(heap));
-    CHECK(pos->x==1&&!MCObjectHeap_failed(foreign)); MCObjectHeap_free(heap); MCObjectHeap_free(foreign);
+    CHECK(pos->vec3i.x==1&&!MCObjectHeap_failed(foreign)); MCObjectHeap_free(heap); MCObjectHeap_free(foreign);
     heap=heap_new(); foreign=heap_new(); stack=ItemStack_new(foreign,ItemStack_registryItem(1),4,0); CHECK(stack);
     CHECK(!C08PacketPlayerBlockPlacement_new_useItem(heap,stack)&&MCObjectHeap_failed(heap));
     CHECK(stack->stackSize==4&&!MCObjectHeap_failed(foreign)); MCObjectHeap_free(heap); MCObjectHeap_free(foreign);

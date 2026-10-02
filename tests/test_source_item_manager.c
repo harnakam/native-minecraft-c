@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "server/management/ItemInWorldManager.h"
 #include "util/MathHelper.h"
 #include <limits.h>
@@ -41,7 +42,7 @@ static void position_contract(void) {
     BlockPos *p=DataWatcher_blockPos(heap,1,2,3);CHECK(p);
     CHECK(BlockPos_isInstance((MCObject *)p)&&BlockPos_add(p,0,0,0)==p);
     BlockPos *other=BlockPos_add(p,3,-7,8);CHECK(other&&other!=p);
-    CHECK(other->x==4&&other->y==-5&&other->z==11&&p->x==1&&p->y==2&&p->z==3);
+    CHECK(other->vec3i.x==4&&other->vec3i.y==-5&&other->vec3i.z==11&&p->vec3i.x==1&&p->vec3i.y==2&&p->vec3i.z==3);
     static const struct {int32_t before,delta,after;} wrapped[]={
         {INT32_MAX,1,INT32_MIN},{INT32_MIN,-1,INT32_MAX},{INT32_MIN,INT32_MIN,0},
         {INT32_MAX,INT32_MAX,-2},{-1,INT32_MIN,INT32_MAX},{INT32_MIN,INT32_MAX,-1},
@@ -50,9 +51,9 @@ static void position_contract(void) {
     for(size_t i=0;i<sizeof wrapped/sizeof *wrapped;i++) {
         p=DataWatcher_blockPos(heap,wrapped[i].before,wrapped[i].before,wrapped[i].before);CHECK(p);
         other=BlockPos_add(p,wrapped[i].delta,wrapped[i].delta,wrapped[i].delta);CHECK(other&&other!=p);
-        CHECK(other->x==wrapped[i].after&&other->y==wrapped[i].after&&other->z==wrapped[i].after);
+        CHECK(other->vec3i.x==wrapped[i].after&&other->vec3i.y==wrapped[i].after&&other->vec3i.z==wrapped[i].after);
     }
-    BlockPos *origin=NativeBlockPos_origin(heap);CHECK(origin&&origin->x==0&&origin->y==0&&origin->z==0);
+    BlockPos *origin=NativeBlockPos_origin(heap);CHECK(origin&&origin->vec3i.x==0&&origin->vec3i.y==0&&origin->vec3i.z==0);
     size_t before=MCObjectHeap_liveObjects(heap);
     for(unsigned i=0;i<1000;i++)CHECK(NativeBlockPos_origin(heap)==origin);
     CHECK(MCObjectHeap_liveObjects(heap)==before&&MCObjectHeap_collect(heap));
@@ -135,7 +136,7 @@ static void malformed_native_boundaries(void) {
             CHECK(!ItemInWorldManager_getGameType((ItemInWorldManager *)wrong));
         } else {
             BlockPos *valid=DataWatcher_blockPos(heap,0,0,0);CHECK(valid);
-            MCObject *shortObject=MCObjectHeap_alloc(heap,sizeof(MCObject),valid->object.klass);CHECK(shortObject);
+            MCObject *shortObject=MCObjectHeap_alloc(heap,sizeof(MCObject),valid->vec3i.object.klass);CHECK(shortObject);
             CHECK(!BlockPos_isInstance(shortObject)&&!BlockPos_add((BlockPos *)shortObject,0,0,0));
         }
         CHECK(MCObjectHeap_failed(heap)&&!MCObjectHeap_failed(foreign)&&!MCObjectHeap_hasBorrowers(heap));
@@ -148,7 +149,7 @@ static void malformed_native_boundaries(void) {
         CHECK(MCObjectHeap_failed(heap)&&!MCObjectHeap_hasBorrowers(heap));MCObjectHeap_free(heap);
     }
     MCObjectHeap *heap=MCObjectHeap_new(65536);CHECK(heap);BlockPos *origin=NativeBlockPos_origin(heap);CHECK(origin);
-    origin->x=1; /* Immutable native coordinate contract violation. */
+    origin->vec3i.x=1; /* Immutable Source coordinate contract violation. */
     CHECK(!NativeBlockPos_origin(heap)&&MCObjectHeap_failed(heap));MCObjectHeap_free(heap);
     CHECK(!ItemInWorldManager_new(NULL,NULL)&&!ItemInWorldManager_getGameType(NULL)&&!BlockPos_add(NULL,0,0,0));
 }
@@ -170,7 +171,7 @@ static void capacity_and_failure_prefix(void) {
     MCObjectHeap *heap=MCObjectHeap_new(budget);CHECK(heap);BlockPos *p=DataWatcher_blockPos(heap,1,2,3);CHECK(p);
     CHECK(MCObjectHeap_alloc(heap,budget-MCObjectHeap_liveBytes(heap),&paddingClass));
     CHECK(BlockPos_add(p,0,0,0)==p&&!MCObjectHeap_failed(heap));
-    CHECK(!BlockPos_add(p,1,0,0)&&MCObjectHeap_failed(heap)&&p->x==1&&p->y==2&&p->z==3);
+    CHECK(!BlockPos_add(p,1,0,0)&&MCObjectHeap_failed(heap)&&p->vec3i.x==1&&p->vec3i.y==2&&p->vec3i.z==3);
     CHECK(!MCObjectHeap_hasBorrowers(heap));MCObjectHeap_free(heap);
     heap=MCObjectHeap_new(budget);CHECK(heap);CHECK(NativeBlockPos_origin(heap));
     ItemInWorldManager *self=ItemInWorldManager_nativeAllocate(heap);CHECK(self);

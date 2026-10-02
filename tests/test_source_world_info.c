@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "world/storage/WorldInfo.h"
 #include "util/NativeJavaNumber.h"
 #include "util/NativeJavaString.h"

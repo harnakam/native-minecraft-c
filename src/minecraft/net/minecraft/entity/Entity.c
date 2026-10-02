@@ -137,8 +137,12 @@ bool Entity_setLocationAndAngles(Entity *entity,double x,double y,double z,float
 bool Entity_moveToBlockPosAndAngles(Entity *entity,DataWatcherBlockPos *pos,float yaw,float pitch) {
     MCObjectRootScope scope={0};if(!begin(entity,&scope))return false;
     const EntityDependencies *d=entity->entityDependencies;
-    bool ok=pos&&DataWatcher_blockPosIsInstance((MCObject *)pos)&&pos->object.heap==entity->object.heap&&d&&d->setLocationAndAngles&&
-        effect(entity,d->setLocationAndAngles(entity->entityContext,entity,(double)pos->x+0.5,(double)pos->y,(double)pos->z+0.5,yaw,pitch));
+    int32_t x,y,z;
+    bool ok=pos&&BlockPos_isInstance((MCObject *)pos)&&((MCObject *)pos)->heap==entity->object.heap&&
+        MCObjectRootScope_pin(&scope,(MCObject *)pos)&&d&&d->setLocationAndAngles&&
+        Vec3i_getX(&pos->vec3i,&x)==NATIVE_ARRAY_OK&&Vec3i_getY(&pos->vec3i,&y)==NATIVE_ARRAY_OK&&
+        Vec3i_getZ(&pos->vec3i,&z)==NATIVE_ARRAY_OK&&
+        effect(entity,d->setLocationAndAngles(entity->entityContext,entity,(double)x+0.5,(double)y,(double)z+0.5,yaw,pitch));
     if(!ok)MCObjectHeap_fail(entity->object.heap);
     MCObjectRootScope_end(&scope);return ok&&!MCObjectHeap_failed(entity->object.heap);
 }

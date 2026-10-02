@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "client/multiplayer/ChunkProviderClient.h"
 #include "world/ChunkCoordIntPair.h"
 #include <stdio.h>
@@ -56,8 +57,8 @@ static bool unload(MCObject *o,Chunk *c){Witness *w=(Witness *)o;if(!event(w,'u'
 }
 static bool equality(MCObject *o,Chunk *query,MCObject *stored,bool *out){Witness *w=(Witness *)o;if(!event(w,'e'))return false;*out=w->equalAll||(MCObject *)query==stored;return true;}
 static Chunk *provided(MCObject *o,ChunkProviderClient *p,int32_t x,int32_t z){Witness *w=(Witness *)o;CHECK(p==w->p);w->x=x;w->z=z;return event(w,'p')?w->provided:NULL;}
-static bool position_x(MCObject *o,BlockPos *p,int32_t *out){Witness *w=(Witness *)o;CHECK(p);if(!event(w,'x'))return false;*out=p->x;if(w->change==6)w->p->dependencyContext=w->replacementContext;return true;}
-static bool position_z(MCObject *o,BlockPos *p,int32_t *out){Witness *w=(Witness *)o;CHECK(p);if(!event(w,'z'))return false;*out=p->z;return true;}
+static bool position_x(MCObject *o,BlockPos *p,int32_t *out){Witness *w=(Witness *)o;CHECK(p);if(!event(w,'x'))return false;*out=p->vec3i.x;if(w->change==6)w->p->dependencyContext=w->replacementContext;return true;}
+static bool position_z(MCObject *o,BlockPos *p,int32_t *out){Witness *w=(Witness *)o;CHECK(p);if(!event(w,'z'))return false;*out=p->vec3i.z;return true;}
 static const ChunkProviderClientDependencies hooks={.newChunkMapping=new_map,.newChunkListing=new_list,.newBlankChunk=new_blank,.newChunk=new_chunk,.chunkIsEmpty=is_empty,.onChunkUnload=unload,.setChunkLoaded=set_loaded};
 static Witness *witness(MCObjectHeap *h,bool construct){
  Witness *w=(Witness *)MCObjectHeap_alloc(h,sizeof(*w),&witnessClass);CHECK(w);

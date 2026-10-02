@@ -103,23 +103,18 @@ Chunk *Chunk_nativeAllocate(MCObjectHeap *h, const ChunkDependencies *d, MCObjec
     }
     return c;
 }
-/* BlockPos/Vec3i key dispatch is an explicit immutable coordinate dependency. */
+/* Position keys keep their Source reference and inherited virtual methods. */
 static bool position_hash(MCObject *ctx, MCObject *o, int32_t *out) {
     (void)ctx;
     if (!BlockPos_isInstance(o) || !out)
         return false;
-    BlockPos *p = (BlockPos *)o;
-    *out =
-        from_bits(UINT32_C(31) * ((uint32_t)p->y + UINT32_C(31) * (uint32_t)p->z) + (uint32_t)p->x);
-    return true;
+    return Vec3i_hashCode(&((BlockPos *)o)->vec3i, out) == NATIVE_ARRAY_OK;
 }
 static bool position_equals(MCObject *ctx, MCObject *a, MCObject *b, bool *out) {
     (void)ctx;
     if (!BlockPos_isInstance(a) || !out)
         return false;
-    *out = BlockPos_isInstance(b) && ((BlockPos *)a)->x == ((BlockPos *)b)->x &&
-           ((BlockPos *)a)->y == ((BlockPos *)b)->y && ((BlockPos *)a)->z == ((BlockPos *)b)->z;
-    return true;
+    return Vec3i_equals(&((BlockPos *)a)->vec3i, b, out) == NATIVE_ARRAY_OK;
 }
 static const NativeHashKeyMethods positionKeys = {position_hash, position_equals};
 #define CONSTRUCT_FIELD(field, Type, predicate, hook, expr)                                        \
@@ -290,8 +285,10 @@ static bool position(Chunk *c, MCObjectRootScope *s, BlockPos *p, unsigned axis,
             return false;
         return complete(c, fn(c->dependencyContext, p, out));
     }
-    *out = axis == 0 ? p->x : axis == 1 ? p->y : p->z;
-    return true;
+    NativeArrayResult r = axis == 0 ? Vec3i_getX(&p->vec3i, out)
+                          : axis == 1 ? Vec3i_getY(&p->vec3i, out)
+                                      : Vec3i_getZ(&p->vec3i, out);
+    return complete(c, r == NATIVE_ARRAY_OK);
 }
 static bool object_array(Chunk *c, NativeObjectArray *a) {
     return required(c, (MCObject *)a, NativeObjectArray_isInstance((MCObject *)a));

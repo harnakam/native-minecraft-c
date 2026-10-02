@@ -1,27 +1,29 @@
 #ifndef C919_SOURCE_BLOCK_POS_H
 #define C919_SOURCE_BLOCK_POS_H
-#include "entity/DataWatcher.h"
+#include "util/Vec3i.h"
 
-/* Explicit immutable native view for the original BlockPos/Vec3i coordinates.
-   It uses the existing watcher/wire value descriptor, without another owner.
-   Remaining Vec3i/BlockPos methods and arbitrary getter subclasses are unported. */
-typedef DataWatcherBlockPos BlockPos;
+typedef struct BlockPos { Vec3i vec3i; } BlockPos;
+extern const NativeJavaClassDescriptor BlockPos_Class;
+const MCObjectClass *BlockPos_nativeClass(void);
 bool BlockPos_isInstance(const MCObject *);
-/* Native construction phases for this same coordinate view. Callers can
-   preserve Java NEW before evaluation of constructor arguments. Allocate
-   creates one zeroed unpublished coordinate; construct is for that phase,
-   not a coordinate mutation method or a full Vec3i/BlockPos constructor port. */
-BlockPos *NativeBlockPos_allocate(MCObjectHeap *);
-bool NativeBlockPos_constructCoordinates(BlockPos *,int32_t x,int32_t y,int32_t z);
-/* Original double constructor delegates ordered MathHelper.floor_double values
-   into the shared native immutable coordinate descriptor. */
-BlockPos *BlockPos_newDouble(MCObjectHeap *,double x,double y,double z);
+bool BlockPos_isRuntimeClass(const MCObject *);
+BlockPos *BlockPos_nativeAllocate(MCObjectHeap *);
+NativeArrayResult BlockPos_constructInt(BlockPos *, int32_t, int32_t, int32_t);
+NativeArrayResult BlockPos_constructDouble(BlockPos *, double, double, double);
+BlockPos *BlockPos_newInt(MCObjectHeap *, int32_t, int32_t, int32_t);
+BlockPos *BlockPos_newDouble(MCObjectHeap *, double, double, double);
+BlockPos *BlockPos_add(BlockPos *, int32_t, int32_t, int32_t);
 BlockPos *BlockPos_down(BlockPos *);
-BlockPos *BlockPos_downN(BlockPos *,int32_t n);
-/* Original add(int,int,int): zero offsets return the exact receiver; all three
-   coordinate additions use Java signed-int wrap before a new value is made. */
-BlockPos *BlockPos_add(BlockPos *,int32_t x,int32_t y,int32_t z);
-/* Native per-heap class-static lifetime adapter, not a complete Java class
-   initializer. One rooted ORIGIN identity is remapped with all graph roots. */
+BlockPos *BlockPos_downN(BlockPos *, int32_t);
+NativeArrayResult BlockPos_toLong(BlockPos *, int64_t *out);
+BlockPos *BlockPos_fromLong(MCObjectHeap *, int64_t);
+/* Separate NEW/constructor phases over the SAME Source owner. */
+BlockPos *NativeBlockPos_allocate(MCObjectHeap *);
+bool NativeBlockPos_constructCoordinates(BlockPos *, int32_t, int32_t, int32_t);
 BlockPos *NativeBlockPos_origin(MCObjectHeap *);
+/* add/down use virtual coordinates and preserve zero-offset identity. DOWN's
+   immutable (0,-1,0) enum facts and packed 26/12/26 widths are explicit native
+   dependencies; general EnumFacing/offset and other methods remain pending.
+   Pointer methods translate Source NULL to sticky native failure. Status APIs
+   retain healthy EXCEPTION and preserve outputs on unsuccessful completion. */
 #endif

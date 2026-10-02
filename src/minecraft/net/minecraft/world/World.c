@@ -181,7 +181,8 @@ static bool coordinate(World *world,BlockPos *pos,int axis,int32_t *out) {
     bool (*method)(MCObject *,BlockPos *,int32_t *)=d?(axis==0?d->positionGetX:axis==1?d->positionGetY:d->positionGetZ):NULL;
     if(method)return (method(world->dependencyContext,pos,out)&&!MCObjectHeap_failed(world->object.heap))||fail(world);
     if(!BlockPos_isInstance((MCObject *)pos))return fail(world);
-    *out=axis==0?pos->x:axis==1?pos->y:pos->z;return true;
+    NativeArrayResult r=axis==0?Vec3i_getX(&pos->vec3i,out):axis==1?Vec3i_getY(&pos->vec3i,out):Vec3i_getZ(&pos->vec3i,out);
+    return r==NATIVE_ARRAY_OK||fail(world);
 }
 static int32_t shift4(int32_t value){uint32_t bits=(uint32_t)value;return signed_bits((bits>>4)|(value<0?UINT32_C(0xf0000000):0));}
 BlockPos *World_getHeight_base(World *world,BlockPos *pos) {
@@ -212,8 +213,10 @@ outside:
     height=World_getSeaLevel(world);if(MCObjectHeap_failed(world->object.heap))goto done;
     height=signed_bits((uint32_t)height+1u);
 make:
+    result=NativeBlockPos_allocate(world->object.heap);
+    if(!result||!pin(world,&scope,(MCObject *)result))goto done;
     if(!coordinate(world,pos,0,&x)||!coordinate(world,pos,2,&z))goto done;
-    result=DataWatcher_blockPos(world->object.heap,x,height,z);ok=result!=NULL;
+    ok=NativeBlockPos_constructCoordinates(result,x,height,z);
 done:if(!end(world,&scope,ok))result=NULL;return result;
 }
 BlockPos *World_getHeight(World *world,BlockPos *pos) {
@@ -230,21 +233,25 @@ BlockPos *World_getHeight(World *world,BlockPos *pos) {
 BlockPos *World_getSpawnPoint(World *world) {
     MCObjectRootScope scope={0};if(!begin(world,&scope))return NULL;
     BlockPos *result=NULL;bool ok=false;int32_t x,y,z;
+    result=NativeBlockPos_allocate(world->object.heap);
+    if(!result||!pin(world,&scope,(MCObject *)result))goto done;
     WorldInfo *info=field_info(world);if(!info)goto done;
     x=WorldInfo_getSpawnX(info);if(MCObjectHeap_failed(world->object.heap))goto done;
     info=field_info(world);if(!info)goto done;
     y=WorldInfo_getSpawnY(info);if(MCObjectHeap_failed(world->object.heap))goto done;
     info=field_info(world);if(!info)goto done;
     z=WorldInfo_getSpawnZ(info);if(MCObjectHeap_failed(world->object.heap))goto done;
-    result=DataWatcher_blockPos(world->object.heap,x,y,z);if(!result)goto done;
+    if(!NativeBlockPos_constructCoordinates(result,x,y,z))goto done;
     WorldBorder *border=World_getWorldBorder(world);bool contains;
     if(!border||!WorldBorder_containsBlockPos(border,result,&contains))goto done;
     if(!contains) {
+        BlockPos *center=NativeBlockPos_allocate(world->object.heap);
+        if(!center||!pin(world,&scope,(MCObject *)center))goto done;
         border=World_getWorldBorder(world);if(!border)goto done;
         double centerX=WorldBorder_getCenterX(border);if(MCObjectHeap_failed(world->object.heap))goto done;
         border=World_getWorldBorder(world);if(!border)goto done;
         double centerZ=WorldBorder_getCenterZ(border);if(MCObjectHeap_failed(world->object.heap))goto done;
-        BlockPos *center=BlockPos_newDouble(world->object.heap,centerX,0.0,centerZ);if(!center)goto done;
+        if(BlockPos_constructDouble(center,centerX,0.0,centerZ)!=NATIVE_ARRAY_OK)goto done;
         result=World_getHeight(world,center);if(MCObjectHeap_failed(world->object.heap))goto done;
     }
     ok=true;
@@ -256,11 +263,16 @@ BlockPos *World_getTopSolidOrLiquidBlock(World *world,BlockPos *pos) {
     if(!pin(world,&scope,(MCObject *)pos)||!pos||!d||!d->getChunkFromBlockCoords)goto done;
     MCObject *chunk=d->getChunkFromBlockCoords(world->dependencyContext,world,pos);
     if(!pin(world,&scope,chunk))goto done;
+    result=NativeBlockPos_allocate(world->object.heap);
+    if(!result||!pin(world,&scope,(MCObject *)result))goto done;
     if(!coordinate(world,pos,0,&x)||!chunk||!d->chunkGetTopFilledSegment||
        !d->chunkGetTopFilledSegment(world->dependencyContext,chunk,&top)||MCObjectHeap_failed(world->object.heap))goto done;
     if(!coordinate(world,pos,2,&z))goto done;
-    result=DataWatcher_blockPos(world->object.heap,x,signed_bits((uint32_t)top+16u),z);if(!result)goto done;
-    while(result->y>=0) {
+    if(!NativeBlockPos_constructCoordinates(result,x,signed_bits((uint32_t)top+16u),z))goto done;
+    for(;;) {
+        int32_t y;
+        if(Vec3i_getY(&result->vec3i,&y)!=NATIVE_ARRAY_OK)goto done;
+        if(y<0)break;
         BlockPos *below=BlockPos_down(result);if(!below||!d->chunkGetBlock)goto done;
         MCObject *block=d->chunkGetBlock(world->dependencyContext,chunk,below);
         if(!block||!pin(world,&scope,block)||!d->blockGetMaterial)goto done;

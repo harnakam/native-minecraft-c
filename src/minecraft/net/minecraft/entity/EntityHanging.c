@@ -93,7 +93,10 @@ static EntityFrameResult bounding_box(EntityHanging *h,MCObjectRootScope *s) {
     BlockPos *p=h->hangingPosition;
     if(!p)return ENTITY_FRAME_EXCEPTION;
     if(!pin(h,s,(MCObject *)p)||!BlockPos_isInstance((MCObject *)p))return fail(h);
-    double x=(double)p->x+0.5,y=(double)p->y+0.5,z=(double)p->z+0.5;
+    int32_t px,py,pz;
+    if(Vec3i_getX(&p->vec3i,&px)!=NATIVE_ARRAY_OK||Vec3i_getY(&p->vec3i,&py)!=NATIVE_ARRAY_OK||
+       Vec3i_getZ(&p->vec3i,&pz)!=NATIVE_ARRAY_OK)return fail(h);
+    double x=(double)px+0.5,y=(double)py+0.5,z=(double)pz+0.5;
     int32_t pixels;EntityFrameResult r=width(h,s,false,&pixels);if(r!=ENTITY_FRAME_OK)return r;
     double horizontal=pixels%32==0?0.5:0.0;
     r=width(h,s,true,&pixels);if(r!=ENTITY_FRAME_OK)return r;
@@ -161,7 +164,9 @@ EntityFrameResult EntityHanging_setPosition(EntityHanging *h,double x,double y,d
     if(!pin(h,&s,(MCObject *)old)||(old&&!BlockPos_isInstance((MCObject *)old)))goto done;
     BlockPos *next=BlockPos_newDouble(h->entity.object.heap,x,y,z);if(!next)goto done;
     h->hangingPosition=next;MCObjectHeap_touch(h->entity.object.heap);
-    if(!old||old->x!=next->x||old->y!=next->y||old->z!=next->z) {
+    bool equal;
+    if(Vec3i_equals(&next->vec3i,(MCObject *)old,&equal)!=NATIVE_ARRAY_OK)goto done;
+    if(!equal) {
         r=bounding_box(h,&s);if(r!=ENTITY_FRAME_OK)goto done;
         h->entity.isAirBorne=true;MCObjectHeap_touch(h->entity.object.heap);
     }
@@ -189,7 +194,9 @@ EntityFrameResult EntityHanging_writeEntityToNBT(EntityHanging *h,NBTTagCompound
     for(int i=0;i<3;i++) {
         BlockPos *p=EntityHanging_getHangingPosition(h);if(MCObjectHeap_failed(h->entity.object.heap)){r=ENTITY_FRAME_FAILURE;goto done;}
         if(!p){r=ENTITY_FRAME_EXCEPTION;goto done;}
-        int32_t value=i==0?p->x:i==1?p->y:p->z;
+        int32_t value;
+        NativeArrayResult coordinate=i==0?Vec3i_getX(&p->vec3i,&value):i==1?Vec3i_getY(&p->vec3i,&value):Vec3i_getZ(&p->vec3i,&value);
+        if(coordinate!=NATIVE_ARRAY_OK){r=coordinate==NATIVE_ARRAY_EXCEPTION?ENTITY_FRAME_EXCEPTION:ENTITY_FRAME_FAILURE;goto done;}
         if(!NBTTagCompound_setInteger_ascii(tag,keys[i],value)){r=ENTITY_FRAME_FAILURE;goto done;}
     }
     r=ENTITY_FRAME_OK;
@@ -200,8 +207,8 @@ EntityFrameResult EntityHanging_readEntityFromNBT(EntityHanging *h,NBTTagCompoun
     EntityFrameResult r=ENTITY_FRAME_FAILURE;
     if(!pin(h,&s,(MCObject *)tag)||(tag&&!NBTTagCompound_isInstance((MCObject *)tag)))goto done;
     /* Source NEW precedes every constructor argument, including the first
-       nullable tag invocation. The native coordinate view uses the one
-       canonical descriptor; construction stores xyz only after the getters. */
+       nullable tag invocation. The same Source BlockPos owner is initialized
+       through its parent constructor only after the tag getters. */
     BlockPos *p=NativeBlockPos_allocate(h->entity.object.heap);
     if(!p||!pin(h,&s,(MCObject *)p))goto done;
     if(!tag){r=ENTITY_FRAME_EXCEPTION;goto done;}

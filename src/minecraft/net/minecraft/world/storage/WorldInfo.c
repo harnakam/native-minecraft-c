@@ -664,9 +664,16 @@ bool WorldInfo_setSpawn(WorldInfo *p,BlockPos *position) {
     MCObjectHeap *h=p->object.heap;bool ok=false;
     const WorldInfoVirtualMethods *v=p->virtualMethods;MCObject *c=p->virtualContext;
     if(v&&v->setSpawn)ok=v->setSpawn(c,p,position);
-    else if(BlockPos_isInstance((MCObject *)position)&&((MCObject *)position)->heap==h) {
-        p->spawnX=position->x;MCObjectHeap_touch(h);p->spawnY=position->y;MCObjectHeap_touch(h);p->spawnZ=position->z;MCObjectHeap_touch(h);ok=true;
+    else if(BlockPos_isInstance((MCObject *)position)&&((MCObject *)position)->heap==h&&MCObjectRootScope_pin(&scope,(MCObject *)position)) {
+        int32_t coordinate;
+        if(Vec3i_getX(&position->vec3i,&coordinate)!=NATIVE_ARRAY_OK)goto done;
+        p->spawnX=coordinate;MCObjectHeap_touch(h);
+        if(Vec3i_getY(&position->vec3i,&coordinate)!=NATIVE_ARRAY_OK)goto done;
+        p->spawnY=coordinate;MCObjectHeap_touch(h);
+        if(Vec3i_getZ(&position->vec3i,&coordinate)!=NATIVE_ARRAY_OK)goto done;
+        p->spawnZ=coordinate;MCObjectHeap_touch(h);ok=true;
     }
+done:
     if(!ok||MCObjectHeap_failed(h))ok=fail(h);
     MCObjectRootScope_end(&scope);return ok;
 }

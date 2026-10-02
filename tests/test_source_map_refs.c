@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "item/ItemMap.h"
 #include "util/MCGameplayPlayer.h"
 #include "util/MCGameplayCrafting.h"

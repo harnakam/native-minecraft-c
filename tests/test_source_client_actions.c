@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "client/entity/EntityPlayerSP.h"
 #include "client/multiplayer/PlayerControllerMP.h"
 #include "inventory/ContainerWorkbench.h"

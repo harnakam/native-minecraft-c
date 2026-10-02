@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "world/WorldProvider.h"
 #include "world/WorldProviderSurface.h"
 #include "world/WorldProviderHell.h"
@@ -171,12 +172,12 @@ static void border_and_block_position(void) {
     CHECK(WorldBorder_minZ(a,&bound)&&bound==-18);CHECK(WorldBorder_maxZ(a,&bound)&&bound==2);
     BlockPos *inside=DataWatcher_blockPos(h,0,100,-18);CHECK(inside);bool result=false;
     CHECK(WorldBorder_containsBlockPos(a,inside,&result)&&result);
-    inside->x=-1;CHECK(WorldBorder_containsBlockPos(a,inside,&result)&&!result);
-    inside->x=INT32_MAX;CHECK(WorldBorder_containsBlockPos(a,inside,&result)&&!result);
-    BlockPos *d=BlockPos_newDouble(h,-0.5,NAN,-INFINITY);CHECK(d&&d->x==-1&&d->y==0&&d->z==INT32_MAX);
-    CHECK(BlockPos_downN(d,0)==d);d->y=INT32_MIN;
-    BlockPos *down=BlockPos_down(d);CHECK(down&&down!=d&&down->x==-1&&down->y==INT32_MAX&&down->z==INT32_MAX);
-    down=BlockPos_downN(d,INT32_MIN);CHECK(down&&down->y==0);
+    inside=BlockPos_newInt(h,-1,100,-18);CHECK(inside);CHECK(WorldBorder_containsBlockPos(a,inside,&result)&&!result);
+    inside=BlockPos_newInt(h,INT32_MAX,100,-18);CHECK(inside);CHECK(WorldBorder_containsBlockPos(a,inside,&result)&&!result);
+    BlockPos *d=BlockPos_newDouble(h,-0.5,NAN,-INFINITY);CHECK(d&&d->vec3i.x==-1&&d->vec3i.y==0&&d->vec3i.z==INT32_MAX);
+    CHECK(BlockPos_downN(d,0)==d);d=BlockPos_newInt(h,-1,INT32_MIN,INT32_MAX);CHECK(d);
+    BlockPos *down=BlockPos_down(d);CHECK(down&&down!=d&&down->vec3i.x==-1&&down->vec3i.y==INT32_MAX&&down->vec3i.z==INT32_MAX);
+    down=BlockPos_downN(d,INT32_MIN);CHECK(down&&down->vec3i.y==0);
     MCObjectRoot root={0};CHECK(MCObjectRoot_init(&root,h,(MCObject *)a));CHECK(MCObjectHeap_collect(h));
     CHECK(((WorldProviderHellBorder *)a)->this_0==(WorldProviderHell *)p&&NativeFloatArray_isInstance((MCObject *)p->lightBrightnessTable));
     MCObjectHeap *clone=MCObjectHeap_clone(h);CHECK(clone);MCObjectRoot copied={0};CHECK(MCObjectRoot_rebind(&copied,clone,&root));

@@ -136,9 +136,9 @@ Chunk *ChunkProviderClient_provideChunkAt(ChunkProviderClient *p,BlockPos *pos){
     bool ok=false;Chunk *out=NULL;int32_t x,z;
     if(!pin(p,&s,(MCObject *)pos)||!BlockPos_isInstance((MCObject *)pos))goto done;
     const ChunkProviderClientDependencies *d=p->dependencies;
-    if(d&&d->positionGetX){if(!pin(p,&s,p->dependencyContext)||!d->positionGetX(p->dependencyContext,pos,&x)||MCObjectHeap_failed(p->object.heap))goto done;}else x=pos->x;
+    if(d&&d->positionGetX){if(!pin(p,&s,p->dependencyContext)||!d->positionGetX(p->dependencyContext,pos,&x)||MCObjectHeap_failed(p->object.heap))goto done;}else if(Vec3i_getX(&pos->vec3i,&x)!=NATIVE_ARRAY_OK)goto done;
     d=p->dependencies;
-    if(d&&d->positionGetZ){if(!pin(p,&s,p->dependencyContext)||!d->positionGetZ(p->dependencyContext,pos,&z)||MCObjectHeap_failed(p->object.heap))goto done;}else z=pos->z;
+    if(d&&d->positionGetZ){if(!pin(p,&s,p->dependencyContext)||!d->positionGetZ(p->dependencyContext,pos,&z)||MCObjectHeap_failed(p->object.heap))goto done;}else if(Vec3i_getZ(&pos->vec3i,&z)!=NATIVE_ARRAY_OK)goto done;
     out=ChunkProviderClient_provideChunk(p,sar4(x),sar4(z));ok=chunk(p,&s,out,true);
 done:return end(p,&s,ok)?out:NULL;
 }

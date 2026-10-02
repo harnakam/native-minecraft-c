@@ -30,7 +30,7 @@ typedef struct {
 } WorldBorderDependencies;
 /* Reached Vec3i virtual getter boundary for contains(BlockPos). This is
    separate from clocks/listeners and does not claim arbitrary subclasses.
-   NULL uses the registered immutable coordinate view; a supplied table must
+   NULL uses the translated Vec3i getter; a supplied table must
    contain each getter when that getter is actually reached. */
 typedef struct {
     bool (*getX)(MCObject *,BlockPos *,int32_t *);

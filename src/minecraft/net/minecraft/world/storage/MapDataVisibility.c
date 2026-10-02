@@ -120,7 +120,8 @@ static WorldSavedDataResult position_coord(VisibilityCall *v,BlockPos *p,bool x,
     LEAF(required(v,(MCObject *)p,BlockPos_isInstance));
     if(v->deps && x && v->deps->positionGetX)return result(v,v->deps->positionGetX(v->context,p,out));
     if(v->deps && !x && v->deps->positionGetZ)return result(v,v->deps->positionGetZ(v->context,p,out));
-    *out=x?p->x:p->z;return WORLD_SAVED_DATA_OK;
+    NativeArrayResult r=x?Vec3i_getX(&p->vec3i,out):Vec3i_getZ(&p->vec3i,out);
+    return r==NATIVE_ARRAY_OK?WORLD_SAVED_DATA_OK:r==NATIVE_ARRAY_EXCEPTION?WORLD_SAVED_DATA_EXCEPTION:fail(v);
 }
 static WorldSavedDataResult facing_index(VisibilityCall *v,const NativeHangingFacing *f,int32_t *out) {
     if(!f)return WORLD_SAVED_DATA_EXCEPTION;

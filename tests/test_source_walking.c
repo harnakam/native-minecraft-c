@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "client/entity/EntityPlayerSP.h"
 #include "network/play/client/C03PacketPlayer.h"
 #include "network/play/client/C0BPacketEntityAction.h"

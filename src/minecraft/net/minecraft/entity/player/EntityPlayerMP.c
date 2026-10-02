@@ -113,7 +113,9 @@ bool EntityPlayerMP_construct(EntityPlayerMP *p,MCObject *server,MCObject *world
         MCObject *border=d->getWorldBorder(context,world);
         if(!border||MCObjectHeap_failed(heap)||!REF(border)||!BlockPos_isInstance((MCObject *)position)||!d->getClosestDistance)goto done;
         double distance;
-        if(!EFFECT(d->getClosestDistance(context,border,(double)position->x,(double)position->z,&distance)))goto done;
+        int32_t positionX,positionZ;
+        if(Vec3i_getX(&position->vec3i,&positionX)!=NATIVE_ARRAY_OK||Vec3i_getZ(&position->vec3i,&positionZ)!=NATIVE_ARRAY_OK)goto done;
+        if(!EFFECT(d->getClosestDistance(context,border,(double)positionX,(double)positionZ,&distance)))goto done;
         int32_t closest=MathHelper_floor_double(distance);
         if(closest<range)range=closest;
         if(closest<=1)range=1;

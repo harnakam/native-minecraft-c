@@ -5,12 +5,18 @@
 #include "entity/item/EntityItemFrame.h"
 #include "block/material/MapColor.h"
 #include "util/MCGameplayPlayer.h"
+#include "util/BlockPosMutableBlockPos.h"
 #include <stdlib.h>
 
 static const MCObjectClass klass={"native.java.lang.Class",MCObjectHeap_plainClone,NULL,NULL};
 static bool fail(MCObjectHeap *h){MCObjectHeap_fail(h);return false;}
+static bool same_reference(const MCObject *object,void *expected){return object==expected;}
+static bool tracked(const MCObject *object){
+    return object&&object->heap&&object->klass&&
+        MCObjectHeap_findObject(object->heap,object->klass,same_reference,(void *)object)==object;
+}
 bool NativeJavaClass_isInstance(const MCObject *o){
-    return o&&o->klass==&klass&&MCObjectHeap_objectSize(o)>=sizeof(NativeJavaClass);
+    return tracked(o)&&o->klass==&klass&&MCObjectHeap_objectSize(o)>=sizeof(NativeJavaClass);
 }
 typedef struct {const NativeJavaClassDescriptor **items;size_t size,capacity;} Descriptors;
 static bool append(Descriptors *a,const NativeJavaClassDescriptor *d){
@@ -88,10 +94,10 @@ static bool matches(const MCObject *o,void *context){
     return d&&d->matchesRuntimeClass&&d->matchesRuntimeClass(context);
 }
 static const NativeJavaClassDescriptor *runtime_descriptor(MCObjectHeap *h,MCObject *o){
-    if(!o||o->heap!=h||MCObjectHeap_objectSize(o)<sizeof(MCObject)||MCObjectHeap_failed(h)){fail(h);return NULL;}
+    if(!tracked(o)||o->heap!=h||MCObjectHeap_objectSize(o)<sizeof(MCObject)||MCObjectHeap_failed(h)){fail(h);return NULL;}
     NativeJavaClass *c=(NativeJavaClass *)MCObjectHeap_findObject(h,&klass,matches,o);
     if(c)return c->descriptor;
-    const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor,&EntityItemFrame_Class,&MapColor_Class};
+    const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor,&EntityItemFrame_Class,&MapColor_Class,&Vec3i_Class,&BlockPos_Class,&BlockPosMutableBlockPos_Class};
     for(size_t i=0;i<sizeof(builtins)/sizeof(*builtins);++i)
         if(builtins[i]->matchesRuntimeClass(o))return builtins[i];
     fail(h);return NULL;

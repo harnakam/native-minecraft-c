@@ -16,6 +16,8 @@ Chunk/EmptyChunkの22フィールド・constructor・受信と読出しの対象
 
 WorldのgetChunkFromBlockCoords/getChunkFromChunkCoordsも、座標getterのX→Z順と、その後のvirtual dispatch・provider捕捉を保持して翻訳しました。対象経路は実ChunkProviderClient/cache/EmptyChunkへ問い合わせます。現在のlive地形はnative dense所有のままで、WorldClient constructor・受信・描画・衝突のSource所有者への移行は残っています。
 
+Vec3i→BlockPos→MutableBlockPosも、親の不変座標と子の可変座標を別フィールドとして翻訳しました。setは同じ参照を返し、Chunk・World・watcher・C07/C08通信はその時点のgetterを読みます。継承・class判定・equals/hash・packed座標と対象constructorを移植しています。残りのベクトル演算・iterators・任意subclass・JVM全体のclass初期化は未移植です。
+
 MapColorの全2フィールド・constructor・ARGB計算と、64枠の色配列・36個の名前付き参照も移植しました。配列の要素を置き換えても、名前付き参照は元のオブジェクトを保持します。地図の測量・描画はまだ旧native色表を使用しており、Block/Material・Guava集合・Source地形と合わせた切替が残っています。
 
 WorldSavedData・ISaveHandler・SaveHandlerMP、MapStorageとSaveDataMemoryStorageのfield・constructor・cache/load/save/ID本体も原本から移植しました。例外後のpartial data、NULL、共有参照、保存中のリスト変更と呼出順を保持します。NBTとChunkのbyte[]は同じ管理オブジェクトへ統一しました。実clientのmemory providerはこのconstructorを使います。実disk handler、WorldClient全体の統合は残っています。

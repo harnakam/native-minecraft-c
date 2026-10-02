@@ -154,7 +154,7 @@ bool WorldBorder_maxZ(WorldBorder *border,double *out) {return edge_dispatch(bor
 static bool position_coordinate(WorldBorder *border,MCObjectRootScope *scope,BlockPos *position,bool x,int32_t *out) {
     if(!BlockPos_isInstance((MCObject *)position)||!MCObjectRootScope_pin(scope,(MCObject *)position))return false;
     const WorldBorderPositionDependencies *d=border->positionDependencies;
-    if(!d){*out=x?position->x:position->z;return true;}
+    if(!d)return (x?Vec3i_getX(&position->vec3i,out):Vec3i_getZ(&position->vec3i,out))==NATIVE_ARRAY_OK;
     if(!MCObjectRootScope_pin(scope,border->positionContext))return false;
     return (x?d->getX&&d->getX(border->positionContext,position,out):
         d->getZ&&d->getZ(border->positionContext,position,out))&&!MCObjectHeap_failed(border->object.heap);

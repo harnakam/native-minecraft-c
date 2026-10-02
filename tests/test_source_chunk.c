@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "client/entity/EntityPlayerSP.h"
 #include "world/EnumSkyBlock.h"
 #include "world/chunk/Chunk.h"
@@ -109,7 +110,7 @@ static bool get_y(MCObject *o, BlockPos *p, int32_t *out) {
     CHECK(MCObjectHeap_hasBorrowers(o->heap));
     if (++w->calls == 3)
         w->chunk->storageArrays = w->replacement;
-    *out = p->y;
+    *out = p->vec3i.y;
     return true;
 }
 static const ChunkDependencies readDependencies = {.positionGetY = get_y};

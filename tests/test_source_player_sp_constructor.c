@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "client/entity/EntityPlayerSP.h"
 #include "stats/StatFileWriter.h"
 #include "entity/SharedMonsterAttributes.h"

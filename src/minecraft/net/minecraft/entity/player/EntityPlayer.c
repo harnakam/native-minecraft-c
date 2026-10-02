@@ -94,12 +94,15 @@ bool EntityPlayer_construct(MCGameplayPlayer *p,MCObject *world,NativeGameProfil
     if(!container)goto done;
     p->inventoryContainer=&container->container;p->openContainer=p->inventoryContainer;MCObjectHeap_touch(heap);
     DataWatcherBlockPos *pos=d->getSpawnPoint?d->getSpawnPoint(context,world):NULL;
-    if(!DataWatcher_blockPosIsInstance((MCObject *)pos)||pos->object.heap!=heap||
+    if(!DataWatcher_blockPosIsInstance((MCObject *)pos)||((MCObject *)pos)->heap!=heap||
        !MCObjectRootScope_pin(&scope,(MCObject *)pos))goto done;
-    uint32_t ybits=(uint32_t)pos->y+1u;
+    int32_t x,yValue,z;
+    if(Vec3i_getX(&pos->vec3i,&x)!=NATIVE_ARRAY_OK||Vec3i_getY(&pos->vec3i,&yValue)!=NATIVE_ARRAY_OK)goto done;
+    uint32_t ybits=(uint32_t)yValue+1u;
     int32_t y=ybits<=INT32_MAX?(int32_t)ybits:-1-(int32_t)(UINT32_MAX-ybits);
+    if(Vec3i_getZ(&pos->vec3i,&z)!=NATIVE_ARRAY_OK)goto done;
     if(!d->setLocationAndAngles||!effect(p,d->setLocationAndAngles(context,p,
-       (double)pos->x+0.5,(double)y,(double)pos->z+0.5,0,0)))goto done;
+       (double)x+0.5,(double)y,(double)z+0.5,0,0)))goto done;
     p->living.unused180=180.0f;p->living.entity.fireResistance=20;MCObjectHeap_touch(heap);ok=true;
 done:
     ok=effect(p,ok);MCObjectRootScope_end(&scope);return ok;

@@ -1,3 +1,4 @@
+#include "entity/DataWatcher.h"
 #include "entity/item/EntityItemFrame.h"
 #include "item/ItemStackFrame.h"
 #include "nbt/NBTTagCompound.h"
@@ -121,7 +122,7 @@ static void constructor_defaults(NativeJavaRandomRuntime *random,NativeEntityIDR
     CHECK(Entity_isInstance((MCObject *)frame)&&EntityHanging_isInstance((MCObject *)frame));
     CHECK(frame->hanging.tickCounter1==0&&frame->hanging.facingDirection==NULL);
     BlockPos *p=EntityHanging_getHangingPosition(&frame->hanging);
-    CHECK(p&&p->x==0&&p->y==0&&p->z==0&&frame->hanging.entity.isAirBorne);
+    CHECK(p&&p->vec3i.x==0&&p->vec3i.y==0&&p->vec3i.z==0&&frame->hanging.entity.isAirBorne);
     AxisAlignedBB *b=Entity_getEntityBoundingBox(&frame->hanging.entity);
     CHECK(b&&b->minX==0&&b->minY==0&&b->minZ==0&&b->maxX==0.5&&b->maxY==0.5&&b->maxZ==0.5);
     DataWatcher *d=frame->hanging.entity.dataWatcher;
@@ -159,7 +160,7 @@ static void bounds_cases(NativeJavaRandomRuntime *random,NativeEntityIDRuntime *
         CHECK(f->hanging.entity.boundingBox==old&&f->hanging.facingDirection==cases[i].direction);
         BlockPos *before=f->hanging.hangingPosition;f->hanging.entity.isAirBorne=false;
         CHECK(EntityHanging_setPosition(&f->hanging,-1.1,64.8,7.2)==ENTITY_FRAME_OK);
-        CHECK(f->hanging.hangingPosition!=before&&f->hanging.hangingPosition->x==-2&&f->hanging.hangingPosition->y==64&&f->hanging.hangingPosition->z==7);
+        CHECK(f->hanging.hangingPosition!=before&&f->hanging.hangingPosition->vec3i.x==-2&&f->hanging.hangingPosition->vec3i.y==64&&f->hanging.hangingPosition->vec3i.z==7);
         CHECK(f->hanging.entity.boundingBox==old&&!f->hanging.entity.isAirBorne&&f->hanging.entity.posX==-1.1);
         CHECK(EntityHanging_setPosition(&f->hanging,4,8,9)==ENTITY_FRAME_OK&&f->hanging.entity.isAirBorne);
         CHECK(f->hanging.entity.boundingBox!=old);
@@ -261,7 +262,7 @@ static void nbt_and_lifetime(NativeJavaRandomRuntime *random,NativeEntityIDRunti
     CHECK(EntityItemFrame_getDisplayedItem(loaded,&loadedItem)==ENTITY_FRAME_OK&&loadedItem&&loadedItem->itemFrame==loaded&&loadedItem->stackSize==1);
     CHECK(loadedItem->stackTagCompound!=stored->stackTagCompound&&NBTBase_equals((NBTBase *)loadedItem->stackTagCompound,(NBTBase *)stored->stackTagCompound));
     CHECK(EntityItemFrame_getRotation(loaded,&rotation)==ENTITY_FRAME_OK&&rotation==-6&&loaded->itemDropChance==0.25f);
-    CHECK(loaded->hanging.facingDirection==&NativeHangingFacing_WEST&&loaded->hanging.hangingPosition->x==0&&loaded->hanging.hangingPosition->y==2&&loaded->hanging.hangingPosition->z==3);
+    CHECK(loaded->hanging.facingDirection==&NativeHangingFacing_WEST&&loaded->hanging.hangingPosition->vec3i.x==0&&loaded->hanging.hangingPosition->vec3i.y==2&&loaded->hanging.hangingPosition->vec3i.z==3);
     MCObjectRoot root={0};CHECK(MCObjectRoot_init(&root,h,(MCObject *)loaded));
     CHECK(MCObjectHeap_collect(h));loaded=(EntityItemFrame *)MCObjectRoot_get(&root);
     CHECK(EntityItemFrame_getDisplayedItem(loaded,&loadedItem)==ENTITY_FRAME_OK&&loadedItem->itemFrame==loaded);

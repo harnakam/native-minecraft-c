@@ -800,8 +800,13 @@ static void server_processPlayerBlockPlacement(void *opaque,
         disconnect_peer(peer, "Invalid block placement position.");
         return;
     }
-    DataWatcherBlockPos position = *source_position;
-    int x = position.x, y = position.y, z = position.z;
+    int32_t x,y,z;
+    if(Vec3i_getX((Vec3i *)&source_position->vec3i,&x)!=NATIVE_ARRAY_OK||
+       Vec3i_getY((Vec3i *)&source_position->vec3i,&y)!=NATIVE_ARRAY_OK||
+       Vec3i_getZ((Vec3i *)&source_position->vec3i,&z)!=NATIVE_ARRAY_OK) {
+        disconnect_peer(peer,"Invalid block placement position.");
+        return;
+    }
     int face = C08PacketPlayerBlockPlacement_getPlacedBlockDirection(packet);
     if (face > 5 && face != 255) {
         disconnect_peer(peer, "Invalid block placement direction.");
@@ -899,9 +904,9 @@ static void handle_play(mc_server *server, server_peer *peer, mc_buf *packet, in
         if (decoded) {
             const DataWatcherBlockPos *position = C07PacketPlayerDigging_getPosition(source);
             status = C07PacketPlayerDigging_getStatus(source)->ordinal;
-            x = position->x;
-            y = position->y;
-            z = position->z;
+            decoded = Vec3i_getX((Vec3i *)&position->vec3i,&x)==NATIVE_ARRAY_OK &&
+                      Vec3i_getY((Vec3i *)&position->vec3i,&y)==NATIVE_ARRAY_OK &&
+                      Vec3i_getZ((Vec3i *)&position->vec3i,&z)==NATIVE_ARRAY_OK;
         }
         MCObjectRootScope_end(&decode_scope);
         MCObjectHeap_free(heap);
