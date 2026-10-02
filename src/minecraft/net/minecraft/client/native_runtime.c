@@ -60,7 +60,7 @@ static bool animation(MCObject *c,const Item *item,ItemStack *s,MCObject *w,MCOb
     MCClientBindings *b=binding(c);
     if (!b || !ItemStack_registryIsKnownItem(item) ||
         w!=(MCObject *)((MCGameplayWorld *)(b->player->living.entity.worldObj)) || p!=(MCObject *)b->player) { if (c) MCObjectHeap_fail(c->heap); return false; }
-    if (ItemStack_registryId(item)==358) { bool changed; return ItemMap_onUpdate(s,((MCGameplayWorld *)(b->player->living.entity.worldObj)),p,index,selected,&changed); }
+    if (ItemStack_registryId(item)==358) { bool changed; return NativeItemMap_onUpdate(s,((MCGameplayWorld *)(b->player->living.entity.worldObj)),p,index,selected,&changed); }
     Item_onUpdate(item,s,w,p,index,selected); return !MCObjectHeap_failed(c->heap);
 }
 static const ItemStackAnimationDependencies item_animation={animation};
@@ -223,7 +223,7 @@ static bool craft_stat(MCObject *o,const Item *item,int32_t amount) {
     return b && EntityPlayerSP_addStat(b->sp,stat,amount);
 }
 static bool on_created(ItemStack *s,MCObject *w,MCObject *p) {
-    if (ItemStack_registryId(s->item)==358) return ItemMap_onCreated(s,(MCGameplayWorld *)w,p);
+    if (ItemStack_registryId(s->item)==358) return NativeItemMap_onCreated(s,(MCGameplayWorld *)w,p);
     /* Original Item.onCreated body is empty; ItemMap is its only override in
        the supplied source. This native immutable subclass dispatch does not
        claim the remaining Item methods translated. */

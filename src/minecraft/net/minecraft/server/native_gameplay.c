@@ -35,7 +35,7 @@ static bool item_on_update(MCObject *context, const Item *item, ItemStack *stack
     (void)context;
     if (item == ItemStack_registryItem(358)) {
         bool changed = false;
-        return ItemMap_onUpdate(stack, (MCGameplayWorld *)world, entity, slot, selected, &changed);
+        return NativeItemMap_onUpdate(stack, (MCGameplayWorld *)world, entity, slot, selected, &changed);
     }
     if (!ItemStack_registryIsKnownItem(item)) {
         MCObjectHeap_fail(stack->object.heap);
@@ -312,7 +312,7 @@ static bool craft_stat(MCObject *object, const Item *item, int32_t amount) {
 }
 static bool created(ItemStack *stack, MCObject *world, MCObject *player) {
     if (ItemStack_getItem(stack) == ItemStack_registryItem(358))
-        return ItemMap_onCreated(stack, (MCGameplayWorld *)world, player);
+        return NativeItemMap_onCreated(stack, (MCGameplayWorld *)world, player);
     /* The original base Item.onCreated body is empty. Other overrides are
        dispatched separately as their classes are translated. */
     return true;

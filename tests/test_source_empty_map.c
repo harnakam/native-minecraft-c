@@ -167,9 +167,9 @@ static void failures(void) {
 }
 static void maps_and_aliases(void) {
     MCGameplay g={0};Fixture *f=setup(&g,1,false,false,false,32768,1024,-2048,-129);MCGameplayWorld *w=((MCGameplayWorld *)(f->player->living.entity.worldObj));
-    mc_map_info old={0};old.id=0;old.scale=3;old.center_x=128;old.colors[0]=42;old.metadata_known=true;CHECK(ItemMapData_nativeSetItemData(w,&old));
+    mc_map_info old={0};old.id=0;old.scale=3;old.center_x=128;old.colors[0]=42;old.metadata_known=true;CHECK(NativeItemMapData_setItemData(w,&old));
     ItemStack *out=ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),f->input,w,f->player,NULL,NULL);CHECK(out&&out->itemDamage==0&&w->maps.count==1&&map_next(w)==32769);CHECK(w->maps.entries[0].scale==0&&w->maps.entries[0].center_x==1024&&w->maps.entries[0].center_z==-2048&&w->maps.entries[0].dimension==127&&w->maps.entries[0].colors[0]==0);CHECK(MCGameplay_free(&g));
-    f=setup(&g,2,false,false,false,96,0,0,0);w=((MCGameplayWorld *)(f->player->living.entity.worldObj));for(int i=0;i<96;i++){old.id=i;CHECK(ItemMapData_nativeSetItemData(w,&old));}
+    f=setup(&g,2,false,false,false,96,0,0,0);w=((MCGameplayWorld *)(f->player->living.entity.worldObj));for(int i=0;i<96;i++){old.id=i;CHECK(NativeItemMapData_setItemData(w,&old));}
     MCGameplayTransaction tx={0};CHECK(MCGameplay_begin(&g,&tx));MCGameplayPlayer *p=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];Fixture *c=(Fixture *)p->effects;
     CHECK(!ItemEmptyMap_onItemRightClick(ItemStack_registryItem(395),c->input,((MCGameplayWorld *)(p->living.entity.worldObj)),p,&deps,(MCObject *)c)&&MCObjectHeap_failed(tx.working.heap));CHECK(c->input->stackSize==2&&map_next((MCGameplayWorld *)p->living.entity.worldObj)==97&&((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count==96);CHECK(f->input->stackSize==2&&map_next(w)==96&&w->maps.count==96);CHECK(MCGameplay_abort(&tx)&&MCGameplay_free(&g));
     f=setup(&g,2,true,false,false,0,0,0,0);w=((MCGameplayWorld *)(f->player->living.entity.worldObj));CHECK(MCGameplay_begin(&g,&tx));p=(MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];c=(Fixture *)p->effects;

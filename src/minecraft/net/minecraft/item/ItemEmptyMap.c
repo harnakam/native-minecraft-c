@@ -22,16 +22,16 @@ ItemStack *ItemEmptyMap_onItemRightClick(const Item *self,ItemStack *input,
         MCObjectRootScope_pin(&scope,context);
     ItemStack *filled=NULL,*result=NULL;
     if(ok) {
-        int32_t id=ItemMapData_getUniqueDataId(world);
+        int32_t id=NativeItemMapData_getUniqueDataId(world);
         if(!MCObjectHeap_failed(heap))filled=ItemStack_new(heap,ItemStack_registryItem(358),1,id);
         if(filled) {
             /* MapData's source constructor initializes these fields to zero.
                Store that object before configuring its fields, unlike getMapData. */
             mc_map_info created={0};created.id=ItemStack_getMetadata(filled);
-            mc_map_info *stored=ItemMapData_nativeSetItemData(world,&created);
+            mc_map_info *stored=NativeItemMapData_setItemData(world,&created);
             if(stored) {
                 stored->scale=0;
-                ItemMapData_calculateMapCenter(stored,player->living.entity.posX,player->living.entity.posZ,stored->scale);
+                NativeItemMapData_calculateMapCenter(stored,player->living.entity.posX,player->living.entity.posZ,stored->scale);
                 WorldProvider *provider=world->provider;
                 if(!WorldProvider_isInstance((MCObject *)provider)||provider->object.heap!=heap){fail(heap);goto done;}
                 uint8_t dimension=(uint8_t)WorldProvider_getDimensionId(provider);

@@ -1,9 +1,14 @@
 #ifndef C919_ITEM_MAP_CREATED_H
 #define C919_ITEM_MAP_CREATED_H
 #include "item/ItemMapData.h"
-/* Original ItemMap.onCreated body over the canonical stack and native World
-   owner. The map store/World methods remain explicit native dependencies.
-   The unused original player parameter is retained. Counter narrowing and
-   replacement use the same dependencies as ItemMap.getMapData. */
-bool ItemMap_onCreated(ItemStack *, MCGameplayWorld *, MCObject *player);
+/* Supplied ItemMap.onCreated body over actual saved-data references. The
+   original player argument is unused, including NULL/foreign references.
+   A newly constructed map replaces the cache ref only after field/dirty work;
+   old map/color aliases remain distinct and alive under their existing roots.
+   Healthy Source exceptions retain ID/stack/constructor prefixes. */
+WorldSavedDataResult ItemMap_onCreated(ItemStack *, World *,
+                                       MCObject *unusedPlayer);
+/* Explicit old live native view, not a managed MapData constructor port. */
+bool NativeItemMap_onCreated(ItemStack *, MCGameplayWorld *,
+                             MCObject *unusedPlayer);
 #endif

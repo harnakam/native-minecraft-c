@@ -38,7 +38,7 @@ static WorldSavedDataResult load(int32_t id, World *world, MapData **out) {
     CHECK(stack);
     /* The existing real native path consults its value store, even when the
        Source saved-data provider has the actual MapData. */
-    mc_map_info *prior = ItemMap_getMapData(stack, world);
+    mc_map_info *prior = NativeItemMapData_getMapData(stack, world);
     if (MCObjectHeap_failed(world->object.heap))
         return WORLD_SAVED_DATA_FAILURE;
     *out = (MapData *)(void *)prior;

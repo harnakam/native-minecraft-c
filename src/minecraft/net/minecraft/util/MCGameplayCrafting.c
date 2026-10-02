@@ -10,7 +10,7 @@
 #include "item/crafting/RecipeRepairItem.h"
 #include "stats/StatList.h"
 static const mc_map_info *get_map(MCObject *world, ItemStack *stack) {
-    return ItemMap_getMapData(stack, (MCGameplayWorld *)world);
+    return NativeItemMapData_getMapData(stack, (MCGameplayWorld *)world);
 }
 CraftingManager *MCGameplayCrafting_newManager(MCObjectHeap *h) {
     MCObjectRootScope scope = {0};

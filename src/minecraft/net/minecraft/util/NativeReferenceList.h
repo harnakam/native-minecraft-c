@@ -2,6 +2,7 @@
 #define C919_NATIVE_REFERENCE_LIST_H
 #include "util/MCObjectHeap.h"
 #include "util/NativePrimitiveArray.h"
+#include "util/NativeTypedObjectArray.h"
 
 /* Native ordered reference collection, not a complete java.util class port.
    NULL and repeated references are real entries. Both list and growable storage
@@ -30,6 +31,18 @@ bool NativeReferenceList_add(NativeReferenceList *,MCObject *);
 bool NativeReferenceList_addAllArray(NativeReferenceList *,NativeObjectArray *,bool *changed);
 MCObject *NativeReferenceList_set(NativeReferenceList *,int32_t index,MCObject *);
 MCObject *NativeReferenceList_remove(NativeReferenceList *,int32_t index);
+/* Reached ArrayList Object-removal semantics. The query's actual equals is
+   called even for identical references; NULL uses the direct NULL branch.
+   The list remains live across callbacks. A healthy Source exception keeps
+   all completed mutations, including fastRemove's modCount/size prefix.
+   These methods retain native storage/capacity policy, not a full JDK port. */
+typedef struct NativeReferenceListEqualsMethods {
+    NativeArrayResult (*equals)(MCObject *context,MCObject *query,MCObject *stored,bool *out);
+} NativeReferenceListEqualsMethods;
+NativeArrayResult NativeReferenceList_removeObjectSource(NativeReferenceList *,MCObject *query,
+    const NativeReferenceListEqualsMethods *,MCObject *nullableContext,bool *removed);
+NativeArrayResult NativeReferenceList_sizeSource(const NativeReferenceList *,int32_t *out);
+NativeArrayResult NativeReferenceList_getSource(const NativeReferenceList *,int32_t index,MCObject **out);
 bool NativeReferenceList_clear(NativeReferenceList *);
 NativeReferenceList *NativeReferenceList_copy(const NativeReferenceList *);
 #endif

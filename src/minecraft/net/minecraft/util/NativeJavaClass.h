@@ -16,6 +16,7 @@ struct NativeJavaClassDescriptor {
 /* The same immutable Object fact used by the built-in hierarchy. New native
    Source facts must reference this identity rather than duplicate its name. */
 extern const NativeJavaClassDescriptor NativeJavaClass_ObjectClass;
+extern const NativeJavaClassDescriptor NativeJavaClass_EntityClass;
 typedef struct NativeJavaClass {
     MCObject object;
     const NativeJavaClassDescriptor *descriptor;

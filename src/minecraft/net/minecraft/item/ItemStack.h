@@ -96,11 +96,11 @@ NBTTagCompound *ItemStack_writeToNBT(ItemStack *stack,NBTTagCompound *output);
 ItemStackNBTResult ItemStack_readFromNBT(ItemStack *stack,NBTTagCompound *input);
 ItemStack *ItemStack_loadItemStackFromNBT(MCObjectHeap *heap,NBTTagCompound *input,ItemStackNBTResult *status);
 
-/* Animation, use and crafting method subsets are declared by
-   ItemStackAnimation.h, ItemStackUse.h and ItemStackCrafting.h, with their
+/* Animation, use, crafting and frame method subsets are declared by
+   ItemStackAnimation.h, ItemStackUse.h, ItemStackCrafting.h and ItemStackFrame.h, with their
    actual virtual Item dependencies explicit.
    Original body scope here: constructors/state/split/copy/equality, storage NBT,
    damage/stack properties and tag mutation. Combat,
-   tooltip/chat/attribute/rarity/enchantment behavior and ItemFrame/Block-cache
+   tooltip/chat/attribute/rarity/enchantment behavior and Block-cache
    queries require their actual class dependencies and are not stubbed here. */
 #endif

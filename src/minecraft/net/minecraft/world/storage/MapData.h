@@ -31,8 +31,9 @@ typedef struct MapInfoDependencies {
 } MapInfoDependencies;
 
 /* Complete declared Source state, followed by explicit native dispatch only.
-   updateVisiblePlayers/EntityItemFrame and the full ItemMap integration are
-   pending and have no placeholder API or successful substitute. */
+   updateVisiblePlayers is translated in MapDataVisibility.h over actual actor,
+   frame and collection references. Full ItemMap terrain/lifecycle and coherent
+   live map-owner integration are separate work, not successful substitutes. */
 struct MapData {
     WorldSavedData base;
     int32_t xCenter, zCenter;
@@ -71,6 +72,9 @@ WorldSavedDataResult MapData_getMapPacket(MapData *, ItemStack *, World *, MCGam
                                           S34PacketMaps **out);
 
 bool MapInfo_isInstance(const MCObject *);
+/* Size-independent exact native descriptor fact, for reached checkcast versus
+   malformed allocation handling. It does not accept a class-name match. */
+bool MapInfo_isRuntimeClass(const MCObject *);
 MapInfo *MapInfo_nativeAllocate(MCObjectHeap *, const MapInfoDependencies *, MCObject *);
 bool MapInfo_construct(MapInfo *, MapData *nullableOuter, MCGameplayPlayer *nullablePlayer);
 MapInfo *MapInfo_new(MCObjectHeap *, MapData *, MCGameplayPlayer *, const MapInfoDependencies *,

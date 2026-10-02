@@ -4,6 +4,22 @@
 bool BlockPos_isInstance(const MCObject *object) {
     return DataWatcher_blockPosIsInstance(object)&&MCObjectHeap_objectSize(object)>=sizeof(BlockPos);
 }
+BlockPos *NativeBlockPos_allocate(MCObjectHeap *heap) {
+    return DataWatcher_blockPos(heap,0,0,0);
+}
+static bool same_reference(const MCObject *object,void *expected) { return object==expected; }
+bool NativeBlockPos_constructCoordinates(BlockPos *position,int32_t x,int32_t y,int32_t z) {
+    MCObjectHeap *heap=position?position->object.heap:NULL;
+    if(!position||MCObjectHeap_failed(heap)||!position->object.klass||
+       MCObjectHeap_findObject(heap,position->object.klass,same_reference,position)!=(MCObject *)position||
+       !BlockPos_isInstance((MCObject *)position)) {
+        MCObjectHeap_fail(heap);
+        return false;
+    }
+    position->x=x;position->y=y;position->z=z;
+    MCObjectHeap_touch(heap);
+    return true;
+}
 static int32_t signed_bits(uint32_t bits) {
     return bits<=INT32_MAX?(int32_t)bits:-1-(int32_t)(UINT32_MAX-bits);
 }

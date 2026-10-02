@@ -1272,7 +1272,7 @@ static void tick_items(mc_server *server, uint64_t now) {
                 mc_buf packet;
                 mc_buf_init(&packet);
                 if (ok) {
-                    int result = ItemMap_createMapDataPacket(stack, w, p, &packet);
+                    int result = NativeItemMap_createMapDataPacket(stack, w, p, &packet);
                     if (result > 0)
                         ok = MCGameplayPackets_sendNative(p, &packet);
                     else if (result < 0)

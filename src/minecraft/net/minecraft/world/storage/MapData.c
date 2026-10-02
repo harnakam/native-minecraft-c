@@ -24,6 +24,9 @@ bool MapInfo_isInstance(const MCObject *o) {
     return o && o->klass == &infoClass && tracked(o->heap, o) &&
            MCObjectHeap_objectSize(o) >= sizeof(MapInfo);
 }
+bool MapInfo_isRuntimeClass(const MCObject *o) {
+    return o && o->klass == &infoClass && tracked(o->heap, o);
+}
 static const NativeJavaClassDescriptor *const mapParents[] = {&WorldSavedData_Class};
 const NativeJavaClassDescriptor MapData_Class = {"net.minecraft.world.storage.MapData", mapParents,
                                                  1, MapData_isInstance};
@@ -629,6 +632,8 @@ done:
 }
 WorldSavedDataResult MapData_getMapPacket(MapData *m, ItemStack *stack, World *world,
                                           MCGameplayPlayer *p, S34PacketMaps **out) {
+    /* The supplied body never evaluates worldIn. */
+    (void)world;
     if (!m)
         return WORLD_SAVED_DATA_EXCEPTION;
     MCObjectRootScope s = {0};
@@ -638,10 +643,9 @@ WorldSavedDataResult MapData_getMapPacket(MapData *m, ItemStack *stack, World *w
     WorldSavedDataResult r = WORLD_SAVED_DATA_FAILURE;
     MapInfo *info = NULL;
     S34PacketMaps *packet = NULL;
-    if (!out || !tracked(h, (MCObject *)stack) || !tracked(h, (MCObject *)world) ||
+    if (!out || !tracked(h, (MCObject *)stack) ||
         player_argument(h, p) != WORLD_SAVED_DATA_OK ||
-        !MCObjectRootScope_pin(&s, (MCObject *)stack) ||
-        !MCObjectRootScope_pin(&s, (MCObject *)world) || !MCObjectRootScope_pin(&s, (MCObject *)p))
+        !MCObjectRootScope_pin(&s, (MCObject *)stack) || !MCObjectRootScope_pin(&s, (MCObject *)p))
         goto done;
     r = lookup(m, p, &info);
     if (r == WORLD_SAVED_DATA_OK && info)

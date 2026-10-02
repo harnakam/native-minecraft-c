@@ -2,6 +2,7 @@
 #include "client/entity/EntityPlayerSP.h"
 #include "entity/player/EntityPlayerMP.h"
 #include "entity/item/EntityItem.h"
+#include "entity/item/EntityItemFrame.h"
 #include "util/MCGameplayPlayer.h"
 #include <stdlib.h>
 
@@ -63,8 +64,8 @@ static bool native_player(const MCObject *o){
 }
 const NativeJavaClassDescriptor NativeJavaClass_ObjectClass={"java.lang.Object",NULL,0,NULL};
 static const NativeJavaClassDescriptor *const entityParents[]={&NativeJavaClass_ObjectClass};
-static const NativeJavaClassDescriptor entityDescriptor={"net.minecraft.entity.Entity",entityParents,1,NULL};
-static const NativeJavaClassDescriptor *const livingParents[]={&entityDescriptor};
+const NativeJavaClassDescriptor NativeJavaClass_EntityClass={"net.minecraft.entity.Entity",entityParents,1,NULL};
+static const NativeJavaClassDescriptor *const livingParents[]={&NativeJavaClass_EntityClass};
 static const NativeJavaClassDescriptor livingDescriptor={"net.minecraft.entity.EntityLivingBase",livingParents,1,NULL};
 static const NativeJavaClassDescriptor *const playerParents[]={&livingDescriptor};
 static const NativeJavaClassDescriptor playerDescriptor={"net.minecraft.entity.player.EntityPlayer",playerParents,1,NULL};
@@ -74,12 +75,12 @@ static const NativeJavaClassDescriptor *const spParents[]={&acpDescriptor};
 static const NativeJavaClassDescriptor spDescriptor={"net.minecraft.client.entity.EntityPlayerSP",spParents,1,source_sp};
 static const NativeJavaClassDescriptor *const mpParents[]={&playerDescriptor};
 static const NativeJavaClassDescriptor mpDescriptor={"net.minecraft.entity.player.EntityPlayerMP",mpParents,1,source_mp};
-static const NativeJavaClassDescriptor *const itemParents[]={&entityDescriptor};
+static const NativeJavaClassDescriptor *const itemParents[]={&NativeJavaClass_EntityClass};
 static const NativeJavaClassDescriptor itemDescriptor={"net.minecraft.entity.item.EntityItem",itemParents,1,source_item};
 static const NativeJavaClassDescriptor *const nativePlayerParents[]={&playerDescriptor};
 static const NativeJavaClassDescriptor nativePlayerDescriptor={"C919.native.GameplayPlayer",nativePlayerParents,1,native_player};
 NativeJavaClass *NativeJavaClass_Object(MCObjectHeap *h){return NativeJavaClass_literal(h,&NativeJavaClass_ObjectClass);}
-NativeJavaClass *NativeJavaClass_Entity(MCObjectHeap *h){return NativeJavaClass_literal(h,&entityDescriptor);}
+NativeJavaClass *NativeJavaClass_Entity(MCObjectHeap *h){return NativeJavaClass_literal(h,&NativeJavaClass_EntityClass);}
 static bool matches(const MCObject *o,void *context){
     if(!NativeJavaClass_isInstance(o))return false;
     const NativeJavaClassDescriptor *d=((const NativeJavaClass *)o)->descriptor;
@@ -89,7 +90,7 @@ static const NativeJavaClassDescriptor *runtime_descriptor(MCObjectHeap *h,MCObj
     if(!o||o->heap!=h||MCObjectHeap_objectSize(o)<sizeof(MCObject)||MCObjectHeap_failed(h)){fail(h);return NULL;}
     NativeJavaClass *c=(NativeJavaClass *)MCObjectHeap_findObject(h,&klass,matches,o);
     if(c)return c->descriptor;
-    const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor};
+    const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor,&EntityItemFrame_Class};
     for(size_t i=0;i<sizeof(builtins)/sizeof(*builtins);++i)
         if(builtins[i]->matchesRuntimeClass(o))return builtins[i];
     fail(h);return NULL;

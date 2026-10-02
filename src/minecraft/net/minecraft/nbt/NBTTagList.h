@@ -4,6 +4,8 @@
 #include "nbt/NBTTagIntArray.h"
 typedef struct NBTTagList NBTTagList;
 NBTTagList *NBTTagList_new(MCObjectHeap *heap);
+/* Exact tracked native descriptor and complete owned storage shape. */
+bool NBTTagList_isInstance(const MCObject *);
 bool NBTTagList_appendTag(NBTTagList *list,NBTBase *tag);
 bool NBTTagList_set(NBTTagList *list,int32_t index,NBTBase *tag);
 NBTBase *NBTTagList_removeTag(NBTTagList *list,int32_t index);

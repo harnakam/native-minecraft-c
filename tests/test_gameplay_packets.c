@@ -1,6 +1,7 @@
 #include "util/MCGameplayPackets.h"
 #include "util/MCPacketQueue.h"
 #include "item/ItemMapLoad.h"
+#include "item/ItemMapPacket.h"
 #include "world/storage/SaveDataMemoryStorage.h"
 #include "util/Vec4b.h"
 #include "nbt/nbt.h"
@@ -182,7 +183,7 @@ static void source_map_packets(void) {
     MapInfo *info = NULL; S34PacketMaps *packet = NULL;
     CHECK(MapData_getMapInfo(map, player, &info) == WORLD_SAVED_DATA_OK && info);
     ItemStack *stack = ItemStack_new(game.heap, ItemStack_registryItem(358), 1, 41); CHECK(stack);
-    CHECK(MapInfo_getPacket(info, stack, &packet) == WORLD_SAVED_DATA_OK && packet);
+    CHECK(ItemMap_createMapDataPacket(stack, world, player, &packet) == WORLD_SAVED_DATA_OK && packet);
     CHECK(MCPacketQueue_append(player->pendingPackets, (MCObject *)packet, 0x34));
     MCGameplayPacketKind kind;
     CHECK(MCGameplayPackets_packetAt(player, 0, &kind) == (MCObject *)packet && kind == MC_GAMEPLAY_PACKET_MAP);

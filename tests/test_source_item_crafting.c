@@ -91,7 +91,7 @@ static bool created(ItemStack *stack, MCObject *world, MCObject *object) {
           (p->replace_item ? ItemStack_registryItem(1) : p->observed_item));
     if (p->fail_created)
         return false;
-    return ItemMap_onCreated(stack, (World *)world, object);
+    return NativeItemMap_onCreated(stack, (World *)world, object);
 }
 static const ItemStackCraftingDispatch dispatch = {add_stat, created};
 static void add_map(World *world, int32_t id, uint8_t scale, int32_t x, int32_t z,
@@ -104,7 +104,7 @@ static void add_map(World *world, int32_t id, uint8_t scale, int32_t x, int32_t 
     map.dimension = dimension;
     map.metadata_known = true;
     map.colors[19] = 73;
-    CHECK(ItemMapData_nativeSetItemData(world, &map));
+    CHECK(NativeItemMapData_setItemData(world, &map));
 }
 static NBTTagCompound *mark(ItemStack *stack) {
     NBTTagCompound *tag = NBTTagCompound_new(stack->object.heap);
@@ -141,7 +141,7 @@ static void order_and_amount(void) {
           p->stack->item == ItemStack_registryItem(1));
     /* The original empty base Item.onCreated can receive a null World when
        the map-specific body has no scaling marker to inspect. */
-    CHECK(ItemMap_onCreated(p->stack, NULL, NULL));
+    CHECK(NativeItemMap_onCreated(p->stack, NULL, NULL));
     MCObjectHeap_free(h);
 }
 static void failures(void) {
@@ -196,7 +196,7 @@ static void scaling_aliases(void) {
     for (size_t i = 0; i < MC_MAP_PIXELS; i++)
         CHECK(map->colors[i] == 0);
     CHECK(mc_maps_find_const(&w->maps, 4)->colors[19] == 73);
-    CHECK(ItemMap_onCreated(alias, w, (MCObject *)p));
+    CHECK(NativeItemMap_onCreated(alias, w, (MCObject *)p));
     CHECK(alias->itemDamage == 11 && map_next(w) == 12);
     CHECK(mc_maps_find_const(&w->maps, 11)->scale == 3 && alias->stackTagCompound == tag);
     CHECK(!MCObjectHeap_failed(h));
@@ -212,7 +212,7 @@ static void missing_remote_and_limits(void) {
     CHECK(World_nativeImportMapNextProjection(w, 10));
     p->stack->itemDamage = 100000;
     NBTTagCompound *tag = mark(p->stack);
-    CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
+    CHECK(NativeItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(p->stack->itemDamage == 11 && p->stack->stackTagCompound == tag && w->maps.count == 2 &&
           map_next(w) == 12);
     const mc_map_info *old = mc_maps_find_const(&w->maps, 10),
@@ -221,7 +221,7 @@ static void missing_remote_and_limits(void) {
           old->dimension == -1);
     CHECK(scaled && scaled->scale == 4 && scaled->center_x == -1088 && scaled->center_z == 960 &&
           scaled->dimension == -1);
-    CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
+    CHECK(NativeItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(mc_maps_find_const(&w->maps, 12)->scale == 4);
     MCObjectHeap_free(h);
     h = MCObjectHeap_new(1024 * 1024);
@@ -229,7 +229,7 @@ static void missing_remote_and_limits(void) {
     p = make_player(h, 1);
     w->isRemote = true;
     tag = mark(p->stack);
-    CHECK(!ItemMap_onCreated(p->stack, w, (MCObject *)p));
+    CHECK(!NativeItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(MCObjectHeap_failed(h));
     CHECK(p->stack->itemDamage == 0 && p->stack->stackTagCompound == tag && !w->maps.count &&
           map_next(w) == 1);
@@ -241,7 +241,7 @@ static void missing_remote_and_limits(void) {
     add_map(w, 4, 4, 192, 192, 0);
     CHECK(World_nativeImportMapNextProjection(w,5));
     tag = mark(p->stack);
-    CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
+    CHECK(NativeItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(p->stack->itemDamage == 5 && w->maps.count == 2);
     CHECK(mc_maps_find_const(&w->maps, 5)->scale == 4 && p->stack->stackTagCompound == tag);
     MCObjectHeap_free(h);
@@ -251,7 +251,7 @@ static void missing_remote_and_limits(void) {
     add_map(w, 4, 1, 100, -50, 0);
     CHECK(World_nativeImportMapNextProjection(w, INT16_MAX + 1));
     tag = mark(p->stack);
-    CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
+    CHECK(NativeItemMap_onCreated(p->stack, w, (MCObject *)p));
     CHECK(!MCObjectHeap_failed(h));
     CHECK(p->stack->itemDamage == 0 && p->stack->stackTagCompound == tag && w->maps.count == 2);
     CHECK(map_next(w) == INT16_MAX + 2 && mc_maps_find_const(&w->maps, 0)->scale == 2);
@@ -276,7 +276,7 @@ static void numeric_markers(void) {
             CHECK(NBTTagCompound_setLong_ascii(tag, "map_is_scaling", i == 4 ? 256 : 0));
         else
             CHECK(NBTTagCompound_setDouble_ascii(tag, "map_is_scaling", -.5));
-        CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
+        CHECK(NativeItemMap_onCreated(p->stack, w, (MCObject *)p));
         CHECK(p->stack->itemDamage == (scaling ? 10 : 4));
         CHECK(w->maps.count == (scaling ? 2u : 1u));
         CHECK(p->stack->stackTagCompound == tag && !MCObjectHeap_failed(h));
@@ -299,7 +299,7 @@ static void counter_replacement(void) {
         CHECK(old);
         /* Native S34 metadata presence does not add a source ItemMap guard. */
         mc_maps_find(&w->maps, 4)->metadata_known = false;
-        CHECK(ItemMap_onCreated(p->stack, w, (MCObject *)p));
+        CHECK(NativeItemMap_onCreated(p->stack, w, (MCObject *)p));
         CHECK(p->stack->itemDamage == damage[n] && map_next(w) == after[n]);
         CHECK(p->stack->stackSize == 0 && p->stack->stackTagCompound == tag);
         CHECK(w->maps.count == (damage[n] == 0 || damage[n] == 4 ? 2u : 3u));

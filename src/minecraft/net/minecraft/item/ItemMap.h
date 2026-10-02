@@ -2,9 +2,11 @@
 #define C919_ITEM_MAP_H
 #include "world/map.h"
 #include "item/ItemMapData.h"
+#include "item/ItemMapPacket.h"
 typedef struct MCGameplayPlayer MCGameplayPlayer;
-/* Source-method port: getMapData/updateMapData/onUpdate/createMapDataPacket.
-   The world adapter supplies loaded chunks and the viewer's dimension/sky. */
+/* Legacy native value-store implementation. Its dense terrain/color survey
+   and tracking owner remain explicit adapters until the live owner migration.
+   Actual Source saved-data methods are declared by ItemMapData/ItemMapLoad. */
 mc_map_info *mc_ItemMap_getMapData(mc_maps *maps,mc_slot *stack,bool remote,
     int32_t spawn_x,int32_t spawn_z,int dimension);
 bool mc_ItemMap_updateMapData(mc_map_info *map,const mc_world *world,int32_t viewer_id,
@@ -24,15 +26,15 @@ int mc_ItemMap_createMapDataPacket_at(mc_maps *maps,mc_slot *stack,int32_t viewe
 bool mc_ItemMap_survey(mc_map_info *map,const mc_world *world,double x,double z,
     int dimension,bool no_sky,uint32_t phase,bool *changed);
 
-/* Canonical source-reference overloads. getMapData is declared by ItemMapData;
-   these call it on the exact ItemStack, without mc_slot/Inventory DTOs.
+/* Legacy native reference entry points retain exact ItemStack references but
+   still store map state in the native value owner.
    The native World/actor inherited fields supply isRemote, dimension/isDead,
    time/noSky and terrain. Other ItemMap methods/full inheritance are not claimed.
    Entity arguments follow the original instanceof EntityPlayer branches.
    changed excludes transient MapInfo/decorations; retain the entire graph even
    when false. Failure means abort the complete working graph. */
-bool ItemMap_updateMapData(MCGameplayWorld *,MCObject *viewer,mc_map_info *,bool *changed);
-bool ItemMap_onUpdate(ItemStack *,MCGameplayWorld *,MCObject *entity,int32_t itemSlot,
+bool NativeItemMap_updateMapData(MCGameplayWorld *,MCObject *viewer,mc_map_info *,bool *changed);
+bool NativeItemMap_onUpdate(ItemStack *,MCGameplayWorld *,MCObject *entity,int32_t itemSlot,
     bool isSelected,bool *changed);
-int ItemMap_createMapDataPacket(ItemStack *,MCGameplayWorld *,MCGameplayPlayer *,mc_buf *);
+int NativeItemMap_createMapDataPacket(ItemStack *,MCGameplayWorld *,MCGameplayPlayer *,mc_buf *);
 #endif

@@ -1,11 +1,12 @@
 #include "entity/Entity.h"
 #include "entity/item/EntityItem.h"
+#include "entity/item/EntityItemFrame.h"
 #include "util/MCGameplayPlayer.h"
 #include "util/MathHelper.h"
 
 /* Native closed subclass classification of actual first-member descendants. */
 bool Entity_isInstance(const MCObject *object) {
-    return (EntityItem_isInstance(object)||MCGameplayPlayer_isInstance(object))&&
+    return (EntityItem_isInstance(object)||EntityItemFrame_isInstance(object)||MCGameplayPlayer_isInstance(object))&&
         MCObjectHeap_objectSize(object)>=sizeof(Entity);
 }
 static bool valid(Entity *entity) {

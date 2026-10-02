@@ -10,6 +10,21 @@ static void trace(MCObject *object,MCObjectVisitor visit,void *context) {
     NBTTagList *list=(NBTTagList*)object;list->storage=(NBTRefStorage*)visit((MCObject*)list->storage,context);
 }
 static const MCObjectClass tagClass={"NBTTagList",MCObjectHeap_plainClone,trace,NULL};
+static bool list_identity(const MCObject *o,void *c) { return o==c; }
+bool NBTTagList_isInstance(const MCObject *o) {
+    if(!o || o->klass!=&tagClass ||
+       MCObjectHeap_findObject(o->heap,&tagClass,list_identity,(void *)o)!=o ||
+       MCObjectHeap_objectSize(o)<sizeof(NBTTagList)) return false;
+    const NBTTagList *l=(const NBTTagList *)o;
+    if(l->base.type!=9 || l->count<0) return false;
+    if(!l->storage) return l->count==0;
+    const MCObject *s=(const MCObject *)l->storage;
+    if(s->heap!=o->heap || s->klass!=&storageClass ||
+       MCObjectHeap_findObject(o->heap,&storageClass,list_identity,(void *)s)!=s ||
+       MCObjectHeap_objectSize(s)<sizeof(NBTRefStorage)) return false;
+    return l->storage->capacity>=l->count && l->storage->capacity>=0 &&
+       (size_t)l->storage->capacity<=(MCObjectHeap_objectSize(s)-sizeof(NBTRefStorage))/sizeof(NBTBase *);
+}
 NBTTagList *NBTTagList_new(MCObjectHeap *heap) {
     NBTTagList *list=(NBTTagList*)MCObjectHeap_alloc(heap,sizeof(*list),&tagClass);
     if (list) list->base.type=9;

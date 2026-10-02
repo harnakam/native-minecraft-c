@@ -297,7 +297,7 @@ static bool real_base_map_dispatch(MCObject *context, const Item *self, ItemStac
     (void)context;
     if (self == ItemStack_registryItem(358)) {
         bool changed = true;
-        bool ok = ItemMap_onUpdate(s, (MCGameplayWorld *)world, entity, slot, selected, &changed);
+        bool ok = NativeItemMap_onUpdate(s, (MCGameplayWorld *)world, entity, slot, selected, &changed);
         CHECK(!changed);
         return ok;
     }

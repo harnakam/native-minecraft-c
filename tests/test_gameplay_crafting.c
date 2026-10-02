@@ -62,7 +62,7 @@ static bool add_stat(MCObject *o, const Item *item, int32_t amount) {
 static bool created(ItemStack *s, MCObject *w, MCObject *p) {
     MCGameplayWorld *world = (MCGameplayWorld *)w;
     if (s->item == ItemStack_registryItem(358))
-        return ItemMap_onCreated(s, world, p); /* Original base Item.onCreated has an empty body. */
+        return NativeItemMap_onCreated(s, world, p); /* Original base Item.onCreated has an empty body. */
     return true;
 }
 static const ItemStackCraftingDispatch sourceCrafting = {add_stat, created};
@@ -292,15 +292,15 @@ static void source_maps_and_snapshot(void) {
           ItemStack_setTagCompound(s, tag));
     CHECK(InventoryPlayer_setInventorySlotContents(f.player->inventory, 0, s));
     CHECK(InventoryPlayer_setItemStack(f.player->inventory, s));
-    mc_map_info *map = ItemMap_getMapData(s, f.world);
+    mc_map_info *map = NativeItemMapData_getMapData(s, f.world);
     CHECK(map && s->itemDamage == 10 && s->stackSize == 0 && s->stackTagCompound == tag);
     CHECK(map->center_x == -576 && map->center_z == 1472 && map->scale == 3 &&
           map->dimension == -1 && map->dirty && map_next(f.world) == 11);
     map->metadata_known = false;
-    CHECK(ItemMap_getMapData(s, f.world) == map);
+    CHECK(NativeItemMapData_getMapData(s, f.world) == map);
     f.world->isRemote = true;
     ItemStack *missing = item(&f, 1, -1, 500);
-    CHECK(!ItemMap_getMapData(missing, f.world) && missing->itemDamage == 500 &&
+    CHECK(!NativeItemMapData_getMapData(missing, f.world) && missing->itemDamage == 500 &&
           map_next(f.world) == 11 && !MCObjectHeap_failed(f.game.heap));
     f.world->isRemote = false;
     map->metadata_known = true;
@@ -321,7 +321,7 @@ static void source_maps_and_snapshot(void) {
     ItemStack *alias = InventoryPlayer_getItemStack(p->inventory);
     CHECK(alias == InventoryPlayer_getStackInSlot(p->inventory, 0) && alias != s);
     alias->itemDamage = 1000;
-    CHECK(ItemMap_getMapData(alias, ((MCGameplayWorld *)(p->living.entity.worldObj))) && alias->itemDamage == 11 &&
+    CHECK(NativeItemMapData_getMapData(alias, ((MCGameplayWorld *)(p->living.entity.worldObj))) && alias->itemDamage == 11 &&
           ((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count == 2);
     CHECK(s->itemDamage == 10 && f.world->maps.count == 1);
     MCObjectRootScope_end(&f.scope);
@@ -333,14 +333,14 @@ static void source_maps_and_snapshot(void) {
     f.world->worldInfo->spawnZ = INT32_MIN;
     CHECK(World_nativeImportMapNextProjection(f.world, 65535));
     s = item(&f, 1, -1, 999);
-    map = ItemMap_getMapData(s, f.world);
+    map = NativeItemMapData_getMapData(s, f.world);
     CHECK(map && s->itemDamage == 0 && map_next(f.world) == 0 && map->center_x == -2147483200 &&
           map->center_z == -2147483200);
     map->colors[0] = 42;
     mc_map_info *originalMap = map;
     CHECK(World_nativeImportMapNextProjection(f.world, 32768));
     s->itemDamage = 999;
-    map = ItemMap_getMapData(s, f.world);
+    map = NativeItemMapData_getMapData(s, f.world);
     CHECK(map && map == originalMap && s->itemDamage == 0 && map_next(f.world) == 32769 &&
           f.world->maps.count == 1 && map->colors[0] == 0);
     mc_nbt encoded = {0};
@@ -365,7 +365,7 @@ static void workbench_map_recipe(void) {
     map.center_z = -50;
     map.scale = 1;
     map.metadata_known = false;
-    CHECK(ItemMapData_nativeSetItemData(f.world, &map));
+    CHECK(NativeItemMapData_setItemData(f.world, &map));
     CHECK(World_nativeImportMapNextProjection(f.world, 10));
     for (int i = 0; i < 9; i++)
         put(c->craftMatrix, i, item(&f, i == 4 ? 358 : 339, i == 4 ? 0 : 1, i == 4 ? 4 : 0));
@@ -406,7 +406,7 @@ static void native_failures(void) {
         map.id = i;
         map.scale = 3;
         map.metadata_known = true;
-        CHECK(ItemMapData_nativeSetItemData(f.world, &map));
+        CHECK(NativeItemMapData_setItemData(f.world, &map));
     }
     CHECK(World_nativeImportMapNextProjection(f.world, MC_MAX_MAPS));
     ItemStack *s = item(&f, 358, -1, 1000);
@@ -417,7 +417,7 @@ static void native_failures(void) {
     CHECK(MCObjectRootScope_begin(&f.scope, tx.working.heap));
     MCGameplayPlayer *p = (MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
     ItemStack *ws = InventoryPlayer_getItemStack(p->inventory);
-    CHECK(!ItemMap_getMapData(ws, ((MCGameplayWorld *)(p->living.entity.worldObj))) && MCObjectHeap_failed(tx.working.heap));
+    CHECK(!NativeItemMapData_getMapData(ws, ((MCGameplayWorld *)(p->living.entity.worldObj))) && MCObjectHeap_failed(tx.working.heap));
     CHECK(ws->itemDamage == MC_MAX_MAPS && map_next((MCGameplayWorld *)p->living.entity.worldObj) == MC_MAX_MAPS + 1 &&
           ((MCGameplayWorld *)(p->living.entity.worldObj))->maps.count == MC_MAX_MAPS);
     CHECK(s->itemDamage == 1000 && map_next(f.world) == MC_MAX_MAPS);
@@ -443,7 +443,7 @@ static void original_map_vectors(const char *path) {
         f.world->provider->dimensionId = dimension;
         f.world->isRemote = remote != 0;
         ItemStack *s = item(&f, 358, 0, 999);
-        mc_map_info *map = ItemMap_getMapData(s, f.world);
+        mc_map_info *map = NativeItemMapData_getMapData(s, f.world);
         CHECK((map != NULL) == (present != 0));
         CHECK(s->itemDamage == damage && s->stackSize == 0 && map_next(f.world) == after);
         if (map)
