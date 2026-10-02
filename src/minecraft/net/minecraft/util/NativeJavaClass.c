@@ -3,6 +3,7 @@
 #include "entity/player/EntityPlayerMP.h"
 #include "entity/item/EntityItem.h"
 #include "entity/item/EntityItemFrame.h"
+#include "block/material/MapColor.h"
 #include "util/MCGameplayPlayer.h"
 #include <stdlib.h>
 
@@ -90,7 +91,7 @@ static const NativeJavaClassDescriptor *runtime_descriptor(MCObjectHeap *h,MCObj
     if(!o||o->heap!=h||MCObjectHeap_objectSize(o)<sizeof(MCObject)||MCObjectHeap_failed(h)){fail(h);return NULL;}
     NativeJavaClass *c=(NativeJavaClass *)MCObjectHeap_findObject(h,&klass,matches,o);
     if(c)return c->descriptor;
-    const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor,&EntityItemFrame_Class};
+    const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor,&EntityItemFrame_Class,&MapColor_Class};
     for(size_t i=0;i<sizeof(builtins)/sizeof(*builtins);++i)
         if(builtins[i]->matchesRuntimeClass(o))return builtins[i];
     fail(h);return NULL;
