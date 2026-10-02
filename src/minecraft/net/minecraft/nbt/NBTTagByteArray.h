@@ -1,7 +1,9 @@
 #ifndef C919_NATIVE_NBT_TAG_BYTE_ARRAY_H
 #define C919_NATIVE_NBT_TAG_BYTE_ARRAY_H
 #include "nbt/NBTBase.h"
-typedef struct NBTByteArrayStorage NBTByteArrayStorage;
+#include "util/NativePrimitiveArray.h"
+/* The same Java byte[] owner is shared by NBT, chunks and packet data. */
+typedef NativeByteArray NBTByteArrayStorage;
 typedef struct NBTTagByteArray NBTTagByteArray;
 NBTByteArrayStorage *NBTByteArrayStorage_new(MCObjectHeap *heap,const int8_t *data,int32_t length);
 int32_t NBTByteArrayStorage_length(const NBTByteArrayStorage *array);

@@ -14,6 +14,8 @@ Java原本、テクスチャ、音声、モデル、JAR、MCP本体・マッピ�
 
 Chunk/EmptyChunkの22フィールド・constructor・受信と読出しの対象本体、NibbleArray・ExtendedBlockStorage・ChunkPrimer、実ChunkProviderClientの索引・参照リスト・アンロード経路を移植しました。これらは実体を持つモジュールとして検証しています。現在の通信・描画はまだnative dense地形を使用し、WorldClient constructorとS21/S26のSource経路への切替は未完了です。この段階を、実clientの地形がSource Chunkへ移行済みとは数えません。
 
+WorldSavedData・ISaveHandler・SaveHandlerMP、MapStorageとSaveDataMemoryStorageのfield・constructor・cache/load/save/ID本体も原本から移植しました。例外後のpartial data、NULL、共有参照、保存中のリスト変更と呼出順を保持します。NBTとChunkのbyte[]は同じ管理オブジェクトへ統一しました。実clientのmemory providerはこのconstructorを使いますが、MapDataと地図packetをこのcacheへ移す作業、実disk handler、WorldClient全体の統合は残っています。
+
 Worldの40フィールドと基底constructor、spawn・height・top-solid・時刻などの対象メソッド、WorldInfo・WorldSettings・GameRules・3次元のWorldProviderを移植しました。実行中のspawnと時刻はWorldInfo、次元はproviderを参照し、別の値を正として保持しません。エンティティ検索は同じWorldのIntHashMapとloadedEntityList/playerEntitiesへ接続し、ID変更・削除・ワールド移動・再読み込みでも元の参照を保ちます。Scoreboard・ScoreObjective・Scoreと統計criterionの対象本体も同じWorldへ接続しています。WorldClient/WorldServer・ServerScoreboardの全処理、地形生成・Chunkの残処理・照明・バイオーム・JDKコレクション全体は未移植です。独自の密なチャンク保存、時計、描画などの接続処理は、元クラスとは区別して記録します。
 
 | 項目 | 現在の対応 |

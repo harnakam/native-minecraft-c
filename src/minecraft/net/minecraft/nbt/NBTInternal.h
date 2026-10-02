@@ -23,7 +23,6 @@ struct NBTTagLong { NBTPrimitive base; int64_t data; };
 struct NBTTagFloat { NBTPrimitive base; float data; };
 struct NBTTagDouble { NBTPrimitive base; double data; };
 struct NBTTagString { NBTBase base; NBTString *data; };
-struct NBTByteArrayStorage { MCObject object; int32_t length; int8_t data[]; };
 struct NBTIntArrayStorage { MCObject object; int32_t length; int32_t data[]; };
 struct NBTTagByteArray { NBTBase base; NBTByteArrayStorage *data; };
 struct NBTTagIntArray { NBTBase base; NBTIntArrayStorage *data; };

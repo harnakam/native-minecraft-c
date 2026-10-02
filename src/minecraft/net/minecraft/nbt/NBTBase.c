@@ -35,7 +35,7 @@ static NBTBase *copy(MCObjectHeap *h,const NBTBase *t,int32_t depth) {
     case 7: {
         NBTByteArrayStorage *s=((const NBTTagByteArray*)t)->data;
         if(!s) { MCObjectHeap_fail(h);return NULL; }
-        NBTByteArrayStorage *a=NBTByteArrayStorage_new(h,s->data,s->length);
+        NBTByteArrayStorage *a=NBTByteArrayStorage_new(h,s->values,s->length);
         return a?(NBTBase*)NBTTagByteArray_new(h,a):NULL;
     }
     case 8:return (NBTBase*)NBTTagString_new(h,((const NBTTagString*)t)->data);
@@ -83,7 +83,7 @@ static bool equal(const NBTBase *a,const NBTBase *b,int32_t depth) {
     case 6:return ((const NBTTagDouble*)a)->data==((const NBTTagDouble*)b)->data;
     case 7: {
         const NBTByteArrayStorage *x=((const NBTTagByteArray*)a)->data,*y=((const NBTTagByteArray*)b)->data;
-        return x==y || (x && y && x->length==y->length && (!x->length || memcmp(x->data,y->data,(size_t)x->length)==0));
+        return x==y || (x && y && x->length==y->length && (!x->length || memcmp(x->values,y->values,(size_t)x->length)==0));
     }
     case 8:return NBTString_equals(((const NBTTagString*)a)->data,((const NBTTagString*)b)->data);
     case 9: {
@@ -128,7 +128,7 @@ static uint32_t hash(const NBTBase *t,int32_t depth) {
     case 6:{uint64_t v=doubleBits(((const NBTTagDouble*)t)->data);value=(uint32_t)(v^(v>>32));break;}
     case 7: {
         const NBTByteArrayStorage *s=((const NBTTagByteArray*)t)->data;
-        if(s) { value=1;for(int32_t i=0;i<s->length;i++)value=value*31u+(uint32_t)(int32_t)s->data[i]; }
+        if(s) { value=1;for(int32_t i=0;i<s->length;i++)value=value*31u+(uint32_t)(int32_t)s->values[i]; }
         break;
     }
     case 8:value=(uint32_t)NBTString_hashCode(((const NBTTagString*)t)->data);break;
@@ -260,7 +260,7 @@ static bool write(NBTBase *tag,mc_buf *output,int32_t depth) {
     }
     case 7: {
         NBTByteArrayStorage *s=((NBTTagByteArray*)tag)->data;if(!s) { output->failed=true;break; }
-        mc_put_i32(output,s->length);mc_put_bytes(output,s->data,(size_t)s->length);break;
+        mc_put_i32(output,s->length);mc_put_bytes(output,s->values,(size_t)s->length);break;
     }
     case 8:return nbt_writeUTF(output,((NBTTagString*)tag)->data);
     case 9: {

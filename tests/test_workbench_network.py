@@ -287,8 +287,12 @@ class WorkbenchTests(unittest.TestCase):
     def test_unselected_main_inventory_map_resolves_and_uses_mapinfo_packets(self):
         with running_server(self.world) as port:
             peer = self.peer(port, "MapInStorage")
+            before = len(peer.observed)
             peer.creative(9, 358, 1, 7)
-            packet = peer.wait(0x34)
+            # creative() also reads the inventory acknowledgement. Retain any
+            # map packets received while that helper waits, in wire order.
+            maps = [payload for kind, payload in peer.observed[before:] if kind == 0x34]
+            packet = maps.pop(0) if maps else peer.wait(0x34)
             map_id, offset = read_vint(packet)
             self.assertEqual((map_id, packet[offset]), (0, 3))
             icons, offset = read_vint(packet, offset + 1)
@@ -298,7 +302,7 @@ class WorkbenchTests(unittest.TestCase):
             length, offset = read_vint(packet, offset + 4)
             self.assertEqual((length, packet[offset:]), (16384, bytes(16384)),
                              "unselected maps resolve and track players without surveying terrain")
-            packet = peer.wait(0x34)
+            packet = maps.pop(0) if maps else peer.wait(0x34)
             _, offset = read_vint(packet)
             icons, offset = read_vint(packet, offset + 1)
             offset += icons * 3
