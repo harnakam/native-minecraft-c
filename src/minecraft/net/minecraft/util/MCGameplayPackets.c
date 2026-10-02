@@ -12,6 +12,16 @@ CODEC(S32PacketConfirmTransaction, 0x32)
 CODEC(S1CPacketEntityMetadata, 0x1c)
 CODEC(S39PacketPlayerAbilities, 0x39)
 #undef CODEC
+/* Both existing native map messages and translated S34 objects share the
+   actual deferred transport queue during the remaining owner migration. */
+static bool is_map_packet(const MCObject *object) {
+    return S34PacketMaps_isInstance(object) || NativePacket_isInstance(object);
+}
+static bool write_map_packet(MCObject *object, PacketBuffer *buffer) {
+    if (S34PacketMaps_isInstance(object))
+        return S34PacketMaps_writePacketData((S34PacketMaps *)object, buffer) == NATIVE_ARRAY_OK;
+    return NativePacket_writePacketData(object, buffer);
+}
 static const MCPacketCodec codecs[] = {
     {0x04, NativePacket_isInstance, NativePacket_writePacketData},
     {0x0d, NativePacket_isInstance, NativePacket_writePacketData},
@@ -26,7 +36,7 @@ static const MCPacketCodec codecs[] = {
     {0x2f, S2FPacketSetSlot_isInstance, write_S2FPacketSetSlot},
     {0x30, S30PacketWindowItems_isInstance, write_S30PacketWindowItems},
     {0x32, S32PacketConfirmTransaction_isInstance, write_S32PacketConfirmTransaction},
-    {0x34, NativePacket_isInstance, NativePacket_writePacketData},
+    {0x34, is_map_packet, write_map_packet},
     {0x37, NativePacket_isInstance, NativePacket_writePacketData},
     {0x39,S39PacketPlayerAbilities_isInstance,write_S39PacketPlayerAbilities}};
 static const MCPacketQueueProfile profile = {codecs, sizeof codecs / sizeof *codecs, true};

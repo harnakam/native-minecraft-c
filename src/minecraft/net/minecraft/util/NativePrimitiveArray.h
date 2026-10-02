@@ -1,6 +1,7 @@
 #ifndef C919_NATIVE_PRIMITIVE_ARRAY_H
 #define C919_NATIVE_PRIMITIVE_ARRAY_H
 #include "util/MCObjectHeap.h"
+#include "util/NativeJavaClass.h"
 
 /* Managed Java int[] storage. Array identity belongs to the graph; snapshots
    copy its elements once and preserve every referring alias. */
@@ -31,10 +32,16 @@ NATIVE_DECLARE_PRIMITIVE_ARRAY(NativeBooleanArray,bool);
 typedef struct NativeObjectArray {
     MCObject object;
     int32_t length;
+    /* NULL denotes the original Object[] runtime component. A typed reference
+       array retains its exact managed Class here; all arrays use one owner. */
+    NativeJavaClass *componentType;
     MCObject *values[];
 } NativeObjectArray;
 NativeObjectArray *NativeObjectArray_new(MCObjectHeap *,int32_t length);
 bool NativeObjectArray_isInstance(const MCObject *);
+/* Exact native runtime class identity, independent of allocation shape. This
+   lets dispatch reject a malformed known array without normalizing other types. */
+bool NativeObjectArray_isRuntimeClass(const MCObject *);
 bool NativeObjectArray_get(const NativeObjectArray *,int32_t index,MCObject **out);
 bool NativeObjectArray_set(NativeObjectArray *,int32_t index,MCObject *value);
 #endif

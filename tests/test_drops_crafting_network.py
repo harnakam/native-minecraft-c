@@ -182,13 +182,17 @@ class DropCraftingTests(SlotAssertions, unittest.TestCase):
             collector = self.peer(port, "SinkPicker")
             x, y, z = owner.spawn[:3]
             move(collector, x + 8, y, z)
-            for index in range(9, 45):
-                # Batch setup; equal C10 overwrites need no S2F in the source.
-                owner.send(0x10, struct.pack(">h", index) + wire_slot(3, 64))
-                collector.send(0x10, struct.pack(">h", index) + wire_slot(3, 64))
-            for player in (owner, collector):
-                slots, _ = player.snapshot()
-                self.assertTrue(all(slot[:3] == (3, 64, 0) for slot in slots[9:45]))
+            for first in range(9, 45, 9):
+                # Each C10 commits real durable state. Bound the pending work
+                # with the existing source ACK/snapshot barrier per row;
+                # equal overwrites need no S2F and cannot be that barrier.
+                for index in range(first, first + 9):
+                    owner.send(0x10, struct.pack(">h", index) + wire_slot(3, 64))
+                    collector.send(0x10, struct.pack(">h", index) + wire_slot(3, 64))
+                for player in (owner, collector):
+                    slots, _ = player.snapshot()
+                    self.assertTrue(all(slot[:3] == (3, 64, 0)
+                                        for slot in slots[9:first + 9]))
             owner.creative(36, 264, 1)
             move(owner, x, y, z)
             owner.send(7, b"\x03" + position(0, 0, 0) + b"\0")

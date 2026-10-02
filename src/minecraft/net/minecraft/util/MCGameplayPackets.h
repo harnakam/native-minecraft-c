@@ -7,6 +7,7 @@
 #include "network/play/server/S32PacketConfirmTransaction.h"
 #include "network/play/server/S1CPacketEntityMetadata.h"
 #include "network/play/server/S39PacketPlayerAbilities.h"
+#include "network/play/server/S34PacketMaps.h"
 
 typedef enum {
     MC_GAMEPLAY_PACKET_EQUIPMENT = 0x04,

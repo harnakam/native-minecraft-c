@@ -1,4 +1,8 @@
 #include "util/MCGameplayPackets.h"
+#include "util/MCPacketQueue.h"
+#include "item/ItemMapLoad.h"
+#include "world/storage/SaveDataMemoryStorage.h"
+#include "util/Vec4b.h"
 #include "nbt/nbt.h"
 #include "nbt/NBTTagList.h"
 #include "nbt/NBTTagByte.h"
@@ -162,7 +166,53 @@ static void cleanup(void) {
     CHECK(remove("test-gameplay-packets.c919.items.dat") == 0);
     CHECK(remove_dir("test-gameplay-packets.c919.players") == 0);
 }
+static void source_map_packets(void) {
+    MCGameplay game = {0};
+    MCGameplayPlayer *player = setup(&game);
+    MCObjectRootScope scope = {0}; CHECK(MCObjectRootScope_begin(&scope, game.heap));
+    MCGameplayWorld *world = (MCGameplayWorld *)player->living.entity.worldObj;
+    world->mapStorage = (MapStorage *)SaveDataMemoryStorage_new(game.heap);
+    CHECK(world->mapStorage);
+    MapData *map = NULL;
+    CHECK(ItemMap_loadMapData(41, world, &map) == WORLD_SAVED_DATA_OK && map && world->maps.count == 0);
+    Vec4b *icon = Vec4b_new(game.heap, 1, 2, 3, 4); CHECK(icon);
+    CHECK(NativeLinkedHashMap_put(map->mapDecorations,
+        (MCObject *)NBTString_fromASCII(game.heap, "player"), (MCObject *)icon));
+    map->scale = 2; map->colors->values[0] = 19;
+    MapInfo *info = NULL; S34PacketMaps *packet = NULL;
+    CHECK(MapData_getMapInfo(map, player, &info) == WORLD_SAVED_DATA_OK && info);
+    ItemStack *stack = ItemStack_new(game.heap, ItemStack_registryItem(358), 1, 41); CHECK(stack);
+    CHECK(MapInfo_getPacket(info, stack, &packet) == WORLD_SAVED_DATA_OK && packet);
+    CHECK(MCPacketQueue_append(player->pendingPackets, (MCObject *)packet, 0x34));
+    MCGameplayPacketKind kind;
+    CHECK(MCGameplayPackets_packetAt(player, 0, &kind) == (MCObject *)packet && kind == MC_GAMEPLAY_PACKET_MAP);
+    map->colors->values[0] = 99;
+    mc_buf wire = {0}; CHECK(MCGameplayPackets_encodeAt(player, 0, &wire));
+    CHECK(mc_get_varint(&wire) == 0x34 && mc_get_varint(&wire) == 41 && mc_get_u8(&wire) == 2 &&
+        mc_get_varint(&wire) == 1 && mc_get_u8(&wire) == 0x14 && mc_get_u8(&wire) == 2 && mc_get_u8(&wire) == 3);
+    CHECK(mc_get_u8(&wire) == 128 && mc_get_u8(&wire) == 128 && mc_get_u8(&wire) == 0 &&
+        mc_get_u8(&wire) == 0 && mc_get_varint(&wire) == 16384 && mc_get_u8(&wire) == 19);
+    mc_buf_free(&wire); MCObjectRootScope_end(&scope);
+    MCGameplayTransaction tx = {0}; CHECK(MCGameplay_begin(&game, &tx));
+    CHECK(MCObjectRootScope_begin(&scope, tx.working.heap));
+    MCGameplayPlayer *copyPlayer = (MCGameplayPlayer *)MCGameplay_get(&tx.working)->players[0];
+    MapData *copyMap = NULL;
+    CHECK(ItemMap_loadMapData(41, (World *)copyPlayer->living.entity.worldObj, &copyMap) == WORLD_SAVED_DATA_OK);
+    S34PacketMaps *copyPacket = (S34PacketMaps *)MCGameplayPackets_packetAt(copyPlayer, 0, &kind);
+    CHECK(copyPacket && copyPacket != packet && copyMap != map && copyMap->colors->values[0] == 99 &&
+        copyPacket->mapDataBytes->values[0] == 19);
+    MCObject *copyIcon = NativeLinkedHashMap_get(copyMap->mapDecorations,
+        (MCObject *)NBTString_fromASCII(tx.working.heap, "player"));
+    CHECK(copyIcon == copyPacket->mapVisiblePlayersVec4b->values[0] && copyIcon != (MCObject *)icon);
+    CHECK(Vec4b_construct((Vec4b *)copyIcon, 6, 7, 8, 9));
+    CHECK(MCGameplayPackets_encodeAt(copyPlayer, 0, &wire));
+    wire.pos = 4; CHECK(mc_get_u8(&wire) == 0x69 && mc_get_u8(&wire) == 7 && mc_get_u8(&wire) == 8);
+    mc_buf_free(&wire); MCObjectRootScope_end(&scope); CHECK(MCGameplay_abort(&tx));
+    CHECK(icon->field_176117_a == 1 && map->colors->values[0] == 99 && !MCObjectHeap_failed(game.heap));
+    CHECK(MCGameplay_free(&game));
+}
 int main(void) {
+    source_map_packets();
     MCGameplay game = {0};
     MCGameplayPlayer *p = setup(&game);
     MCObjectRootScope scope = {0};

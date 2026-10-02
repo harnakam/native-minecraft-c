@@ -7,6 +7,7 @@ typedef struct S30PacketWindowItems S30PacketWindowItems;
 typedef struct S32PacketConfirmTransaction S32PacketConfirmTransaction;
 typedef struct S1CPacketEntityMetadata S1CPacketEntityMetadata;
 typedef struct S39PacketPlayerAbilities S39PacketPlayerAbilities;
+typedef struct S34PacketMaps S34PacketMaps;
 /* Native dispatch for this subset of the original client interface. */
 typedef struct {
     bool (*handleCloseWindow)(MCObject *,S2EPacketCloseWindow *);
@@ -15,6 +16,7 @@ typedef struct {
     bool (*handleConfirmTransaction)(MCObject *,S32PacketConfirmTransaction *);
     bool (*handleEntityMetadata)(MCObject *,S1CPacketEntityMetadata *);
     bool (*handlePlayerAbilities)(MCObject *,S39PacketPlayerAbilities *);
+    bool (*handleMaps)(MCObject *,S34PacketMaps *);
 } INetHandlerPlayClientMethods;
 typedef struct {MCObject *instance;const INetHandlerPlayClientMethods *methods;} INetHandlerPlayClient;
 #endif

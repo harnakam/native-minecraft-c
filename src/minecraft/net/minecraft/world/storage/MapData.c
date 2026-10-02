@@ -1,342 +1,751 @@
-#include "MapData.h"
-#include "world/map.h"
+#include "world/storage/MapData.h"
+#include "entity/Entity.h"
+#include "nbt/NBTInternal.h"
 #include "util/MCGameplayPlayer.h"
-#include "nbt/NBTTagCompound.h"
-#include <limits.h>
+#include "util/MathHelper.h"
+#include "util/Vec4b.h"
+#include "world/World.h"
 #include <math.h>
-#include <stdlib.h>
-#include <string.h>
 
-typedef struct { char key[MC_MAP_DECORATION_KEY+1]; mc_map_icon icon; } decoration;
-typedef struct { MCObject object; MCGameplayPlayer *player; mc_MapInfo info; } source_info;
-typedef struct { MCGameplayPlayer *player; int32_t hash; source_info *info; } source_key;
-typedef struct { NBTString *key; mc_map_icon icon; } source_decoration;
-struct mc_MapData_tracking {
-    size_t viewers,decorations;
-    mc_MapInfo info[MC_MAP_MAX_VIEWERS];
-    decoration markers[MC_MAX_MAP_ICONS];
-    size_t source_viewers,source_keys,source_decorations;
-    source_info *source_info[MC_MAP_MAX_VIEWERS];
-    source_key source_key[MC_MAP_MAX_VIEWERS];
-    source_decoration source_markers[MC_MAX_MAP_ICONS];
-};
-static bool tracking(mc_map_info *map) {
-    if (!map->tracking) map->tracking=calloc(1,sizeof(*map->tracking));
-    return map->tracking!=NULL;
+static const MCObjectClass mapClass, infoClass;
+static WorldSavedDataResult failure(MCObjectHeap *h) {
+    MCObjectHeap_fail(h);
+    return WORLD_SAVED_DATA_FAILURE;
 }
-void mc_MapData_free_tracking(mc_map_info *map) { free(map->tracking); map->tracking=NULL; }
-bool mc_MapData_copy_tracking(mc_map_info *to,const mc_map_info *from) {
-    mc_MapData_tracking *copy=NULL;
-    if (from->tracking) { copy=malloc(sizeof(*copy)); if (!copy) return false; *copy=*from->tracking; }
-    mc_MapData_free_tracking(to); to->tracking=copy; return true;
+static bool identity(const MCObject *o, void *context) { return o == context; }
+static bool tracked(MCObjectHeap *h, const MCObject *o) {
+    return !o || (o->heap == h && MCObjectHeap_findObject(h, o->klass, identity, (void *)o) == o);
 }
-mc_MapInfo *mc_MapData_getMapInfo(mc_map_info *map,int32_t id) {
-    if (!map || !tracking(map)) return NULL;
-    for (size_t i=0;i<map->tracking->viewers;i++) if (map->tracking->info[i].entity_id==id) return &map->tracking->info[i];
-    if (map->tracking->viewers==MC_MAP_MAX_VIEWERS) return NULL;
-    mc_MapInfo *info=&map->tracking->info[map->tracking->viewers++];
-    *info=(mc_MapInfo){0}; info->entity_id=id; info->dirty=true; info->max_x=127; info->max_z=127;
-    return info;
+bool MapData_isInstance(const MCObject *o) {
+    return o && o->klass == &mapClass && tracked(o->heap, o) &&
+           MCObjectHeap_objectSize(o) >= sizeof(MapData);
 }
-static int32_t java_int(double number) {
-    return isnan(number) ? 0 : number>=INT32_MAX ? INT32_MAX : number<=INT32_MIN ? INT32_MIN : (int32_t)number;
+bool MapInfo_isInstance(const MCObject *o) {
+    return o && o->klass == &infoClass && tracked(o->heap, o) &&
+           MCObjectHeap_objectSize(o) >= sizeof(MapInfo);
 }
-static void sync_icons(mc_map_info *map) {
-    map->icon_count=map->tracking->decorations;
-    for (size_t i=0;i<map->icon_count;i++) map->icons[i]=map->tracking->markers[i].icon;
+static const NativeJavaClassDescriptor *const mapParents[] = {&WorldSavedData_Class};
+const NativeJavaClassDescriptor MapData_Class = {"net.minecraft.world.storage.MapData", mapParents,
+                                                 1, MapData_isInstance};
+NativeJavaClass *MapData_nativeClass(MCObjectHeap *h) {
+    return NativeJavaClass_literal(h, &MapData_Class);
 }
-/* Original updateDecorations arithmetic; only its Vec4b wire view is native. */
-static bool icon_value(const mc_map_info *map,int *type,double x,double z,double yaw,int64_t time,mc_map_icon *icon) {
-    float dx=(float)(x-map->center_x)/(float)(1u<<map->scale),dz=(float)(z-map->center_z)/(float)(1u<<map->scale);
-    uint8_t xb=(uint8_t)java_int((double)(dx*2.0f)+.5),zb=(uint8_t)java_int((double)(dz*2.0f)+.5),direction;
-    if (dx>=-63 && dz>=-63 && dx<=63 && dz<=63) {
-        yaw+=yaw<0 ? -8 : 8; direction=(uint8_t)java_int(yaw*16/360);
-        if (map->dimension<0) {
-            uint32_t t=(uint32_t)(time/10);
-            direction=(uint8_t)(((t*t*UINT32_C(34187121)+t*121u)>>15)&15u);
-        }
-    } else {
-        /* The target's positive near-range comparisons also remove NaN. */
-        if (!(fabsf(dx)<320 && fabsf(dz)<320)) {
-            return false;
-        }
-        *type=6; direction=0;
-        if (dx<=-63) xb=128;
-        if (dz<=-63) zb=128;
-        if (dx>=63) xb=127;
-        if (dz>=63) zb=127;
+static void map_trace(MCObject *o, MCObjectVisitor v, void *c) {
+    if (MCObjectHeap_objectSize(o) < sizeof(MapData)) {
+        failure(o->heap);
+        return;
     }
-    icon->type=(uint8_t)*type&15u; icon->direction=direction&15u;
-    memcpy(&icon->x,&xb,1); memcpy(&icon->z,&zb,1); return true;
+    MapData *m = (MapData *)o;
+    WorldSavedData_traceFields(&m->base, v, c);
+    m->colors = (NativeByteArray *)v((MCObject *)m->colors, c);
+    m->playersArrayList = (NativeReferenceList *)v((MCObject *)m->playersArrayList, c);
+    m->playersHashMap = (NativeHashMap *)v((MCObject *)m->playersHashMap, c);
+    m->mapDecorations = (NativeLinkedHashMap *)v((MCObject *)m->mapDecorations, c);
 }
-bool mc_MapData_updateDecorations(mc_map_info *map,int type,const char *id,double x,double z,double yaw,int64_t time) {
-    if (!mc_map_info_valid(map) || !id || strlen(id)>MC_MAP_DECORATION_KEY || !tracking(map)) return false;
-    mc_MapData_tracking *data=map->tracking; size_t index=0;
-    while (index<data->decorations && strcmp(data->markers[index].key,id)) index++;
-    mc_map_icon icon;
-    if (!icon_value(map,&type,x,z,yaw,time,&icon)) {
-        if (index<data->decorations) { memmove(&data->markers[index],&data->markers[index+1],(data->decorations-index-1)*sizeof(data->markers[0])); data->decorations--; }
-        sync_icons(map); return true;
+static void info_trace(MCObject *o, MCObjectVisitor v, void *c) {
+    if (MCObjectHeap_objectSize(o) < sizeof(MapInfo)) {
+        failure(o->heap);
+        return;
     }
-    if (index==data->decorations) {
-        if (data->decorations==MC_MAX_MAP_ICONS) return false;
-        strcpy(data->markers[index].key,id); data->decorations++;
+    MapInfo *i = (MapInfo *)o;
+    i->outer = (MapData *)v((MCObject *)i->outer, c);
+    i->entityplayerObj = (MCGameplayPlayer *)v((MCObject *)i->entityplayerObj, c);
+    i->nativeContext = v(i->nativeContext, c);
+}
+static const MCObjectClass mapClass = {"MapData", MCObjectHeap_plainClone, map_trace, NULL};
+static const MCObjectClass infoClass = {"MapData.MapInfo", MCObjectHeap_plainClone, info_trace,
+                                        NULL};
+static bool begin(MCObject *o, MCObject *context, bool valid, MCObjectRootScope *s) {
+    MCObjectHeap *h = o ? o->heap : NULL;
+    if (!valid || MCObjectHeap_failed(h) || !tracked(h, context)) {
+        failure(h);
+        return false;
     }
-    data->markers[index].icon=icon; sync_icons(map); return true;
-}
-static bool contains(const mc_inventory *inventory,const mc_slot *stack) {
-    if (!inventory) return false;
-    for (int i=5;i<MC_PLAYER_INVENTORY_SIZE;i++) if (inventory->slots[i].item_id==stack->item_id && inventory->slots[i].damage==stack->damage) return true;
-    return false;
-}
-static const mc_map_player *player(const mc_map_player *players,size_t count,int32_t id) {
-    for (size_t i=0;i<count;i++) if (players[i].entity_id==id) return &players[i];
-    return NULL;
-}
-static double number(const mc_nbt_view *root,const char *name) {
-    mc_nbt_view field; double value=0;
-    if (mc_nbt_find(root,name,&field)) (void)mc_nbt_get_number(&field,&value);
-    return value;
-}
-static uint8_t byte_value(const mc_nbt_view *root,const char *name) {
-    mc_nbt_view field; int64_t integer;
-    if (mc_nbt_find(root,name,&field) && mc_nbt_get_integer(&field,&integer)) return (uint8_t)integer;
-    double value=number(root,name); int32_t whole=java_int(value); uint32_t floored=(uint32_t)whole;
-    if (value<(double)whole) floored--;
-    return (uint8_t)floored;
-}
-static bool visible(mc_map_info *map,const mc_slot *stack,const mc_map_player *viewer,const mc_map_player *players,size_t count,int64_t time) {
-    if (!mc_MapData_getMapInfo(map,viewer->entity_id)) return false;
-    if (!contains(viewer->inventory,stack)) {
-        size_t i=0; while (i<map->tracking->decorations && strcmp(map->tracking->markers[i].key,viewer->name)) i++;
-        if (i<map->tracking->decorations) { memmove(&map->tracking->markers[i],&map->tracking->markers[i+1],(map->tracking->decorations-i-1)*sizeof(decoration)); map->tracking->decorations--; sync_icons(map); }
-    }
-    for (size_t i=0;i<map->tracking->viewers;i++) {
-        const mc_map_player *p=player(players,count,map->tracking->info[i].entity_id);
-        if (p && p->alive && contains(p->inventory,stack)) {
-            if (p->dimension==map->dimension && !mc_MapData_updateDecorations(map,0,p->name,p->x,p->z,p->yaw,time)) return false;
-        } else {
-            /* ArrayList removal followed by the source loop's increment. */
-            memmove(&map->tracking->info[i],&map->tracking->info[i+1],(map->tracking->viewers-i-1)*sizeof(mc_MapInfo)); map->tracking->viewers--;
-        }
-    }
-    mc_nbt_view root,list,entry,field;
-    if (stack->nbt.size && mc_nbt_root(&stack->nbt,&root) && mc_nbt_find(&root,"Decorations",&list) && list.type==9) {
-        for (size_t i=0;mc_nbt_list_get(&list,i,&entry);i++) {
-            if (entry.type!=10) break;
-            char id[MC_MAP_DECORATION_KEY+1]="";
-            if (mc_nbt_find(&entry,"id",&field) && field.type==8 && !mc_nbt_get_string(&field,id,sizeof(id))) return false;
-            size_t j=0; while (j<map->tracking->decorations && strcmp(map->tracking->markers[j].key,id)) j++;
-            if (j==map->tracking->decorations) {
-                if (!mc_MapData_updateDecorations(map,byte_value(&entry,"type"),id,number(&entry,"x"),number(&entry,"z"),number(&entry,"rot"),time)) return false;
-            }
-        }
+    if (!MCObjectRootScope_begin(s, h) || !MCObjectRootScope_pin(s, o) ||
+        !MCObjectRootScope_pin(s, context)) {
+        MCObjectRootScope_end(s);
+        failure(h);
+        return false;
     }
     return true;
 }
-bool mc_MapData_updateVisiblePlayers(mc_map_info *map,const mc_slot *stack,const mc_map_player *viewer,const mc_map_player *players,size_t count,int64_t time) {
-    if (!map || !stack || !viewer || !viewer->name || !players || count>MC_MAP_MAX_VIEWERS) return false;
-    for (size_t i=0;i<count;i++) if (!players[i].name) return false;
-    mc_map_info copy={0}; if (!mc_map_info_copy(&copy,map)) return false;
-    bool okay=visible(&copy,stack,viewer,players,count,time);
-    if (okay) { mc_map_info_free(map); *map=copy; mc_map_info_init(&copy); }
-    mc_map_info_free(&copy); return okay;
+static bool map_begin(MapData *m, MCObjectRootScope *s) {
+    bool valid = MapData_isInstance((MCObject *)m);
+    return begin((MCObject *)m, valid ? m->base.nativeContext : NULL, valid, s);
 }
-void mc_MapData_updateMapData(mc_map_info *map,unsigned x,unsigned z) {
-    if (!map || x>=128 || z>=128) return;
-    map->dirty=true;
-    if (!map->tracking) return;
-    size_t legacy=map->tracking->viewers;
-    for (size_t i=0;i<legacy+map->tracking->source_viewers;i++) {
-        mc_MapInfo *info=i<legacy ? &map->tracking->info[i] : &map->tracking->source_info[i-legacy]->info;
-        if (info->dirty) {
-            if (x<info->min_x) info->min_x=(uint8_t)x;
-            if (z<info->min_z) info->min_z=(uint8_t)z;
-            if (x>info->max_x) info->max_x=(uint8_t)x;
-            if (z>info->max_z) info->max_z=(uint8_t)z;
-        } else { info->dirty=true; info->min_x=info->max_x=(uint8_t)x; info->min_z=info->max_z=(uint8_t)z; }
+static bool info_begin(MapInfo *i, MCObjectRootScope *s) {
+    bool valid = MapInfo_isInstance((MCObject *)i);
+    return begin((MCObject *)i, valid ? i->nativeContext : NULL, valid, s);
+}
+static WorldSavedDataResult finish(MCObjectHeap *h, MCObjectRootScope *s, MCObject *c,
+                                   WorldSavedDataResult r) {
+    if (!tracked(h, c) || (r != WORLD_SAVED_DATA_OK && r != WORLD_SAVED_DATA_EXCEPTION))
+        failure(h);
+    if (MCObjectHeap_failed(h))
+        r = WORLD_SAVED_DATA_FAILURE;
+    MCObjectRootScope_end(s);
+    return r;
+}
+static bool entity_hash(MCObject *c, MCObject *key, int32_t *out) {
+    (void)c;
+    if (!key || !tracked(key->heap, key) || !Entity_isInstance(key) || !out) {
+        failure(key ? key->heap : NULL);
+        return false;
     }
+    *out = Entity_hashCode((Entity *)key);
+    return !MCObjectHeap_failed(key->heap);
 }
-
-void MapData_traceReferences(mc_maps *maps,MCObjectVisitor visit,void *context) {
-    for (size_t m=0;m<maps->count;m++) {
-        mc_MapData_tracking *t=maps->entries[m].tracking;
-        if (!t) continue;
-        for (size_t i=0;i<t->source_viewers;i++)
-            t->source_info[i]=(source_info *)visit((MCObject *)t->source_info[i],context);
-        for (size_t i=0;i<t->source_keys;i++) {
-            t->source_key[i].player=(MCGameplayPlayer *)visit((MCObject *)t->source_key[i].player,context);
-            t->source_key[i].info=(source_info *)visit((MCObject *)t->source_key[i].info,context);
-        }
-        for (size_t i=0;i<t->source_decorations;i++)
-            t->source_markers[i].key=(NBTString *)visit((MCObject *)t->source_markers[i].key,context);
+static bool entity_equal(MCObject *c, MCObject *q, MCObject *stored, bool *out) {
+    (void)c;
+    if (!q || !tracked(q->heap, q) || !tracked(q->heap, stored) || !Entity_isInstance(q) || !out) {
+        failure(q ? q->heap : NULL);
+        return false;
     }
+    *out = Entity_equals((Entity *)q, stored);
+    return !MCObjectHeap_failed(q->heap);
 }
-static bool source_view(mc_map_info *map,MCGameplayWorld *world) {
-    if (!MCGameplayWorld_isInstance((MCObject *)world) || !mc_map_info_valid(map)) return false;
-    return mc_maps_find(&world->maps,map->id)==map;
+static const NativeHashKeyMethods playerKeys = {entity_hash, entity_equal};
+static WorldSavedDataResult dispatch_read(MCObject *c, WorldSavedData *b, NBTTagCompound *t) {
+    (void)c;
+    return MapData_readFromNBT((MapData *)b, t);
 }
-static size_t source_key_index(mc_MapData_tracking *t,const MCGameplayPlayer *p) {
-    size_t i=0; int32_t hash=p ? p->living.entity.entityId : 0;
-    /* Source Entity.equals/hashCode uses entityId; HashMap retains its original
-       node hash and key reference even if a public entity ID later changes. */
-    while (i<t->source_keys && !(t->source_key[i].hash==hash &&
-        (t->source_key[i].player==p || (p && t->source_key[i].player && t->source_key[i].player->living.entity.entityId==p->living.entity.entityId)))) ++i;
-    return i;
+static WorldSavedDataResult dispatch_write(MCObject *c, WorldSavedData *b, NBTTagCompound *t) {
+    (void)c;
+    return MapData_writeToNBT((MapData *)b, t);
 }
-static source_info *find_source_info(mc_map_info *map,MCGameplayPlayer *p) {
-    if (!map->tracking) return NULL;
-    size_t i=source_key_index(map->tracking,p);
-    return i<map->tracking->source_keys ? map->tracking->source_key[i].info : NULL;
+static WorldSavedDataResult dispatch_dirty(MCObject *c, WorldSavedData *b, bool dirty) {
+    MapData *m = (MapData *)b;
+    return m->nativeDependencies && m->nativeDependencies->setDirty
+               ? m->nativeDependencies->setDirty(c, m, dirty)
+               : WorldSavedData_setDirty_base(b, dirty);
 }
-static void source_info_trace(MCObject *object,MCObjectVisitor visit,void *context) {
-    source_info *info=(source_info *)object;
-    info->player=(MCGameplayPlayer *)visit((MCObject *)info->player,context);
-}
-static const MCObjectClass source_info_class={"native.MapInfoSourceView",MCObjectHeap_plainClone,source_info_trace,NULL};
-mc_MapInfo *MapData_getMapInfo(mc_map_info *map,MCGameplayWorld *owner,MCGameplayPlayer *p) {
-    MCObjectHeap *h=owner ? owner->object.heap : p ? p->living.entity.object.heap : NULL;
-    if (!source_view(map,owner) || (p && (!MCGameplayPlayer_isInstance((MCObject *)p) || p->living.entity.object.heap!=h)) || !tracking(map)) {
-        MCObjectHeap_fail(h); return NULL;
+static const WorldSavedDataVirtualMethods savedMethods = {
+    .readFromNBT = dispatch_read, .writeToNBT = dispatch_write, .setDirty = dispatch_dirty};
+static const WorldSavedDataNativeType savedType = {&mapClass, sizeof(MapData), &savedMethods};
+MapData *MapData_nativeAllocate(MCObjectHeap *h, const MapDataDependencies *d, MCObject *c) {
+    if (!tracked(h, c)) {
+        failure(h);
+        return NULL;
     }
-    source_info *known=find_source_info(map,p);
-    if (known) return &known->info;
-    mc_MapData_tracking *t=map->tracking;
-    if (t->source_viewers==MC_MAP_MAX_VIEWERS || t->source_keys==MC_MAP_MAX_VIEWERS) { MCObjectHeap_fail(h); return NULL; }
-    source_info *info=(source_info *)MCObjectHeap_alloc(h,sizeof(*info),&source_info_class);
-    if (!info) return NULL;
-    info->player=p; info->info.entity_id=p ? p->living.entity.entityId : 0;
-    info->info.dirty=true; info->info.max_x=info->info.max_z=127;
-    t->source_info[t->source_viewers++]=info;
-    t->source_key[t->source_keys++]=(source_key){p,p ? p->living.entity.entityId : 0,info};
-    MCObjectHeap_touch(h); return &info->info;
+    MapData *m = (MapData *)WorldSavedData_nativeAllocate(h, &savedType, c);
+    if (m)
+        m->nativeDependencies = d;
+    return m;
 }
-static size_t key_index(const mc_MapData_tracking *t,const NBTString *key) {
-    size_t i=0;
-    while (i<t->source_decorations && !NBTString_equals(t->source_markers[i].key,key)) ++i;
-    return i;
-}
-static void source_sync(mc_map_info *map) {
-    mc_MapData_tracking *t=map->tracking;
-    map->icon_count=t->source_decorations;
-    for (size_t i=0;i<map->icon_count;i++) map->icons[i]=t->source_markers[i].icon;
-}
-static void source_remove(mc_map_info *map,const NBTString *key) {
-    mc_MapData_tracking *t=map->tracking; size_t i=key_index(t,key);
-    if (i<t->source_decorations) {
-        memmove(&t->source_markers[i],&t->source_markers[i+1],(t->source_decorations-i-1)*sizeof(source_decoration));
-        --t->source_decorations;
-    }
-    source_sync(map);
-}
-static bool source_decorate(mc_map_info *map,MCGameplayWorld *world,int type,NBTString *key,double x,double z,double rot) {
-    MCObjectHeap *h=world->object.heap;
-    if (key&&(!NBTString_isInstance((MCObject *)key)||((MCObject *)key)->heap!=h)) return false;
-    mc_MapData_tracking *t=map->tracking; size_t i=key_index(t,key); mc_map_icon icon;
-    MCObjectHeap_touch(h);
-    int64_t time=0;
-    if(map->dimension<0) {
-        float dx=(float)(x-map->center_x)/(float)(1u<<map->scale),dz=(float)(z-map->center_z)/(float)(1u<<map->scale);
-        if(dx>=-63&&dz>=-63&&dx<=63&&dz<=63) {
-            WorldInfo *info=World_getWorldInfo(world);
-            if(!info){MCObjectHeap_fail(h);return false;}
-            time=WorldInfo_getWorldTime(info);if(MCObjectHeap_failed(h))return false;
-        }
-    }
-    if (!icon_value(map,&type,x,z,rot,time,&icon)) { source_remove(map,key); return true; }
-    if (i==t->source_decorations) {
-        if (i==MC_MAX_MAP_ICONS) return false;
-        t->source_markers[i].key=key; ++t->source_decorations;
-    }
-    t->source_markers[i].icon=icon; source_sync(map); return true;
-}
-static bool valid_source_player(MCGameplayPlayer *p,MCObjectHeap *h) {
-    return MCGameplayPlayer_isInstance((MCObject *)p) && p->living.entity.object.heap==h &&
-        MCGameplayWorld_isInstance((MCObject *)((MCGameplayWorld *)(p->living.entity.worldObj))) && ((MCGameplayWorld *)(p->living.entity.worldObj))->object.heap==h &&
-        p->inventory && p->inventory->object.heap==h && p->inventory->mainInventory && p->inventory->armorInventory;
-}
-bool MapData_updateVisiblePlayers(mc_map_info *map,MCGameplayWorld *owner,MCGameplayPlayer *p,ItemStack *stack) {
-    MCObjectHeap *h=owner ? owner->object.heap : NULL; MCObjectRootScope scope={0};
-    if (!source_view(map,owner) || !ItemStack_isInstance((MCObject *)stack) || stack->object.heap!=h ||
-        !MCObjectRootScope_begin(&scope,h)) { MCObjectHeap_fail(h); return false; }
-    /* Original registration precedes inventory/name reads and frame access. */
-    bool ok=MapData_getMapInfo(map,owner,p)!=NULL;
-    if (ok) ok=valid_source_player(p,h);
+bool MapData_construct(MapData *m, NBTString *name) {
+    MCObjectRootScope s = {0};
+    if (!map_begin(m, &s))
+        return false;
+    MCObjectHeap *h = m->base.object.heap;
+    bool ok = tracked(h, (MCObject *)name);
+    if (ok)
+        ok = WorldSavedData_construct(&m->base, name);
+    else
+        failure(h);
     if (ok) {
+        NativeByteArray *v = NativeByteArray_new(h, 16384);
+        ok = v != NULL;
+        if (ok)
+            m->colors = v;
+    }
+    if (ok) {
+        NativeReferenceList *v = NativeReferenceList_new(h);
+        ok = v != NULL;
+        if (ok)
+            m->playersArrayList = v;
+    }
+    if (ok) {
+        NativeHashMap *v = NativeHashMap_newWithKeys(h, &playerKeys, NULL);
+        ok = v != NULL;
+        if (ok)
+            m->playersHashMap = v;
+    }
+    if (ok) {
+        NativeLinkedHashMap *v = NativeLinkedHashMap_new(h);
+        ok = v != NULL;
+        if (ok)
+            m->mapDecorations = v;
+    }
+    if (ok)
         MCObjectHeap_touch(h);
-        if (!InventoryPlayer_hasItemStack(p->inventory,stack)) {
-            NBTString *name=EntityPlayer_getName(p);
-            if(MCObjectHeap_failed(h))ok=false;else source_remove(map,name);
-        }
-        mc_MapData_tracking *t=map->tracking;
-        for (size_t i=0;i<t->source_viewers && ok;i++) {
-            MCGameplayPlayer *viewer=t->source_info[i]->player;
-            if (!valid_source_player(viewer,h)) { ok=false; break; }
-            if (!viewer->living.entity.isDead && (InventoryPlayer_hasItemStack(viewer->inventory,stack) || stack->itemFrame)) {
-                if (!stack->itemFrame && viewer->living.entity.dimension==map->dimension) {
-                    MCGameplayWorld *world=(MCGameplayWorld *)viewer->living.entity.worldObj;
-                    NBTString *name=EntityPlayer_getName(viewer);
-                    ok=!MCObjectHeap_failed(h)&&source_decorate(map,world,0,name,viewer->living.entity.posX,viewer->living.entity.posZ,(double)viewer->living.entity.rotationYaw);
+    return finish(h, &s, m->base.nativeContext,
+                  ok ? WORLD_SAVED_DATA_OK : WORLD_SAVED_DATA_FAILURE) == WORLD_SAVED_DATA_OK;
+}
+MapData *MapData_new(MCObjectHeap *h, NBTString *name, const MapDataDependencies *d, MCObject *c) {
+    if (!tracked(h, (MCObject *)name) || !tracked(h, c)) {
+        failure(h);
+        return NULL;
+    }
+    MCObjectRootScope s = {0};
+    if (!MCObjectRootScope_begin(&s, h))
+        return NULL;
+    if (!MCObjectRootScope_pin(&s, (MCObject *)name) || !MCObjectRootScope_pin(&s, c)) {
+        MCObjectRootScope_end(&s);
+        return NULL;
+    }
+    MapData *m = MapData_nativeAllocate(h, d, c);
+    if (m && !MapData_construct(m, name))
+        m = NULL;
+    MCObjectRootScope_end(&s);
+    return m;
+}
+MapInfo *MapInfo_nativeAllocate(MCObjectHeap *h, const MapInfoDependencies *d, MCObject *c) {
+    if (!tracked(h, c)) {
+        failure(h);
+        return NULL;
+    }
+    MapInfo *i = (MapInfo *)MCObjectHeap_alloc(h, sizeof(*i), &infoClass);
+    if (i) {
+        i->nativeDependencies = d;
+        i->nativeContext = c;
+    }
+    return i;
+}
+bool MapInfo_construct(MapInfo *i, MapData *outer, MCGameplayPlayer *p) {
+    MCObjectRootScope s = {0};
+    if (!info_begin(i, &s))
+        return false;
+    MCObjectHeap *h = i->object.heap;
+    bool ok =
+        (!outer || (tracked(h, (MCObject *)outer) && MapData_isInstance((MCObject *)outer))) &&
+        (!p || (tracked(h, (MCObject *)p) && MCGameplayPlayer_isInstance((MCObject *)p)));
+    if (ok) {
+        i->outer = outer;
+        i->field_176105_d = true;
+        i->minX = 0;
+        i->minY = 0;
+        i->maxX = 127;
+        i->maxY = 127;
+        i->entityplayerObj = p;
+        MCObjectHeap_touch(h);
+    } else
+        failure(h);
+    return finish(h, &s, i->nativeContext, ok ? WORLD_SAVED_DATA_OK : WORLD_SAVED_DATA_FAILURE) ==
+           WORLD_SAVED_DATA_OK;
+}
+MapInfo *MapInfo_new(MCObjectHeap *h, MapData *outer, MCGameplayPlayer *p,
+                     const MapInfoDependencies *d, MCObject *c) {
+    if (!tracked(h, (MCObject *)outer) || !tracked(h, (MCObject *)p) || !tracked(h, c)) {
+        failure(h);
+        return NULL;
+    }
+    MCObjectRootScope s = {0};
+    if (!MCObjectRootScope_begin(&s, h))
+        return NULL;
+    if (!MCObjectRootScope_pin(&s, (MCObject *)outer) ||
+        !MCObjectRootScope_pin(&s, (MCObject *)p) || !MCObjectRootScope_pin(&s, c)) {
+        MCObjectRootScope_end(&s);
+        return NULL;
+    }
+    MapInfo *i = MapInfo_nativeAllocate(h, d, c);
+    if (i && !MapInfo_construct(i, outer, p))
+        i = NULL;
+    MCObjectRootScope_end(&s);
+    return i;
+}
+WorldSavedDataResult MapData_calculateMapCenter(MapData *m, double x, double z, int32_t scale) {
+    if (!m)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!map_begin(m, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    int32_t width = nbt_i32(UINT32_C(128) * (UINT32_C(1) << ((uint32_t)scale & 31u)));
+    int32_t a = MathHelper_floor_double((x + 64.0) / (double)width),
+            b = MathHelper_floor_double((z + 64.0) / (double)width);
+    m->xCenter = nbt_i32((uint32_t)a * (uint32_t)width + (uint32_t)(width / 2) - 64u);
+    m->zCenter = nbt_i32((uint32_t)b * (uint32_t)width + (uint32_t)(width / 2) - 64u);
+    MCObjectHeap_touch(m->base.object.heap);
+    return finish(m->base.object.heap, &s, m->base.nativeContext, WORLD_SAVED_DATA_OK);
+}
+static WorldSavedDataResult check_tag(MapData *m, NBTTagCompound *t) {
+    if (!t)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    if (!tracked(m->base.object.heap, (MCObject *)t) || !NBTTagCompound_isInstance((MCObject *)t))
+        return failure(m->base.object.heap);
+    return WORLD_SAVED_DATA_OK;
+}
+static WorldSavedDataResult callback_result(MapData *m, WorldSavedDataResult r) {
+    MCObjectHeap *h = m->base.object.heap;
+    if (!tracked(h, m->base.nativeContext) ||
+        (r != WORLD_SAVED_DATA_OK && r != WORLD_SAVED_DATA_EXCEPTION))
+        failure(h);
+    return MCObjectHeap_failed(h) ? WORLD_SAVED_DATA_FAILURE : r;
+}
+static WorldSavedDataResult get_number(MapData *m, NBTTagCompound *t, const char *key, int kind,
+                                       int32_t *out) {
+    WorldSavedDataResult r = check_tag(m, t);
+    if (r != WORLD_SAVED_DATA_OK)
+        return r;
+    if (!tracked(m->base.object.heap, m->base.nativeContext))
+        return failure(m->base.object.heap);
+    if (m->nativeDependencies && m->nativeDependencies->getNumber)
+        return callback_result(
+            m, m->nativeDependencies->getNumber(m->base.nativeContext, t, key, kind, out));
+    *out = kind == 1   ? NBTTagCompound_getByte_ascii(t, key)
+           : kind == 2 ? NBTTagCompound_getShort_ascii(t, key)
+                       : NBTTagCompound_getInteger_ascii(t, key);
+    return callback_result(m, WORLD_SAVED_DATA_OK);
+}
+static WorldSavedDataResult get_array(MapData *m, NBTTagCompound *t, NativeByteArray **out) {
+    WorldSavedDataResult r = check_tag(m, t);
+    if (r != WORLD_SAVED_DATA_OK)
+        return r;
+    if (!tracked(m->base.object.heap, m->base.nativeContext))
+        return failure(m->base.object.heap);
+    NativeByteArray *value = NULL;
+    if (m->nativeDependencies && m->nativeDependencies->getByteArray)
+        r = m->nativeDependencies->getByteArray(m->base.nativeContext, t, "colors", &value);
+    else {
+        NBTString *key = NBTString_literalASCII(m->base.object.heap, "colors");
+        if (!key)
+            return WORLD_SAVED_DATA_FAILURE;
+        value = NBTTagCompound_getByteArray(t, key);
+    }
+    r = callback_result(m, r);
+    if (r != WORLD_SAVED_DATA_OK)
+        return r;
+    if (value && (!tracked(m->base.object.heap, (MCObject *)value) ||
+                  !NativeByteArray_isInstance((MCObject *)value)))
+        return failure(m->base.object.heap);
+    *out = value;
+    return WORLD_SAVED_DATA_OK;
+}
+static WorldSavedDataResult array_read(MCObjectHeap *h, NativeByteArray *a, int32_t index,
+                                       int8_t *out) {
+    if (!a)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    if (!tracked(h, (MCObject *)a) || !NativeByteArray_isInstance((MCObject *)a))
+        return failure(h);
+    if (index < 0 || index >= a->length)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    *out = a->values[index];
+    return WORLD_SAVED_DATA_OK;
+}
+static WorldSavedDataResult array_write(MCObjectHeap *h, NativeByteArray *a, int32_t index,
+                                        int8_t value) {
+    if (!a)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    if (!tracked(h, (MCObject *)a) || !NativeByteArray_isInstance((MCObject *)a))
+        return failure(h);
+    if (index < 0 || index >= a->length)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    a->values[index] = value;
+    MCObjectHeap_touch(h);
+    return WORLD_SAVED_DATA_OK;
+}
+WorldSavedDataResult MapData_readFromNBT(MapData *m, NBTTagCompound *t) {
+    if (!m)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!map_begin(m, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    MCObjectHeap *h = m->base.object.heap;
+    WorldSavedDataResult r = WORLD_SAVED_DATA_FAILURE;
+    if (!tracked(h, (MCObject *)t) || !MCObjectRootScope_pin(&s, (MCObject *)t))
+        goto done;
+    int32_t value, width, height;
+    r = get_number(m, t, "dimension", 1, &value);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    m->dimension = nbt_i8((uint8_t)value);
+    r = get_number(m, t, "xCenter", 3, &value);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    m->xCenter = value;
+    r = get_number(m, t, "zCenter", 3, &value);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    m->zCenter = value;
+    r = get_number(m, t, "scale", 1, &value);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    m->scale = nbt_i8((uint8_t)value);
+    if (m->scale < 0)
+        m->scale = 0;
+    else if (m->scale > 4)
+        m->scale = 4;
+    r = get_number(m, t, "width", 2, &width);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    r = get_number(m, t, "height", 2, &height);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    width = nbt_i16((uint16_t)width);
+    height = nbt_i16((uint16_t)height);
+    NativeByteArray *input = NULL;
+    r = get_array(m, t, &input);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    if (!MCObjectRootScope_pin(&s, (MCObject *)input)) {
+        r = WORLD_SAVED_DATA_FAILURE;
+        goto done;
+    }
+    if (width == 128 && height == 128) {
+        m->colors = input;
+        goto done;
+    }
+    NativeByteArray *colors = NativeByteArray_new(h, 16384);
+    if (!colors) {
+        r = WORLD_SAVED_DATA_FAILURE;
+        goto done;
+    }
+    m->colors = colors;
+    int32_t offsetX = (128 - width) / 2, offsetY = (128 - height) / 2;
+    for (int32_t row = 0; row < height; row++) {
+        int32_t y = row + offsetY;
+        /* The original uses OR here and in the inner condition. */
+        if (y >= 0 || y < 128)
+            for (int32_t column = 0; column < width; column++) {
+                int32_t x = column + offsetX;
+                if (x >= 0 || x < 128) {
+                    NativeByteArray *destination = m->colors;
+                    int32_t destinationIndex = x + y * 128;
+                    int8_t byte;
+                    /* Source baload precedes the destination's null/index check. */
+                    r = array_read(h, input, column + row * width, &byte);
+                    if (r != WORLD_SAVED_DATA_OK)
+                        goto done;
+                    r = array_write(h, destination, destinationIndex, byte);
+                    if (r != WORLD_SAVED_DATA_OK)
+                        goto done;
                 }
-            } else {
-                /* Source ArrayList.remove then for-loop increment skips the
-                   shifted successor, including consecutive dead players. */
-                size_t k=source_key_index(t,viewer);
-                if (k<t->source_keys) {
-                    memmove(&t->source_key[k],&t->source_key[k+1],(t->source_keys-k-1)*sizeof(source_key));
-                    --t->source_keys;
-                }
-                memmove(&t->source_info[i],&t->source_info[i+1],(t->source_viewers-i-1)*sizeof(*t->source_info));
-                --t->source_viewers;
             }
-        }
-        if (ok && stack->itemFrame) ok=false; /* Required unported EntityItemFrame. */
     }
-    if (ok && ItemStack_hasTagCompound(stack) && NBTTagCompound_hasKeyType_ascii(stack->stackTagCompound,"Decorations",9)) {
-        NBTTagList *list=NBTTagCompound_getTagList_ascii(stack->stackTagCompound,"Decorations",10);
-        if (!list) ok=false;
-        for (int32_t i=0;ok && i<NBTTagList_tagCount(list);i++) {
-            NBTTagCompound *entry=NBTTagList_getCompoundTagAt(list,i);
-            NBTString *key=entry ? NBTTagCompound_getString_ascii(entry,"id") : NULL;
-            if (!key) { ok=false; break; }
-            if (key_index(map->tracking,key)==map->tracking->source_decorations)
-                ok=source_decorate(map,((MCGameplayWorld *)(p->living.entity.worldObj)),NBTTagCompound_getByte_ascii(entry,"type"),key,
-                    NBTTagCompound_getDouble_ascii(entry,"x"),NBTTagCompound_getDouble_ascii(entry,"z"),NBTTagCompound_getDouble_ascii(entry,"rot"));
-        }
-    }
-    ok=ok && !MCObjectHeap_failed(h);
-    if (!ok) MCObjectHeap_fail(h);
-    MCObjectRootScope_end(&scope); return ok;
+    r = WORLD_SAVED_DATA_OK;
+done:
+    MCObjectHeap_touch(h);
+    return finish(h, &s, m->base.nativeContext, r);
 }
-int MapData_getMapPacket(mc_map_info *map,ItemStack *stack,MCGameplayWorld *world,MCGameplayPlayer *p,mc_buf *packet) {
-    MCObjectHeap *h=world ? world->object.heap : NULL;
-    if (!source_view(map,world) || !ItemStack_isInstance((MCObject *)stack) || stack->object.heap!=h ||
-        (p && (!MCGameplayPlayer_isInstance((MCObject *)p) || p->living.entity.object.heap!=h)) || !packet || MCObjectHeap_failed(h)) {
-        MCObjectHeap_fail(h); return -1;
-    }
-    source_info *s=find_source_info(map,p); if (!s) return 0;
-    mc_MapInfo *info=&s->info; int32_t counter; memcpy(&counter,&info->packet_counter,sizeof(counter));
-    bool send=info->dirty || counter%5==0;
-    if (!send) { ++info->packet_counter; MCObjectHeap_touch(h); return 0; }
-    mc_map_info wire=*map; wire.id=ItemStack_getMetadata(stack);
-    unsigned x=info->dirty ? info->min_x : 0,z=info->dirty ? info->min_z : 0;
-    unsigned w=info->dirty ? (unsigned)info->max_x+1-x : 0,height=info->dirty ? (unsigned)info->max_z+1-z : 0;
-    if (!mc_map_packet(&wire,x,z,w,height,packet)) { MCObjectHeap_fail(h); return -1; }
-    if (info->dirty) info->dirty=false; else ++info->packet_counter;
-    MCObjectHeap_touch(h); return 1;
+static WorldSavedDataResult set_number(MapData *m, NBTTagCompound *t, const char *key, int kind,
+                                       int32_t value) {
+    WorldSavedDataResult r = check_tag(m, t);
+    if (r != WORLD_SAVED_DATA_OK)
+        return r;
+    if (!tracked(m->base.object.heap, m->base.nativeContext))
+        return failure(m->base.object.heap);
+    if (m->nativeDependencies && m->nativeDependencies->setNumber)
+        return callback_result(
+            m, m->nativeDependencies->setNumber(m->base.nativeContext, t, key, kind, value));
+    bool ok = kind == 1   ? NBTTagCompound_setByte_ascii(t, key, nbt_i8((uint8_t)value))
+              : kind == 2 ? NBTTagCompound_setShort_ascii(t, key, nbt_i16((uint16_t)value))
+                          : NBTTagCompound_setInteger_ascii(t, key, value);
+    return callback_result(m, ok ? WORLD_SAVED_DATA_OK : WORLD_SAVED_DATA_FAILURE);
 }
-int mc_MapData_getMapPacket(mc_map_info *map,const mc_slot *stack,int32_t id,mc_buf *packet) {
-    if (!map || !stack || !packet) return -1;
-    if (!map->tracking) return 0;
-    mc_MapInfo *info=NULL;
-    for (size_t i=0;i<map->tracking->viewers;i++) if (map->tracking->info[i].entity_id==id) info=&map->tracking->info[i];
-    if (!info) return 0;
-    bool send=info->dirty || info->packet_counter%5==0;
-    if (!send) { info->packet_counter++; return 0; }
-    mc_map_info wire=*map; wire.id=stack->damage;
-    unsigned x=info->dirty ? info->min_x : 0,z=info->dirty ? info->min_z : 0;
-    unsigned w=info->dirty ? (unsigned)info->max_x+1-x : 0,h=info->dirty ? (unsigned)info->max_z+1-z : 0;
-    if (!mc_map_packet(&wire,x,z,w,h,packet)) return -1;
-    if (info->dirty) info->dirty=false; else info->packet_counter++;
-    return 1;
+static WorldSavedDataResult set_array(MapData *m, NBTTagCompound *t, NativeByteArray *value) {
+    WorldSavedDataResult r = check_tag(m, t);
+    if (r != WORLD_SAVED_DATA_OK)
+        return r;
+    if (!tracked(m->base.object.heap, m->base.nativeContext) ||
+        (value && (!tracked(m->base.object.heap, (MCObject *)value) ||
+                   !NativeByteArray_isInstance((MCObject *)value))))
+        return failure(m->base.object.heap);
+    if (m->nativeDependencies && m->nativeDependencies->setByteArray)
+        return callback_result(
+            m, m->nativeDependencies->setByteArray(m->base.nativeContext, t, "colors", value));
+    NBTString *key = NBTString_literalASCII(m->base.object.heap, "colors");
+    if (!key)
+        return WORLD_SAVED_DATA_FAILURE;
+    return callback_result(m, NBTTagCompound_setByteArray(t, key, value)
+                                  ? WORLD_SAVED_DATA_OK
+                                  : WORLD_SAVED_DATA_FAILURE);
+}
+WorldSavedDataResult MapData_writeToNBT(MapData *m, NBTTagCompound *t) {
+    if (!m)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!map_begin(m, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    MCObjectHeap *h = m->base.object.heap;
+    WorldSavedDataResult r = WORLD_SAVED_DATA_FAILURE;
+    if (!tracked(h, (MCObject *)t) || !MCObjectRootScope_pin(&s, (MCObject *)t))
+        goto done;
+    r = set_number(m, t, "dimension", 1, m->dimension);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    r = set_number(m, t, "xCenter", 3, m->xCenter);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    r = set_number(m, t, "zCenter", 3, m->zCenter);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    r = set_number(m, t, "scale", 1, m->scale);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    r = set_number(m, t, "width", 2, 128);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    r = set_number(m, t, "height", 2, 128);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    r = set_array(m, t, m->colors);
+done:
+    return finish(h, &s, m->base.nativeContext, r);
+}
+static WorldSavedDataResult player_argument(MCObjectHeap *h, MCGameplayPlayer *p) {
+    if (p && (!tracked(h, (MCObject *)p) || !MCGameplayPlayer_isInstance((MCObject *)p)))
+        return failure(h);
+    return WORLD_SAVED_DATA_OK;
+}
+static WorldSavedDataResult lookup(MapData *m, MCGameplayPlayer *p, MapInfo **out) {
+    if (!m->playersHashMap)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    if (!tracked(m->base.object.heap, (MCObject *)m->playersHashMap) ||
+        !NativeHashMap_isInstance((MCObject *)m->playersHashMap))
+        return failure(m->base.object.heap);
+    MCObject *value = NativeHashMap_get(m->playersHashMap, (MCObject *)p);
+    if (MCObjectHeap_failed(m->base.object.heap))
+        return WORLD_SAVED_DATA_FAILURE;
+    if (!tracked(m->base.object.heap, value))
+        return failure(m->base.object.heap);
+    if (value && !MapInfo_isInstance(value))
+        return value->klass == &infoClass ? failure(m->base.object.heap)
+                                          : WORLD_SAVED_DATA_EXCEPTION;
+    *out = (MapInfo *)value;
+    return WORLD_SAVED_DATA_OK;
+}
+WorldSavedDataResult MapData_getMapInfo(MapData *m, MCGameplayPlayer *p, MapInfo **out) {
+    if (!m)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!map_begin(m, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    MCObjectHeap *h = m->base.object.heap;
+    WorldSavedDataResult r = WORLD_SAVED_DATA_FAILURE;
+    MapInfo *info = NULL;
+    if (!out || player_argument(h, p) != WORLD_SAVED_DATA_OK ||
+        !MCObjectRootScope_pin(&s, (MCObject *)p))
+        goto done;
+    r = lookup(m, p, &info);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    if (!info) {
+        info = MapInfo_new(h, m, p, NULL, NULL);
+        if (!info) {
+            r = WORLD_SAVED_DATA_FAILURE;
+            goto done;
+        }
+        if (!NativeHashMap_put(m->playersHashMap, (MCObject *)p, (MCObject *)info)) {
+            r = WORLD_SAVED_DATA_FAILURE;
+            goto done;
+        }
+        if (!m->playersArrayList) {
+            r = WORLD_SAVED_DATA_EXCEPTION;
+            goto done;
+        }
+        if (!tracked(h, (MCObject *)m->playersArrayList) ||
+            !NativeReferenceList_add(m->playersArrayList, (MCObject *)info)) {
+            r = WORLD_SAVED_DATA_FAILURE;
+            goto done;
+        }
+    }
+done:
+    r = finish(h, &s, m->base.nativeContext, r);
+    if (r == WORLD_SAVED_DATA_OK)
+        *out = info;
+    return r;
+}
+WorldSavedDataResult MapInfo_update_base(MapInfo *i, int32_t x, int32_t y) {
+    if (!i)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!info_begin(i, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    if (i->field_176105_d) {
+        if (x < i->minX)
+            i->minX = x;
+        if (y < i->minY)
+            i->minY = y;
+        if (x > i->maxX)
+            i->maxX = x;
+        if (y > i->maxY)
+            i->maxY = y;
+    } else {
+        i->field_176105_d = true;
+        i->minX = x;
+        i->minY = y;
+        i->maxX = x;
+        i->maxY = y;
+    }
+    MCObjectHeap_touch(i->object.heap);
+    return finish(i->object.heap, &s, i->nativeContext, WORLD_SAVED_DATA_OK);
+}
+WorldSavedDataResult MapInfo_update(MapInfo *i, int32_t x, int32_t y) {
+    if (!i)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!info_begin(i, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    WorldSavedDataResult r = i->nativeDependencies && i->nativeDependencies->update
+                                 ? i->nativeDependencies->update(i->nativeContext, i, x, y)
+                                 : MapInfo_update_base(i, x, y);
+    return finish(i->object.heap, &s, i->nativeContext, r);
+}
+WorldSavedDataResult MapData_updateMapData(MapData *m, int32_t x, int32_t y) {
+    if (!m)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!map_begin(m, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    MCObjectHeap *h = m->base.object.heap;
+    WorldSavedDataResult r = WorldSavedData_markDirty_base(&m->base);
+    if (r != WORLD_SAVED_DATA_OK)
+        goto done;
+    NativeReferenceList *list = m->playersArrayList;
+    if (!list) {
+        r = WORLD_SAVED_DATA_EXCEPTION;
+        goto done;
+    }
+    if (!tracked(h, (MCObject *)list)) {
+        r = WORLD_SAVED_DATA_FAILURE;
+        goto done;
+    }
+    NativeIterator *iterator = NativeIterator_fromList(list);
+    if (!iterator || !MCObjectRootScope_pin(&s, (MCObject *)iterator)) {
+        r = WORLD_SAVED_DATA_FAILURE;
+        goto done;
+    }
+    while (NativeIterator_hasNext(iterator)) {
+        MCObject *value = NULL;
+        if (!NativeIterator_next(iterator, &value)) {
+            r = WORLD_SAVED_DATA_FAILURE;
+            goto done;
+        }
+        if (!tracked(h, value)) {
+            r = failure(h);
+            goto done;
+        }
+        if (value && !MapInfo_isInstance(value)) {
+            r = value->klass == &infoClass ? failure(h) : WORLD_SAVED_DATA_EXCEPTION;
+            goto done;
+        }
+        r = MapInfo_update((MapInfo *)value, x, y);
+        if (r != WORLD_SAVED_DATA_OK)
+            goto done;
+    }
+    if (MCObjectHeap_failed(h))
+        r = WORLD_SAVED_DATA_FAILURE;
+done:
+    return finish(h, &s, m->base.nativeContext, r);
+}
+WorldSavedDataResult MapData_getMapPacket(MapData *m, ItemStack *stack, World *world,
+                                          MCGameplayPlayer *p, S34PacketMaps **out) {
+    if (!m)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!map_begin(m, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    MCObjectHeap *h = m->base.object.heap;
+    WorldSavedDataResult r = WORLD_SAVED_DATA_FAILURE;
+    MapInfo *info = NULL;
+    S34PacketMaps *packet = NULL;
+    if (!out || !tracked(h, (MCObject *)stack) || !tracked(h, (MCObject *)world) ||
+        player_argument(h, p) != WORLD_SAVED_DATA_OK ||
+        !MCObjectRootScope_pin(&s, (MCObject *)stack) ||
+        !MCObjectRootScope_pin(&s, (MCObject *)world) || !MCObjectRootScope_pin(&s, (MCObject *)p))
+        goto done;
+    r = lookup(m, p, &info);
+    if (r == WORLD_SAVED_DATA_OK && info)
+        r = MapInfo_getPacket(info, stack, &packet);
+done:
+    r = finish(h, &s, m->base.nativeContext, r);
+    if (r == WORLD_SAVED_DATA_OK)
+        *out = packet;
+    return r;
+}
+WorldSavedDataResult MapData_updateDecorations(MapData *m, int32_t type, World *world,
+                                               NBTString *id, double x, double z, double rotation) {
+    if (!m)
+        return WORLD_SAVED_DATA_EXCEPTION;
+    MCObjectRootScope s = {0};
+    if (!map_begin(m, &s))
+        return WORLD_SAVED_DATA_FAILURE;
+    MCObjectHeap *h = m->base.object.heap;
+    WorldSavedDataResult r = WORLD_SAVED_DATA_FAILURE;
+    if (!tracked(h, (MCObject *)world) ||
+        (id && (!tracked(h, (MCObject *)id) || !NBTString_isInstance((MCObject *)id))) ||
+        !MCObjectRootScope_pin(&s, (MCObject *)world) || !MCObjectRootScope_pin(&s, (MCObject *)id))
+        goto done;
+    int32_t size = nbt_i32(UINT32_C(1) << ((uint32_t)m->scale & 31u));
+    float f = (float)(x - (double)m->xCenter) / (float)size,
+          f1 = (float)(z - (double)m->zCenter) / (float)size;
+    int8_t b0 = nbt_i8((uint8_t)nbt_javaDoubleInt((double)(f * 2.0f) + 0.5));
+    int8_t b1 = nbt_i8((uint8_t)nbt_javaDoubleInt((double)(f1 * 2.0f) + 0.5)), b2;
+    if (f >= -63.0f && f1 >= -63.0f && f <= 63.0f && f1 <= 63.0f) {
+        rotation = rotation + (rotation < 0.0 ? -8.0 : 8.0);
+        b2 = nbt_i8((uint8_t)nbt_javaDoubleInt(rotation * 16.0 / 360.0));
+        if (m->dimension < 0) {
+            if (!world) {
+                r = WORLD_SAVED_DATA_EXCEPTION;
+                goto done;
+            }
+            if (!World_isInstance((MCObject *)world)) {
+                r = failure(h);
+                goto done;
+            }
+            WorldInfo *info = World_getWorldInfo(world);
+            if (MCObjectHeap_failed(h)) {
+                r = WORLD_SAVED_DATA_FAILURE;
+                goto done;
+            }
+            if (!info) {
+                r = WORLD_SAVED_DATA_EXCEPTION;
+                goto done;
+            }
+            if (!tracked(h, (MCObject *)info)) {
+                r = failure(h);
+                goto done;
+            }
+            int64_t time = WorldInfo_getWorldTime(info);
+            if (MCObjectHeap_failed(h)) {
+                r = WORLD_SAVED_DATA_FAILURE;
+                goto done;
+            }
+            uint32_t k = (uint32_t)(time / 10);
+            b2 = nbt_i8((uint8_t)(((k * k * UINT32_C(34187121) + k * UINT32_C(121)) >> 15) & 15u));
+        }
+    } else {
+        /* Target bytecode removes NaN: both absolute comparisons must be <320. */
+        if (!(fabsf(f) < 320.0f && fabsf(f1) < 320.0f)) {
+            if (!m->mapDecorations) {
+                r = WORLD_SAVED_DATA_EXCEPTION;
+                goto done;
+            }
+            if (!tracked(h, (MCObject *)m->mapDecorations)) {
+                r = failure(h);
+                goto done;
+            }
+            NativeLinkedHashMap_remove(m->mapDecorations, (MCObject *)id);
+            r = MCObjectHeap_failed(h) ? WORLD_SAVED_DATA_FAILURE : WORLD_SAVED_DATA_OK;
+            goto done;
+        }
+        type = 6;
+        b2 = 0;
+        if (f <= -63.0f)
+            b0 = -128;
+        if (f1 <= -63.0f)
+            b1 = -128;
+        if (f >= 63.0f)
+            b0 = 127;
+        if (f1 >= 63.0f)
+            b1 = 127;
+    }
+    NativeLinkedHashMap *decorations = m->mapDecorations;
+    Vec4b *value = Vec4b_new(h, nbt_i8((uint8_t)type), b0, b1, b2);
+    if (!value) {
+        r = WORLD_SAVED_DATA_FAILURE;
+        goto done;
+    }
+    if (!decorations) {
+        r = WORLD_SAVED_DATA_EXCEPTION;
+        goto done;
+    }
+    if (!tracked(h, (MCObject *)decorations)) {
+        r = failure(h);
+        goto done;
+    }
+    r = NativeLinkedHashMap_put(decorations, (MCObject *)id, (MCObject *)value)
+            ? WORLD_SAVED_DATA_OK
+            : WORLD_SAVED_DATA_FAILURE;
+done:
+    return finish(h, &s, m->base.nativeContext, r);
 }

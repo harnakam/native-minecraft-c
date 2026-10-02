@@ -3,6 +3,8 @@
 #include "nbt/NBTTagCompound.h"
 
 typedef struct WorldSavedData WorldSavedData;
+/* Immutable ancestry fact for genuine translated saved-data subclasses. */
+extern const NativeJavaClassDescriptor WorldSavedData_Class;
 /* Native exception adapter. EXCEPTION preserves Source partial effects for a
    surrounding catch; FAILURE is sticky unsupported/ownership/allocation error. */
 typedef enum {

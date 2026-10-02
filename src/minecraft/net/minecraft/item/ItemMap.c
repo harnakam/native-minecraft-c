@@ -196,7 +196,7 @@ bool ItemMap_updateMapData(MCGameplayWorld *world,MCObject *viewer,mc_map_info *
     if(!WorldProvider_isInstance((MCObject *)provider)||provider->object.heap!=h){MCObjectHeap_fail(h);goto done;}
     bool no_sky=WorldProvider_getHasNoSky(provider);if(MCObjectHeap_failed(h))goto done;
     MCGameplayPlayer *p=(MCGameplayPlayer *)viewer;
-    mc_MapInfo *info=MapData_getMapInfo(map,world,p);
+    mc_MapInfo *info=NativeMapData_getMapInfo(map,world,p);
     ok=info!=NULL;
     if (ok) {
         ++info->update_counter; MCObjectHeap_touch(h);
@@ -216,7 +216,7 @@ bool ItemMap_onUpdate(ItemStack *stack,MCGameplayWorld *world,MCObject *entity,i
     MCObjectRootScope scope={0}; if (!MCObjectRootScope_begin(&scope,h)) return false;
     bool missing=mc_maps_find(&world->maps,ItemStack_getMetadata(stack))==NULL;
     mc_map_info *map=ItemMap_getMapData(stack,world); bool ok=map!=NULL,terrain=false;
-    if (ok && MCGameplayPlayer_isInstance(entity)) ok=MapData_updateVisiblePlayers(map,world,(MCGameplayPlayer *)entity,stack);
+    if (ok && MCGameplayPlayer_isInstance(entity)) ok=NativeMapData_updateVisiblePlayers(map,world,(MCGameplayPlayer *)entity,stack);
     if (ok && selected) ok=ItemMap_updateMapData(world,entity,map,&terrain);
     if (ok) *changed=missing || terrain;
     if (!ok) MCObjectHeap_fail(h);
@@ -226,7 +226,7 @@ int ItemMap_createMapDataPacket(ItemStack *stack,MCGameplayWorld *world,MCGamepl
     MCObjectHeap *h=world ? world->object.heap : NULL; MCObjectRootScope scope={0};
     if (!MCGameplayWorld_isInstance((MCObject *)world) || !MCObjectRootScope_begin(&scope,h)) { MCObjectHeap_fail(h); return -1; }
     mc_map_info *map=ItemMap_getMapData(stack,world);
-    int result=map ? MapData_getMapPacket(map,stack,world,p,packet) : -1;
+    int result=map ? NativeMapData_getMapPacket(map,stack,world,p,packet) : -1;
     if (result<0) MCObjectHeap_fail(h);
     MCObjectRootScope_end(&scope); return result;
 }

@@ -67,6 +67,58 @@ bool PacketBuffer_writeVarIntToBuffer(PacketBuffer *p, int32_t number) {
         mc_put_u8(p->buffer, (uint8_t)value);
     return finish(p, &scope, !p->buffer->failed);
 }
+static NativeArrayResult array_io_result(PacketBuffer *p, MCObjectRootScope *scope,
+                                         NativeArrayResult result) {
+    if (MCObjectHeap_failed(p->heap))
+        result = NATIVE_ARRAY_FAILURE;
+    if (result != NATIVE_ARRAY_OK)
+        p->buffer->failed = true;
+    MCObjectRootScope_end(scope);
+    return result;
+}
+NativeArrayResult PacketBuffer_readByteArray(PacketBuffer *p, NativeByteArray **out) {
+    MCObjectRootScope scope = {0};
+    if (!begin(p, &scope))
+        return p && MCObjectHeap_failed(p->heap) ? NATIVE_ARRAY_FAILURE : NATIVE_ARRAY_EXCEPTION;
+    if (!out) {
+        MCObjectHeap_fail(p->heap);
+        return array_io_result(p, &scope, NATIVE_ARRAY_FAILURE);
+    }
+    int32_t length;
+    if (!PacketBuffer_readVarIntFromBuffer(p, &length))
+        return array_io_result(p, &scope, NATIVE_ARRAY_EXCEPTION);
+    if (length < 0)
+        return array_io_result(p, &scope, NATIVE_ARRAY_EXCEPTION);
+    NativeByteArray *array = NativeByteArray_new(p->heap, length);
+    if (!array)
+        return array_io_result(p, &scope, NATIVE_ARRAY_FAILURE);
+    if (!mc_get_bytes(p->buffer, array->values, (size_t)length))
+        return array_io_result(p, &scope, NATIVE_ARRAY_EXCEPTION);
+    *out = array;
+    return array_io_result(p, &scope, NATIVE_ARRAY_OK);
+}
+NativeArrayResult PacketBuffer_writeByteArray(PacketBuffer *p, NativeByteArray *array) {
+    MCObjectRootScope scope = {0};
+    if (!begin(p, &scope))
+        return p && MCObjectHeap_failed(p->heap) ? NATIVE_ARRAY_FAILURE : NATIVE_ARRAY_EXCEPTION;
+    if (!array)
+        return array_io_result(p, &scope, NATIVE_ARRAY_EXCEPTION);
+    if (!NativeByteArray_isInstance((MCObject *)array) || array->object.heap != p->heap ||
+        !MCObjectRootScope_pin(&scope, (MCObject *)array)) {
+        MCObjectHeap_fail(p->heap);
+        return array_io_result(p, &scope, NATIVE_ARRAY_FAILURE);
+    }
+    if (!PacketBuffer_writeVarIntToBuffer(p, array->length))
+    {
+        MCObjectHeap_fail(p->heap);
+        return array_io_result(p, &scope, NATIVE_ARRAY_FAILURE);
+    }
+    mc_put_bytes(p->buffer, array->values, (size_t)array->length);
+    if (p->buffer->failed)
+        MCObjectHeap_fail(p->heap);
+    return array_io_result(p, &scope,
+                           p->buffer->failed ? NATIVE_ARRAY_FAILURE : NATIVE_ARRAY_OK);
+}
 bool PacketBuffer_writeNBTTagCompoundToBuffer(PacketBuffer *view, NBTTagCompound *tag) {
     MCObjectRootScope scope = {0};
     if (!begin(view, &scope))

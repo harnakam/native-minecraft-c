@@ -1,4 +1,5 @@
 #include "util/NativePrimitiveArray.h"
+#include "util/NativeTypedObjectArray.h"
 
 static const MCObjectClass klass={"native.IntArray",MCObjectHeap_plainClone,NULL,NULL};
 static bool failed(const NativeIntArray *array) {
@@ -58,15 +59,20 @@ NATIVE_PRIMITIVE_BODY(NativeBooleanArray,bool,"native.BooleanArray")
 #undef NATIVE_PRIMITIVE_BODY
 
 static const MCObjectClass objectArrayClass;
+bool NativeObjectArray_isRuntimeClass(const MCObject *object) {
+    return object && object->klass == &objectArrayClass;
+}
 bool NativeObjectArray_isInstance(const MCObject *object) {
     if(!object||object->klass!=&objectArrayClass||MCObjectHeap_objectSize(object)<sizeof(NativeObjectArray))return false;
     const NativeObjectArray *array=(const NativeObjectArray *)object;
     return array->length>=0&&(size_t)array->length<=
-        (MCObjectHeap_objectSize(object)-sizeof(*array))/sizeof(*array->values);
+        (MCObjectHeap_objectSize(object)-sizeof(*array))/sizeof(*array->values)&&
+        (!array->componentType||NativeJavaClass_isInstance((MCObject *)array->componentType));
 }
 static void object_array_trace(MCObject *object,MCObjectVisitor visitor,void *context) {
     if(!NativeObjectArray_isInstance(object)){fail_heap(object->heap);return;}
     NativeObjectArray *array=(NativeObjectArray *)object;
+    array->componentType=(NativeJavaClass *)visitor((MCObject *)array->componentType,context);
     for(int32_t i=0;i<array->length;i++)array->values[i]=visitor(array->values[i],context);
 }
 static const MCObjectClass objectArrayClass={"native.ObjectArray",MCObjectHeap_plainClone,object_array_trace,NULL};
@@ -79,12 +85,17 @@ NativeObjectArray *NativeObjectArray_new(MCObjectHeap *heap,int32_t length) {
 }
 bool NativeObjectArray_get(const NativeObjectArray *array,int32_t index,MCObject **out) {
     if(!NativeObjectArray_isInstance((const MCObject *)array)||!out||index<0||index>=array->length||
-       MCObjectHeap_failed(array->object.heap))return fail_heap(array?array->object.heap:NULL);
+       MCObjectHeap_failed(array->object.heap)||(array->componentType&&array->componentType->object.heap!=array->object.heap))return fail_heap(array?array->object.heap:NULL);
     MCObject *value=array->values[index];
     if(value&&(value->heap!=array->object.heap||MCObjectHeap_objectSize(value)<sizeof(MCObject)))return fail_heap(array->object.heap);
     *out=value;return true;
 }
 bool NativeObjectArray_set(NativeObjectArray *array,int32_t index,MCObject *value) {
+    if(NativeObjectArray_isInstance((MCObject *)array)&&array->componentType) {
+        NativeArrayResult result=NativeTypedObjectArray_set(array,index,value);
+        if(result!=NATIVE_ARRAY_OK)return fail_heap(array->object.heap);
+        return true;
+    }
     if(!NativeObjectArray_isInstance((const MCObject *)array)||index<0||index>=array->length||
        MCObjectHeap_failed(array->object.heap)||(value&&(value->heap!=array->object.heap||MCObjectHeap_objectSize(value)<sizeof(MCObject))))return fail_heap(array?array->object.heap:NULL);
     array->values[index]=value;MCObjectHeap_touch(array->object.heap);return true;

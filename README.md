@@ -14,7 +14,9 @@ Java原本、テクスチャ、音声、モデル、JAR、MCP本体・マッピ�
 
 Chunk/EmptyChunkの22フィールド・constructor・受信と読出しの対象本体、NibbleArray・ExtendedBlockStorage・ChunkPrimer、実ChunkProviderClientの索引・参照リスト・アンロード経路を移植しました。これらは実体を持つモジュールとして検証しています。現在の通信・描画はまだnative dense地形を使用し、WorldClient constructorとS21/S26のSource経路への切替は未完了です。この段階を、実clientの地形がSource Chunkへ移行済みとは数えません。
 
-WorldSavedData・ISaveHandler・SaveHandlerMP、MapStorageとSaveDataMemoryStorageのfield・constructor・cache/load/save/ID本体も原本から移植しました。例外後のpartial data、NULL、共有参照、保存中のリスト変更と呼出順を保持します。NBTとChunkのbyte[]は同じ管理オブジェクトへ統一しました。実clientのmemory providerはこのconstructorを使いますが、MapDataと地図packetをこのcacheへ移す作業、実disk handler、WorldClient全体の統合は残っています。
+WorldSavedData・ISaveHandler・SaveHandlerMP、MapStorageとSaveDataMemoryStorageのfield・constructor・cache/load/save/ID本体も原本から移植しました。例外後のpartial data、NULL、共有参照、保存中のリスト変更と呼出順を保持します。NBTとChunkのbyte[]は同じ管理オブジェクトへ統一しました。実clientのmemory providerはこのconstructorを使います。実disk handler、WorldClient全体の統合は残っています。
+
+MapData・MapInfoの元field、constructor、NBT・中心・装飾・変更通知・packet生成の対象本体、Vec4b、S34PacketMapsの全field・constructor・IO・適用・dispatch、ItemMap.loadMapDataを移植しました。実MapStorage cacheからSource MapDataを取得し、MapInfoのpacketを実送信queueで符号化する経路と、色配列・マーカー参照の共有を検証しています。型付き参照配列は既存Object[]と同じ管理型を使います。現在のゲームでは作成・拡張・保存・受信・描画がまだNativeMapDataを使用しており、この検証をlive地図所有者の移行済みとは数えません。updateVisiblePlayers・ItemFrame、ItemMapの残bodyとこれらの実行経路をまとめて移行する作業が残っています。
 
 Worldの40フィールドと基底constructor、spawn・height・top-solid・時刻などの対象メソッド、WorldInfo・WorldSettings・GameRules・3次元のWorldProviderを移植しました。実行中のspawnと時刻はWorldInfo、次元はproviderを参照し、別の値を正として保持しません。エンティティ検索は同じWorldのIntHashMapとloadedEntityList/playerEntitiesへ接続し、ID変更・削除・ワールド移動・再読み込みでも元の参照を保ちます。Scoreboard・ScoreObjective・Scoreと統計criterionの対象本体も同じWorldへ接続しています。WorldClient/WorldServer・ServerScoreboardの全処理、地形生成・Chunkの残処理・照明・バイオーム・JDKコレクション全体は未移植です。独自の密なチャンク保存、時計、描画などの接続処理は、元クラスとは区別して記録します。
 
@@ -28,7 +30,7 @@ Worldの40フィールドと基底constructor、spawn・height・top-solid・時
 | インベントリ | 45スロット・カーソル、個数・ダメージ・NBT保持、クリック・分割・Shift移動・交換・ドラッグ・確認と再同期 |
 | クラフト | プレイヤー2×2／作業台3×3、静的レシピ365件、修理・染色・書籍/地図/旗の複製・花火・地図拡張 |
 | 作業台 | 実ブロックへの右クリック、独立した9入力と共有所持品、46枠の画面・操作・確認・再同期・距離／破壊による閉鎖 |
-| 地図 | 空の地図を使用して作成、MapDataの保存、既知の読み込み済み地形の測量、S34受信と色／マーカー表示 |
+| 地図 | NativeMapDataによる作成・拡張・保存・測量・受信・表示。Source MapData/MapInfo/S34の対象本体と実cache/queue接続は別途検証、live切替は未完了 |
 | ドロップ・拾得 | 個数とNBT、地面のアイテムの表示・移動、拾得待ち・結合・消滅、他プレイヤーへの同期 |
 | 操作 | マウス視点、移動・基本衝突形状、Creative飛行、サーバーのホットバー、全336アイテムIDの基本Creative選択 |
 | 接続先 | C919サーバー、または1.8.9のCreative / `online-mode=false` サーバー |
@@ -40,7 +42,7 @@ Worldの40フィールドと基底constructor、spawn・height・top-solid・時
 
 インベントリを閉じると、カーソルとクラフト入力は1.8.9の動作に合わせて地面へ落ちます。満杯のCreativeインベントリが拾得した残量を消去する動作と、Shiftクラフトで一部だけ入った出力の残量が消える旧版の動作も再現しています。水流、継続着火・消火などのアイテム物理には未対応部分があります。地面のアイテムは1024件、各NBT保存データは2MiBが上限です。
 
-作業台を開いたまま強制終了した場合、保存済みの入力とカーソルは次回ログイン時に一度だけ地面へ戻します。地図の拡張はプレイヤー・地図ID・アイテムを同じジャーナルで確定します。旧版のShift／数字キーによる地図拡張は、新MapDataを作っても移動先のスタックに元のIDが残る挙動を保持します。地図は96件です。地図ID生成は原版のshort折返しとItemStackのdamage設定順を保持します。読み込み済みOverworldの既知ブロック色を測量し、未読み込み・未対応の地形は探索済みとして描きません。地図はmain36枠をすべて更新してからmain/armor40枠のpacketを作る原本の順を保ち、プレイヤーごとのMapInfoが初回全体・変更矩形・アイコンのみ・送信なしを選びます。
+作業台を開いたまま強制終了した場合、保存済みの入力とカーソルは次回ログイン時に一度だけ地面へ戻します。地図の拡張はプレイヤー・地図ID・アイテムを同じジャーナルで確定します。旧版のShift／数字キーによる地図拡張は、新しい地図を作っても移動先のスタックに元のIDが残る挙動を保持します。live地図のNativeMapData storeは96件です。地図ID生成は原版のshort折返しとItemStackのdamage設定順を保持します。読み込み済みOverworldの既知ブロック色を測量し、未読み込み・未対応の地形は探索済みとして描きません。live地図はmain36枠をすべて更新してからmain/armor40枠のpacketを作る順を保ち、native viewer stateが初回全体・変更矩形・アイコンのみ・送信なしを選びます。これは上記Source MapInfoの所有者とは別の、移行待ちの実装です。
 
 ## Windowsでビルド
 

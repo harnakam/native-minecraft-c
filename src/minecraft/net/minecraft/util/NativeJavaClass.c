@@ -61,8 +61,8 @@ static bool source_item(const MCObject *o){return EntityItem_isInstance(o);}
 static bool native_player(const MCObject *o){
     return MCGameplayPlayer_isInstance(o)&&!EntityPlayerSP_isInstance(o)&&!EntityPlayerMP_isInstance(o);
 }
-static const NativeJavaClassDescriptor objectDescriptor={"java.lang.Object",NULL,0,NULL};
-static const NativeJavaClassDescriptor *const entityParents[]={&objectDescriptor};
+const NativeJavaClassDescriptor NativeJavaClass_ObjectClass={"java.lang.Object",NULL,0,NULL};
+static const NativeJavaClassDescriptor *const entityParents[]={&NativeJavaClass_ObjectClass};
 static const NativeJavaClassDescriptor entityDescriptor={"net.minecraft.entity.Entity",entityParents,1,NULL};
 static const NativeJavaClassDescriptor *const livingParents[]={&entityDescriptor};
 static const NativeJavaClassDescriptor livingDescriptor={"net.minecraft.entity.EntityLivingBase",livingParents,1,NULL};
@@ -78,21 +78,25 @@ static const NativeJavaClassDescriptor *const itemParents[]={&entityDescriptor};
 static const NativeJavaClassDescriptor itemDescriptor={"net.minecraft.entity.item.EntityItem",itemParents,1,source_item};
 static const NativeJavaClassDescriptor *const nativePlayerParents[]={&playerDescriptor};
 static const NativeJavaClassDescriptor nativePlayerDescriptor={"C919.native.GameplayPlayer",nativePlayerParents,1,native_player};
-NativeJavaClass *NativeJavaClass_Object(MCObjectHeap *h){return NativeJavaClass_literal(h,&objectDescriptor);}
+NativeJavaClass *NativeJavaClass_Object(MCObjectHeap *h){return NativeJavaClass_literal(h,&NativeJavaClass_ObjectClass);}
 NativeJavaClass *NativeJavaClass_Entity(MCObjectHeap *h){return NativeJavaClass_literal(h,&entityDescriptor);}
 static bool matches(const MCObject *o,void *context){
     if(!NativeJavaClass_isInstance(o))return false;
     const NativeJavaClassDescriptor *d=((const NativeJavaClass *)o)->descriptor;
     return d&&d->matchesRuntimeClass&&d->matchesRuntimeClass(context);
 }
-NativeJavaClass *NativeJavaClass_getClass(MCObjectHeap *h,MCObject *o){
-    if(!o||o->heap!=h||MCObjectHeap_failed(h)){fail(h);return NULL;}
+static const NativeJavaClassDescriptor *runtime_descriptor(MCObjectHeap *h,MCObject *o){
+    if(!o||o->heap!=h||MCObjectHeap_objectSize(o)<sizeof(MCObject)||MCObjectHeap_failed(h)){fail(h);return NULL;}
     NativeJavaClass *c=(NativeJavaClass *)MCObjectHeap_findObject(h,&klass,matches,o);
-    if(c)return c;
+    if(c)return c->descriptor;
     const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor};
     for(size_t i=0;i<sizeof(builtins)/sizeof(*builtins);++i)
-        if(builtins[i]->matchesRuntimeClass(o))return NativeJavaClass_literal(h,builtins[i]);
+        if(builtins[i]->matchesRuntimeClass(o))return builtins[i];
     fail(h);return NULL;
+}
+NativeJavaClass *NativeJavaClass_getClass(MCObjectHeap *h,MCObject *o){
+    const NativeJavaClassDescriptor *d=runtime_descriptor(h,o);
+    return d?NativeJavaClass_literal(h,d):NULL;
 }
 bool NativeJavaClass_isAssignableFrom(NativeJavaClass *self,NativeJavaClass *other,bool *out){
     MCObjectHeap *h=self?self->object.heap:NULL;
@@ -106,6 +110,9 @@ bool NativeJavaClass_isInstanceOf(NativeJavaClass *self,MCObject *o,bool *out){
     MCObjectHeap *h=self?self->object.heap:NULL;
     if(!NativeJavaClass_isInstance((MCObject *)self)||!out||MCObjectHeap_failed(h))return fail(h);
     if(!o){*out=false;return true;}
-    NativeJavaClass *actual=NativeJavaClass_getClass(h,o);
-    return actual&&NativeJavaClass_isAssignableFrom(self,actual,out);
+    /* Runtime type checks do not manufacture a managed Class or root. The
+       explicit getClass API still returns its canonical per-heap literal. */
+    const NativeJavaClassDescriptor *actual=runtime_descriptor(h,o);
+    if(!actual||!hierarchy(h,self->descriptor,NULL,NULL))return false;
+    return hierarchy(h,actual,self->descriptor,out);
 }

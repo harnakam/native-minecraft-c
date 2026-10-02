@@ -2,7 +2,7 @@
 #define C919_MAP_H
 #include "inventory/inventory.h"
 #include "world/NativeWorld.h"
-#include "world/storage/MapData.h"
+#include "world/storage/NativeMapData.h"
 
 #define MC_MAP_SIDE 128u
 #define MC_MAP_PIXELS (MC_MAP_SIDE * MC_MAP_SIDE)

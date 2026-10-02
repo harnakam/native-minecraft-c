@@ -13,6 +13,9 @@ struct NativeJavaClassDescriptor {
     size_t supertypeCount;
     bool (*matchesRuntimeClass)(const MCObject *);
 };
+/* The same immutable Object fact used by the built-in hierarchy. New native
+   Source facts must reference this identity rather than duplicate its name. */
+extern const NativeJavaClassDescriptor NativeJavaClass_ObjectClass;
 typedef struct NativeJavaClass {
     MCObject object;
     const NativeJavaClassDescriptor *descriptor;

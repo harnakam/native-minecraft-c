@@ -1,61 +1,91 @@
-#ifndef C919_MAP_DATA_H
-#define C919_MAP_DATA_H
-#include "inventory/inventory.h"
-#include "util/MCObjectHeap.h"
+#ifndef C919_SOURCE_MAP_DATA_H
+#define C919_SOURCE_MAP_DATA_H
+#include "util/NativeHashMap.h"
+#include "util/NativeJavaClass.h"
+#include "util/NativeLinkedHashMap.h"
+#include "world/WorldSavedData.h"
 
-typedef struct World MCGameplayWorld;
+typedef struct MapData MapData;
+typedef struct MapInfo MapInfo;
+typedef struct World World;
 typedef struct MCGameplayPlayer MCGameplayPlayer;
 typedef struct ItemStack ItemStack;
-typedef struct mc_maps mc_maps;
+typedef struct S34PacketMaps S34PacketMaps;
 
-#define MC_MAP_MAX_VIEWERS 64u
-#define MC_MAP_DECORATION_KEY 128u
-typedef struct mc_map_info mc_map_info;
-typedef struct mc_MapData_tracking mc_MapData_tracking;
-typedef struct {
-    int32_t entity_id;
-    const char *name;
-    const mc_inventory *inventory;
-    double x,z,yaw;
-    int dimension;
-    bool alive;
-} mc_map_player;
-typedef struct {
-    int32_t entity_id;
-    uint32_t update_counter,packet_counter;
-    bool dirty;
-    uint8_t min_x,min_z,max_x,max_z;
-} mc_MapInfo;
-/* MapInfo is transient, as in Java. Working-store copies retain its counters
-   and dirty rectangles; it is not included in standard MapData NBT. */
-bool mc_MapData_copy_tracking(mc_map_info *destination,const mc_map_info *source);
-void mc_MapData_free_tracking(mc_map_info *map);
-mc_MapInfo *mc_MapData_getMapInfo(mc_map_info *map,int32_t entity_id);
-bool mc_MapData_updateVisiblePlayers(mc_map_info *map,const mc_slot *stack,
-    const mc_map_player *viewer,const mc_map_player *players,size_t count,int64_t world_time);
-bool mc_MapData_updateDecorations(mc_map_info *map,int type,const char *identifier,
-    double x,double z,double rotation,int64_t world_time);
-void mc_MapData_updateMapData(mc_map_info *map,unsigned x,unsigned z);
-/* 1 packet, 0 no update, -1 failure. Failed encoding retains dirty state. */
-int mc_MapData_getMapPacket(mc_map_info *map,const mc_slot *stack,int32_t entity_id,mc_buf *packet);
+/* Immutable native virtual-method boundaries for the supplied concrete NBT
+   and saved-data implementations. NULL entries inherit actual translated
+   methods. Context is the single traced WorldSavedData.nativeContext edge;
+   no second NBT/color authority is retained here. Numeric callbacks return
+   the already narrowed byte/short/int result, according to kind 1/2/3. */
+typedef struct MapDataDependencies {
+    WorldSavedDataResult (*getNumber)(MCObject *, NBTTagCompound *, const char *, int, int32_t *);
+    WorldSavedDataResult (*getByteArray)(MCObject *, NBTTagCompound *, const char *,
+                                         NativeByteArray **);
+    WorldSavedDataResult (*setNumber)(MCObject *, NBTTagCompound *, const char *, int, int32_t);
+    WorldSavedDataResult (*setByteArray)(MCObject *, NBTTagCompound *, const char *,
+                                         NativeByteArray *);
+    WorldSavedDataResult (*setDirty)(MCObject *, MapData *, bool);
+} MapDataDependencies;
+typedef struct MapInfoDependencies {
+    WorldSavedDataResult (*update)(MCObject *, MapInfo *, int32_t, int32_t);
+} MapInfoDependencies;
 
-/* Source-reference entry points over a borrowed native MapData store view.
-   owner retains the view in owner->maps; caller releases it before any store
-   replacement/adoption. Players and UTF-16 decoration keys are strong managed
-   references, not serialized inventory copies. Lookup preserves the source
-   Entity.equals/hashCode ID equality and HashMap's cached key hash.
-   World.trace must invoke MapData_traceReferences after its native deep copy.
-   Native terrain/color buffers, bounds and S34 encoding remain adapters.
-   ItemFrame dependencies are not ported: a non-NULL frame fails the heap.
-   A failed operation retains source-ordered partial mutations; abort the whole
-   working graph. Successful transient changes require adoption even when no
-   persistent pixels/metadata changed. Do not mix both tracking APIs on one map. */
-void MapData_traceReferences(mc_maps *,MCObjectVisitor,void *context);
-mc_MapInfo *MapData_getMapInfo(mc_map_info *,MCGameplayWorld *owner,MCGameplayPlayer *);
-bool MapData_updateVisiblePlayers(mc_map_info *,MCGameplayWorld *owner,
-    MCGameplayPlayer *,ItemStack *);
-/* Native packet result: 1 packet, 0 original NULL, -1 failed dependency/heap.
-   S34 encoder failure is atomic at this native boundary and retains dirtiness. */
-int MapData_getMapPacket(mc_map_info *,ItemStack *,MCGameplayWorld *,
-    MCGameplayPlayer *,mc_buf *);
+/* Complete declared Source state, followed by explicit native dispatch only.
+   updateVisiblePlayers/EntityItemFrame and the full ItemMap integration are
+   pending and have no placeholder API or successful substitute. */
+struct MapData {
+    WorldSavedData base;
+    int32_t xCenter, zCenter;
+    int8_t dimension, scale;
+    NativeByteArray *colors;
+    NativeReferenceList *playersArrayList;
+    NativeHashMap *playersHashMap;
+    NativeLinkedHashMap *mapDecorations;
+    const MapDataDependencies *nativeDependencies;
+};
+struct MapInfo {
+    MCObject object;
+    MapData *outer; /* Source synthetic this$0. */
+    MCGameplayPlayer *entityplayerObj;
+    bool field_176105_d;
+    int32_t minX, minY, maxX, maxY, field_176109_i, field_82569_d;
+    const MapInfoDependencies *nativeDependencies;
+    MCObject *nativeContext;
+};
+
+bool MapData_isInstance(const MCObject *);
+extern const NativeJavaClassDescriptor MapData_Class;
+NativeJavaClass *MapData_nativeClass(MCObjectHeap *);
+MapData *MapData_nativeAllocate(MCObjectHeap *, const MapDataDependencies *, MCObject *);
+bool MapData_construct(MapData *, NBTString *nullableName);
+MapData *MapData_new(MCObjectHeap *, NBTString *nullableName, const MapDataDependencies *,
+                     MCObject *);
+WorldSavedDataResult MapData_calculateMapCenter(MapData *, double, double, int32_t);
+WorldSavedDataResult MapData_readFromNBT(MapData *, NBTTagCompound *);
+WorldSavedDataResult MapData_writeToNBT(MapData *, NBTTagCompound *);
+WorldSavedDataResult MapData_getMapInfo(MapData *, MCGameplayPlayer *nullablePlayer, MapInfo **out);
+WorldSavedDataResult MapData_updateDecorations(MapData *, int32_t, World *, NBTString *nullableId,
+                                               double, double, double);
+WorldSavedDataResult MapData_updateMapData(MapData *, int32_t, int32_t);
+WorldSavedDataResult MapData_getMapPacket(MapData *, ItemStack *, World *, MCGameplayPlayer *,
+                                          S34PacketMaps **out);
+
+bool MapInfo_isInstance(const MCObject *);
+MapInfo *MapInfo_nativeAllocate(MCObjectHeap *, const MapInfoDependencies *, MCObject *);
+bool MapInfo_construct(MapInfo *, MapData *nullableOuter, MCGameplayPlayer *nullablePlayer);
+MapInfo *MapInfo_new(MCObjectHeap *, MapData *, MCGameplayPlayer *, const MapInfoDependencies *,
+                     MCObject *);
+WorldSavedDataResult MapInfo_update(MapInfo *, int32_t, int32_t);
+WorldSavedDataResult MapInfo_update_base(MapInfo *, int32_t, int32_t);
+/* Implemented in the separate translated MapInfo packet-method unit. */
+WorldSavedDataResult MapInfo_getPacket(MapInfo *, ItemStack *, S34PacketMaps **out);
+
+/* EXCEPTION models reached Source NULL/index/checkcast failures with healthy
+   heap and preceding mutations retained; no Throwable hierarchy is claimed.
+   Native malformed/foreign/unsupported dispatch/OOM is sticky FAILURE.
+   The reached NativeIterator dependency currently reports concurrent changes
+   as sticky FAILURE; that limitation is not hidden as Java catch semantics.
+   Returned references are borrowed, and every method pins its live receiver
+   and arguments until completion. Full Java subclass dispatch is not inferred
+   from a matching name or struct layout. */
 #endif

@@ -1,5 +1,9 @@
 #include "world/WorldSavedData.h"
 
+static const NativeJavaClassDescriptor *const savedDataParents[] = {&NativeJavaClass_ObjectClass};
+const NativeJavaClassDescriptor WorldSavedData_Class = {
+    "net.minecraft.world.WorldSavedData", savedDataParents, 1, NULL};
+
 typedef struct SavedTypeEntry {
     MCObject object;
     const WorldSavedDataNativeType *facts;

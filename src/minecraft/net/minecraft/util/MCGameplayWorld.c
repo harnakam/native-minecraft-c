@@ -1,5 +1,5 @@
 #include "util/MCGameplayWorld.h"
-#include "world/storage/MapData.h"
+#include "world/storage/NativeMapData.h"
 #include "world/storage/SaveDataMemoryStorage.h"
 #include "util/NativeWallClock.h"
 #include "block/block.h"
@@ -19,7 +19,7 @@ static void trace(MCObject *object,MCObjectVisitor visitor,void *context) {
     world->emptyMapUseStat=(StatBase *)visitor((MCObject *)world->emptyMapUseStat,context);
     world->savedItemFields=(NBTTagCompound *)visitor((MCObject *)world->savedItemFields,context);
     world->savedItemRootName=(NBTString *)visitor((MCObject *)world->savedItemRootName,context);
-    MapData_traceReferences(&world->maps,visitor,context);
+    NativeMapData_traceReferences(&world->maps,visitor,context);
     for(size_t i=0;i<MC_GAMEPLAY_CRAFT_STAT_COUNT;i++)world->craftStats[i]=(StatBase *)visitor((MCObject *)world->craftStats[i],context);
 }
 static void destroy(MCObject *object){if(MCObjectHeap_objectSize(object)>=sizeof(MCGameplayWorld))mc_maps_free(&((MCGameplayWorld *)object)->maps);}

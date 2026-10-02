@@ -3,6 +3,7 @@
 #include "network/protocol.h"
 #include "item/ItemStack.h"
 #include "nbt/NBTTagByteArray.h"
+#include "util/NativeTypedObjectArray.h"
 /* Ephemeral native ByteBuf/IO allocation view. This ports original item/NBT,
    String and VarInt methods, not the complete delegated Netty ByteBuf class. The view
    and mc_buf remain with their native owner and must not cross heap adoption. */
@@ -23,6 +24,10 @@ bool PacketBuffer_readStringFromBuffer(PacketBuffer *,int32_t maxLength,NBTStrin
 NBTByteArrayStorage *PacketBuffer_nativeEncodeUTF8(MCObjectHeap *,const NBTString *);
 bool PacketBuffer_readVarIntFromBuffer(PacketBuffer *,int32_t *output);
 bool PacketBuffer_writeVarIntToBuffer(PacketBuffer *,int32_t value);
+/* Source byte[] bodies over the native bulk IO leaf. A healthy negative-array,
+   NULL or truncated-input exception retains the VarInt/IO prefix. */
+NativeArrayResult PacketBuffer_readByteArray(PacketBuffer *, NativeByteArray **out);
+NativeArrayResult PacketBuffer_writeByteArray(PacketBuffer *, NativeByteArray *);
 /* Read failures leave *output untouched, with the buffer/heap error set.
    Successful output is borrowed until retained/rooted by the caller. Negative
    short item IDs are null; nonnegative unknown IDs create a null-Item stack.
