@@ -134,6 +134,17 @@ BlockPos *World_getSpawnPoint(World *);
 BlockPos *World_getHeight(World *,BlockPos *);
 BlockPos *World_getHeight_base(World *,BlockPos *);
 BlockPos *World_getTopSolidOrLiquidBlock(World *,BlockPos *);
+/* Translated lookup bodies with a bounded native IChunkProvider dispatch:
+   the supported concrete provider is the actual ChunkProviderClient. NULL
+   pos at a BASE getter / NULL provider at a BASE invocation is a sticky
+   native exception boundary; a healthy
+   NULL Chunk result is forwarded. This is not a full Throwable/interface port.
+   Existing height/top dense dependency leaves remain separate native paths. */
+typedef struct Chunk Chunk;
+Chunk *World_getChunkFromBlockCoords(World *,BlockPos *);
+Chunk *World_getChunkFromBlockCoords_base(World *,BlockPos *);
+Chunk *World_getChunkFromChunkCoords(World *,int32_t chunkX,int32_t chunkZ);
+Chunk *World_getChunkFromChunkCoords_base(World *,int32_t chunkX,int32_t chunkZ);
 float World_getCelestialAngle(World *,float partialTicks);
 float World_getCelestialAngle_base(World *,float partialTicks);
 float World_getRainStrength(World *,float delta);

@@ -14,6 +14,8 @@ Java原本、テクスチャ、音声、モデル、JAR、MCP本体・マッピ�
 
 Chunk/EmptyChunkの22フィールド・constructor・受信と読出しの対象本体、NibbleArray・ExtendedBlockStorage・ChunkPrimer、実ChunkProviderClientの索引・参照リスト・アンロード経路を移植しました。これらは実体を持つモジュールとして検証しています。現在の通信・描画はまだnative dense地形を使用し、WorldClient constructorとS21/S26のSource経路への切替は未完了です。この段階を、実clientの地形がSource Chunkへ移行済みとは数えません。
 
+WorldのgetChunkFromBlockCoords/getChunkFromChunkCoordsも、座標getterのX→Z順と、その後のvirtual dispatch・provider捕捉を保持して翻訳しました。対象経路は実ChunkProviderClient/cache/EmptyChunkへ問い合わせます。現在のlive地形はnative dense所有のままで、WorldClient constructor・受信・描画・衝突のSource所有者への移行は残っています。
+
 MapColorの全2フィールド・constructor・ARGB計算と、64枠の色配列・36個の名前付き参照も移植しました。配列の要素を置き換えても、名前付き参照は元のオブジェクトを保持します。地図の測量・描画はまだ旧native色表を使用しており、Block/Material・Guava集合・Source地形と合わせた切替が残っています。
 
 WorldSavedData・ISaveHandler・SaveHandlerMP、MapStorageとSaveDataMemoryStorageのfield・constructor・cache/load/save/ID本体も原本から移植しました。例外後のpartial data、NULL、共有参照、保存中のリスト変更と呼出順を保持します。NBTとChunkのbyte[]は同じ管理オブジェクトへ統一しました。実clientのmemory providerはこのconstructorを使います。実disk handler、WorldClient全体の統合は残っています。
