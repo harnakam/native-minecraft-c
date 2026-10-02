@@ -3,6 +3,7 @@
 #include "world/storage/SaveDataMemoryStorage.h"
 #include "util/NativeWallClock.h"
 #include "block/block.h"
+#include "util/NativeBlockStateRuntime.h"
 #include <string.h>
 
 static bool fail(MCObjectHeap *heap){MCObjectHeap_fail(heap);return false;}
@@ -135,10 +136,13 @@ static bool top_segment(MCObject *context,MCObject *object,int32_t *out) {
     (void)context;const mc_chunk *chunk=chunk_value(object);if(!chunk||!out)return fail(object?object->heap:NULL);
     *out=0;for(int section=15;section>=0;section--)if(chunk->sectionMask&(1u<<section)){*out=section<<4;break;}return true;
 }
-typedef struct {MCObject object;uint16_t state;} NativeBlock;
-typedef struct {MCObject object;bool movement,leaves;} NativeMaterial;
+typedef struct {MCObject object;uint16_t state;} NativeDenseBlockView;
 static const MCObjectClass blockClass={"native.RegisteredBlockView",MCObjectHeap_plainClone,NULL,NULL};
-static const MCObjectClass materialClass={"native.MaterialPropertyView",MCObjectHeap_plainClone,NULL,NULL};
+static bool dense_identity(const MCObject *object,void *context) {return object==context;}
+static bool dense_tracked(MCObject *object) {
+    return object&&object->heap&&object->klass&&
+        MCObjectHeap_findObject(object->heap,object->klass,dense_identity,object)==object;
+}
 static MCObject *chunk_block(MCObject *context,MCObject *object,BlockPos *pos) {
     (void)context;const mc_chunk *chunk=chunk_value(object);
     if(!chunk||!BlockPos_isInstance((MCObject *)pos)||((MCObject *)pos)->heap!=object->heap){fail(object?object->heap:NULL);return NULL;}
@@ -146,25 +150,35 @@ static MCObject *chunk_block(MCObject *context,MCObject *object,BlockPos *pos) {
     if(Vec3i_getX(&pos->vec3i,&x)!=NATIVE_ARRAY_OK||Vec3i_getY(&pos->vec3i,&y)!=NATIVE_ARRAY_OK||Vec3i_getZ(&pos->vec3i,&z)!=NATIVE_ARRAY_OK){fail(object->heap);return NULL;}
     uint16_t state=y<0||y>=256?0:chunk->blocks[((size_t)y<<8)|((size_t)(z&15)<<4)|(size_t)(x&15)];
     if(!mc_block_valid(state)){fail(object->heap);return NULL;}
-    NativeBlock *block=(NativeBlock *)MCObjectHeap_alloc(object->heap,sizeof(*block),&blockClass);if(block)block->state=state;return (MCObject *)block;
+    NativeDenseBlockView *block=(NativeDenseBlockView *)MCObjectHeap_alloc(object->heap,sizeof(*block),&blockClass);if(block)block->state=state;return (MCObject *)block;
 }
 static MCObject *material(MCObject *context,MCObject *object) {
-    (void)context;
-    if(!object||object->klass!=&blockClass||MCObjectHeap_objectSize(object)<sizeof(NativeBlock)){fail(object?object->heap:NULL);return NULL;}
-    bool movement,leaves;
-    if(!mc_block_material_flags(((NativeBlock *)object)->state,&movement,&leaves)){fail(object->heap);return NULL;}
-    NativeMaterial *value=(NativeMaterial *)MCObjectHeap_alloc(object->heap,sizeof(*value),&materialClass);
-    if(value){value->movement=movement;value->leaves=leaves;}return (MCObject *)value;
+    /* This native dependency is bound to the actual World owner. Check
+       membership before allocation metadata or the captured block payload. */
+    MCObjectHeap *heap=context?context->heap:(object?object->heap:NULL);
+    if(!dense_tracked(context)||!MCGameplayWorld_isInstance(context)||
+        MCObjectHeap_failed(heap)||!object||object->heap!=heap||
+        object->klass!=&blockClass||!dense_tracked(object)||
+        MCObjectHeap_objectSize(object)<sizeof(NativeDenseBlockView)) {
+        fail(heap);return NULL;
+    }
+    uint16_t state=((NativeDenseBlockView *)object)->state;
+    if(!mc_block_valid(state)){fail(object->heap);return NULL;}
+    /* Native dense acceptance includes every metadata nibble. Select the
+       registered block's proven binding, not a raw-state lookup with holes. */
+    return (MCObject *)NativeBlockStateRuntime_materialForBlockId(heap,state>>4);
 }
 static bool movement(MCObject *context,MCObject *object,bool *out) {
     (void)context;
-    if(!object||object->klass!=&materialClass||MCObjectHeap_objectSize(object)<sizeof(NativeMaterial)||!out)return fail(object?object->heap:NULL);
-    *out=((NativeMaterial *)object)->movement;return true;
+    if(!object||!out)return fail(object?object->heap:NULL);
+    return Material_blocksMovement((Material *)object,out)==NATIVE_ARRAY_OK;
 }
 static bool leaves(MCObject *context,MCObject *object,bool *out) {
     (void)context;
-    if(!object||object->klass!=&materialClass||MCObjectHeap_objectSize(object)<sizeof(NativeMaterial)||!out)return fail(object?object->heap:NULL);
-    *out=((NativeMaterial *)object)->leaves;return true;
+    if(!object||!Material_isInstance(object)||!out)return fail(object?object->heap:NULL);
+    MaterialStatics *statics=Material_getStatics(object->heap);
+    if(!statics)return false;
+    *out=object==(MCObject *)statics->leaves;return true;
 }
 static const WorldDependencies worldDependencies={
     .isChunkLoaded=loaded,.getChunkFromChunkCoords=get_chunk,.chunkGetHeightValue=height,

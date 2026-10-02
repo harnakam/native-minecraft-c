@@ -342,7 +342,7 @@ bool Chunk_constructPrimer(Chunk *c, World *w, ChunkPrimer *p, int32_t x, int32_
                 NativeBlock *block = NativeBlockState_getBlock(state);
                 if (!block)
                     goto done;
-                NativeMaterial *material = NativeBlock_getMaterial(block);
+                Material *material = NativeBlock_getMaterial(block);
                 NativeBlockStateRuntime *r = runtime(c);
                 if (!material || !r)
                     goto done;

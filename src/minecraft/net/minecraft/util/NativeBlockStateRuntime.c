@@ -1,6 +1,6 @@
 #include "util/NativeBlockStateRuntime.h"
 #include "util/NativeBlockStateFacts.h"
-static const MCObjectClass runtimeClass, blockClass, stateClass, materialClass;
+static const MCObjectClass runtimeClass, blockClass, stateClass;
 
 static bool fail(MCObjectHeap *h) {
     MCObjectHeap_fail(h);
@@ -11,19 +11,22 @@ static bool any(const MCObject *o, void *c) {
     (void)c;
     return true;
 }
+static bool identity(const MCObject *o, void *c) { return o == c; }
+static bool tracked(const MCObject *o) {
+    return o && o->heap && o->klass &&
+           MCObjectHeap_findObject(o->heap, o->klass, identity, (void *)o) == o;
+}
 bool NativeBlockStateRuntime_isInstance(const MCObject *o) {
-    return o && o->klass == &runtimeClass &&
+    return o && o->klass == &runtimeClass && tracked(o) &&
            MCObjectHeap_objectSize(o) >= sizeof(NativeBlockStateRuntime);
 }
 bool NativeBlock_isInstance(const MCObject *o) {
-    return o && o->klass == &blockClass && MCObjectHeap_objectSize(o) >= sizeof(NativeBlock);
+    return o && o->klass == &blockClass && tracked(o) && MCObjectHeap_objectSize(o) >= sizeof(NativeBlock);
 }
 bool NativeBlockState_isInstance(const MCObject *o) {
-    return o && o->klass == &stateClass && MCObjectHeap_objectSize(o) >= sizeof(NativeBlockState);
+    return o && o->klass == &stateClass && tracked(o) && MCObjectHeap_objectSize(o) >= sizeof(NativeBlockState);
 }
-bool NativeMaterial_isInstance(const MCObject *o) {
-    return o && o->klass == &materialClass && MCObjectHeap_objectSize(o) >= sizeof(NativeMaterial);
-}
+
 
 static bool runtime_valid(NativeBlockStateRuntime *r) {
     return (NativeBlockStateRuntime_isInstance((MCObject *)r) &&
@@ -31,12 +34,17 @@ static bool runtime_valid(NativeBlockStateRuntime *r) {
            fail(r ? r->object.heap : NULL);
 }
 static bool same(MCObjectHeap *h, MCObject *o) {
-    return (!o || (o->heap == h && MCObjectHeap_objectSize(o) >= sizeof(MCObject))) || fail(h);
+    return (!o || (o->heap == h && tracked(o))) || fail(h);
 }
 static bool begin(MCObject *o, NativeBlockStateRuntime *r, MCObjectRootScope *scope) {
-    return runtime_valid(r) && o && o->heap == r->object.heap &&
-           MCObjectRootScope_begin(scope, r->object.heap) && MCObjectRootScope_pin(scope, o) &&
-           MCObjectRootScope_pin(scope, (MCObject *)r);
+    if (!runtime_valid(r) || !o || !same(r->object.heap, o) ||
+        !MCObjectRootScope_begin(scope, r->object.heap))
+        return false;
+    if (!MCObjectRootScope_pin(scope, o) || !MCObjectRootScope_pin(scope, (MCObject *)r)) {
+        MCObjectRootScope_end(scope);
+        return false;
+    }
+    return true;
 }
 static void runtime_trace(MCObject *o, MCObjectVisitor v, void *c) {
     if (!NativeBlockStateRuntime_isInstance(o)) {
@@ -53,8 +61,8 @@ static void runtime_trace(MCObject *o, MCObjectVisitor v, void *c) {
 
     r->air = (NativeBlock *)v((MCObject *)r->air, c);
     r->barrier = (NativeBlock *)v((MCObject *)r->barrier, c);
-    r->airMaterial = (NativeMaterial *)v((MCObject *)r->airMaterial, c);
-    r->leavesMaterial = (NativeMaterial *)v((MCObject *)r->leavesMaterial, c);
+    r->airMaterial = (Material *)v((MCObject *)r->airMaterial, c);
+    r->leavesMaterial = (Material *)v((MCObject *)r->leavesMaterial, c);
     r->context = v(r->context, c);
 }
 static void block_trace(MCObject *o, MCObjectVisitor v, void *c) {
@@ -65,7 +73,7 @@ static void block_trace(MCObject *o, MCObjectVisitor v, void *c) {
     NativeBlock *b = (NativeBlock *)o;
     b->runtime = (NativeBlockStateRuntime *)v((MCObject *)b->runtime, c);
     b->defaultState = (NativeBlockState *)v((MCObject *)b->defaultState, c);
-    b->material = (NativeMaterial *)v((MCObject *)b->material, c);
+    b->material = (Material *)v((MCObject *)b->material, c);
 }
 static void state_trace(MCObject *o, MCObjectVisitor v, void *c) {
     if (!NativeBlockState_isInstance(o)) {
@@ -76,14 +84,6 @@ static void state_trace(MCObject *o, MCObjectVisitor v, void *c) {
     s->runtime = (NativeBlockStateRuntime *)v((MCObject *)s->runtime, c);
     s->block = (NativeBlock *)v((MCObject *)s->block, c);
 }
-static void material_trace(MCObject *o, MCObjectVisitor v, void *c) {
-    if (!NativeMaterial_isInstance(o)) {
-        fail(o->heap);
-        return;
-    }
-    NativeMaterial *m = (NativeMaterial *)o;
-    m->runtime = (NativeBlockStateRuntime *)v((MCObject *)m->runtime, c);
-}
 static const MCObjectClass runtimeClass = {"native.BlockStateRegistry", MCObjectHeap_plainClone,
                                            runtime_trace, NULL};
 
@@ -93,15 +93,13 @@ static const MCObjectClass blockClass = {"native.BlockRegistryIdentity", MCObjec
 static const MCObjectClass stateClass = {"native.BlockStateIdentity", MCObjectHeap_plainClone,
                                          state_trace, NULL};
 
-static const MCObjectClass materialClass = {"native.MaterialRegistryIdentity",
-                                            MCObjectHeap_plainClone, material_trace, NULL};
-
 static bool owned_array(NativeBlockStateRuntime *r, NativeObjectArray *a) {
-    return (NativeObjectArray_isInstance((MCObject *)a) && a->object.heap == r->object.heap) ||
+    return (a && same(r->object.heap, (MCObject *)a) && NativeObjectArray_isInstance((MCObject *)a)) ||
            fail(r->object.heap);
 }
 static bool owned_ids(NativeBlockStateRuntime *r) {
-    return (ObjectIntIdentityMap_isInstance((MCObject *)r->BLOCK_STATE_IDS) &&
+    return (r->BLOCK_STATE_IDS && same(r->object.heap, (MCObject *)r->BLOCK_STATE_IDS) &&
+            ObjectIntIdentityMap_isInstance((MCObject *)r->BLOCK_STATE_IDS) &&
             r->BLOCK_STATE_IDS->object.heap == r->object.heap) ||
            fail(r->object.heap);
 }
@@ -112,6 +110,35 @@ static bool initialized_registry(NativeBlockStateRuntime *r) {
            NativeBlock_isInstance((MCObject *)r->air) && r->air->object.heap == r->object.heap &&
            NativeBlock_isInstance((MCObject *)r->barrier) &&
            r->barrier->object.heap == r->object.heap;
+}
+/* One binding selection shared by the native registry and dense raw-ID view.
+   The subset stores only these actual Source references, never scalar flags. */
+static Material *named_material(MaterialStatics *s,int32_t group) {
+    Material *bindings[34] = {
+        s->air, s->rock, s->grass, s->ground, s->wood, s->plants,
+        s->water, s->lava, s->sand, s->leaves, s->sponge, s->glass,
+        s->iron, s->cloth, s->circuits, s->piston, s->web, s->vine,
+        s->tnt, s->fire, s->snow, s->ice, s->craftedSnow, s->cactus,
+        s->clay, s->gourd, s->portal, s->cake, s->dragonEgg,
+        s->redstoneLight, s->anvil, s->barrier, s->carpet, s->packedIce
+    };
+    return group>=0 && group<34?bindings[group]:NULL;
+}
+Material *NativeBlockStateRuntime_materialForBlockId(MCObjectHeap *h,int32_t id) {
+    if(!h||MCObjectHeap_failed(h)){fail(h);return NULL;}
+    if(id<0||id>=198)return NULL;
+    MCObjectRootScope scope={0};
+    if(!MCObjectRootScope_begin(&scope,h))return NULL;
+    MaterialStatics *s=Material_getStatics(h);
+    Material *out=NULL;
+    if(s&&MCObjectRootScope_pin(&scope,(MCObject *)s)) {
+        out=named_material(s,registryFacts[id].material);
+        if(!out||!same(h,(MCObject *)out)||!Material_isInstance((MCObject *)out)||
+            !MCObjectRootScope_pin(&scope,(MCObject *)out))out=NULL;
+    }
+    if(!out)fail(h);
+    MCObjectRootScope_end(&scope);
+    return MCObjectHeap_failed(h)?NULL:out;
 }
 NativeBlockStateRuntime *NativeBlockStateRuntime_get(MCObjectHeap *h) {
     if (!h || MCObjectHeap_failed(h)) {
@@ -154,23 +181,21 @@ NativeBlockStateRuntime *NativeBlockStateRuntime_get(MCObjectHeap *h) {
         r->materials = NativeObjectArray_new(h, 34);
         ok = r->materials != NULL;
     }
+    /* Native named binding of the closed target registry. These refs were
+       resolved from supplied constructor chains before joining retained
+       material identity groups. Numeric groups are not Source Material IDs. */
+    MaterialStatics *statics = ok ? Material_getStatics(h) : NULL;
+    ok = ok && statics && MCObjectRootScope_pin(&scope, (MCObject *)statics);
+    if (ok) {
+        for (int32_t i = 0; ok && i < 34; i++) {
+            Material *binding=named_material(statics,i);
+            ok = same(h,(MCObject *)binding) && Material_isInstance((MCObject *)binding) &&
+                 NativeObjectArray_set(r->materials, i, (MCObject *)binding);
+        }
+    }
     for (int32_t id = 0; ok && id < 198; id++) {
         const RegistryFact *f = &registryFacts[id];
-        NativeMaterial *m = (NativeMaterial *)r->materials->values[f->material];
-
-        if (!m) {
-            m = (NativeMaterial *)MCObjectHeap_alloc(h, sizeof(*m), &materialClass);
-            ok = m != NULL;
-
-            if (ok) {
-                m->runtime = r;
-                m->identity = f->material;
-                m->movement = f->movement != 0;
-                m->liquid = f->liquid != 0;
-                m->leaves = id == 18;
-                r->materials->values[f->material] = (MCObject *)m;
-            }
-        }
+        Material *m = (Material *)r->materials->values[f->material];
         NativeBlock *b = ok ? (NativeBlock *)MCObjectHeap_alloc(h, sizeof(*b), &blockClass) : NULL;
         ok = b != NULL;
 
@@ -207,10 +232,11 @@ NativeBlockStateRuntime *NativeBlockStateRuntime_get(MCObjectHeap *h) {
         r->barrier = (NativeBlock *)r->blocks->values[166];
         r->airMaterial = r->air->material;
         r->leavesMaterial = ((NativeBlock *)r->blocks->values[18])->material;
-        r->leavesMaterial->leaves = true;
         MCObjectRoot root = {0};
         ok = MCObjectRoot_init(&root, h, (MCObject *)r);
     }
+    if (!ok)
+        fail(h);
     MCObjectRootScope_end(&scope);
     return ok ? r : NULL;
 }
@@ -302,10 +328,6 @@ static bool state_begin(NativeBlockState *s, MCObjectRootScope *scope) {
 static bool block_begin(NativeBlock *b, MCObjectRootScope *scope) {
     return (NativeBlock_isInstance((MCObject *)b) && begin((MCObject *)b, b->runtime, scope)) ||
            fail(b ? b->object.heap : NULL);
-}
-static bool material_begin(NativeMaterial *m, MCObjectRootScope *scope) {
-    return (NativeMaterial_isInstance((MCObject *)m) && begin((MCObject *)m, m->runtime, scope)) ||
-           fail(m ? m->object.heap : NULL);
 }
 static bool callback_context(NativeBlockStateRuntime *r, MCObjectRootScope *scope) {
     return same(r->object.heap, r->context) && MCObjectRootScope_pin(scope, r->context);
@@ -425,21 +447,38 @@ bool NativeBlock_getMetaFromState(NativeBlock *b, NativeBlockState *s, int32_t *
     MCObjectRootScope_end(&scope);
     return ok;
 }
-NativeMaterial *NativeBlock_getMaterial(NativeBlock *b) {
+static bool current_material_edges(NativeBlock *b, MCObjectRootScope *scope) {
+    MCObjectHeap *heap = b->object.heap;
+    bool runtimeOK = same(heap, (MCObject *)b->runtime);
+    if (runtimeOK && b->runtime)
+        runtimeOK = NativeBlockStateRuntime_isInstance((MCObject *)b->runtime) &&
+                    MCObjectRootScope_pin(scope, (MCObject *)b->runtime);
+    bool materialOK = same(heap, (MCObject *)b->material);
+    if (materialOK && b->material)
+        materialOK = Material_isInstance((MCObject *)b->material) &&
+                     MCObjectRootScope_pin(scope, (MCObject *)b->material);
+    return (runtimeOK && materialOK) || fail(heap);
+}
+Material *NativeBlock_getMaterial(NativeBlock *b) {
     MCObjectRootScope scope = {0};
 
     if (!block_begin(b, &scope))
         return NULL;
     NativeBlockStateRuntime *r = b->runtime;
-    NativeMaterial *m = b->material;
+    Material *m = b->material;
+    bool invoked = false;
 
     if (r->dependencies && r->dependencies->getMaterial) {
-        if (callback_context(r, &scope))
+        if (callback_context(r, &scope)) {
+            invoked = true;
             m = r->dependencies->getMaterial(r->context, b);
-        else
+        } else
             m = NULL;
     }
-    if (!NativeMaterial_isInstance((MCObject *)m) || m->object.heap != b->object.heap ||
+    bool contextOK = !invoked || callback_context(r, &scope);
+    bool edgesOK = current_material_edges(b, &scope);
+    if (!contextOK || !edgesOK || !m || !same(b->object.heap, (MCObject *)m) ||
+        !Material_isInstance((MCObject *)m) || !MCObjectRootScope_pin(&scope, (MCObject *)m) ||
         MCObjectHeap_failed(b->object.heap)) {
         fail(b->object.heap);
         m = NULL;
@@ -447,19 +486,39 @@ NativeMaterial *NativeBlock_getMaterial(NativeBlock *b) {
     MCObjectRootScope_end(&scope);
     return m;
 }
-bool NativeMaterial_blocksMovement(NativeMaterial *m, bool *out) {
+
+static bool material_begin(NativeBlockStateRuntime *r, Material *m,
+                           MCObjectRootScope *scope) {
+    if (!runtime_valid(r) || !m || !same(r->object.heap, (MCObject *)m) ||
+        !Material_isInstance((MCObject *)m))
+        return fail(r ? r->object.heap : NULL);
+    return begin((MCObject *)m, r, scope);
+}
+static bool material_property(NativeBlockStateRuntime *r, Material *m, bool *out,
+                              bool liquid) {
     MCObjectRootScope scope = {0};
-    if (!material_begin(m, &scope))
+    if (!material_begin(r, m, &scope))
         return false;
-
-    NativeBlockStateRuntime *r = m->runtime;
-    bool value = m->movement, ok = out != NULL;
-
-    if (ok && r->dependencies && r->dependencies->blocksMovement)
-        ok = callback_context(r, &scope) && r->dependencies->blocksMovement(r->context, m, &value);
-
-    if (!ok || MCObjectHeap_failed(m->object.heap)) {
-        fail(m->object.heap);
+    bool value = false, ok = out != NULL, invoked = false;
+    bool (*hook)(MCObject *, Material *, bool *) = NULL;
+    if (r->dependencies)
+        hook = liquid ? r->dependencies->isLiquid : r->dependencies->blocksMovement;
+    if (ok && hook) {
+        ok = callback_context(r, &scope);
+        if (ok) {
+            invoked = true;
+            MCObject *context = r->context;
+            ok = hook(context, m, &value);
+        }
+    } else if (ok) {
+        NativeArrayResult result = liquid ? Material_isLiquid(m, &value)
+                                         : Material_blocksMovement(m, &value);
+        ok = result == NATIVE_ARRAY_OK;
+    }
+    /* Revalidate the current traced context regardless of callback result. */
+    bool contextOK = !invoked || callback_context(r, &scope);
+    if (!ok || !contextOK || MCObjectHeap_failed(r->object.heap)) {
+        fail(r->object.heap);
         ok = false;
     }
     if (ok)
@@ -467,23 +526,11 @@ bool NativeMaterial_blocksMovement(NativeMaterial *m, bool *out) {
     MCObjectRootScope_end(&scope);
     return ok;
 }
-bool NativeMaterial_isLiquid(NativeMaterial *m, bool *out) {
-    MCObjectRootScope scope = {0};
-    if (!material_begin(m, &scope))
-        return false;
-
-    NativeBlockStateRuntime *r = m->runtime;
-    bool value = m->liquid, ok = out != NULL;
-
-    if (ok && r->dependencies && r->dependencies->isLiquid)
-        ok = callback_context(r, &scope) && r->dependencies->isLiquid(r->context, m, &value);
-
-    if (!ok || MCObjectHeap_failed(m->object.heap)) {
-        fail(m->object.heap);
-        ok = false;
-    }
-    if (ok)
-        *out = value;
-    MCObjectRootScope_end(&scope);
-    return ok;
+bool NativeBlockStateRuntime_materialBlocksMovement(NativeBlockStateRuntime *r,
+                                                   Material *m, bool *out) {
+    return material_property(r, m, out, false);
+}
+bool NativeBlockStateRuntime_materialIsLiquid(NativeBlockStateRuntime *r,
+                                             Material *m, bool *out) {
+    return material_property(r, m, out, true);
 }

@@ -4,6 +4,10 @@
 #include "entity/item/EntityItem.h"
 #include "entity/item/EntityItemFrame.h"
 #include "block/material/MapColor.h"
+#include "block/material/MaterialTransparent.h"
+#include "block/material/MaterialLiquid.h"
+#include "block/material/MaterialLogic.h"
+#include "block/material/MaterialPortal.h"
 #include "util/MCGameplayPlayer.h"
 #include "util/BlockPosMutableBlockPos.h"
 #include <stdlib.h>
@@ -97,7 +101,8 @@ static const NativeJavaClassDescriptor *runtime_descriptor(MCObjectHeap *h,MCObj
     if(!tracked(o)||o->heap!=h||MCObjectHeap_objectSize(o)<sizeof(MCObject)||MCObjectHeap_failed(h)){fail(h);return NULL;}
     NativeJavaClass *c=(NativeJavaClass *)MCObjectHeap_findObject(h,&klass,matches,o);
     if(c)return c->descriptor;
-    const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor,&EntityItemFrame_Class,&MapColor_Class,&Vec3i_Class,&BlockPos_Class,&BlockPosMutableBlockPos_Class};
+    const NativeJavaClassDescriptor *const builtins[]={&spDescriptor,&mpDescriptor,&itemDescriptor,&nativePlayerDescriptor,&EntityItemFrame_Class,&MapColor_Class,&Vec3i_Class,&BlockPos_Class,&BlockPosMutableBlockPos_Class,
+        &Material_Class,&MaterialTransparent_Class,&MaterialLiquid_Class,&MaterialLogic_Class,&MaterialPortal_Class,&MaterialAnonymous1_Class};
     for(size_t i=0;i<sizeof(builtins)/sizeof(*builtins);++i)
         if(builtins[i]->matchesRuntimeClass(o))return builtins[i];
     fail(h);return NULL;
