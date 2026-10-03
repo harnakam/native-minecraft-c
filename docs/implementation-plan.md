@@ -1,6 +1,8 @@
 # Complete source compatibility implementation plan
 
-The active objective remains complete Minecraft Java 1.8.9 compatibility through faithful translation of the supplied MCP919 source. Directory resemblance and a restricted native session do not establish that objective. Original Java, MCP, mappings, JARs, resources and private witnesses stay outside publication.
+The objective remains complete Minecraft Java 1.8.9 compatibility through faithful translation of the supplied MCP919 source. Directory resemblance and a restricted native session do not establish that objective. Original Java, MCP, mappings, JARs, resources and private witnesses stay outside publication.
+
+The current work is specification first: [the compatibility specification](specification/README.md) records original behavior independently of the existing native implementation. Its [coverage ledger](specification/coverage.md) is incomplete. Close member contracts, data tables, ordering, failure prefixes and dependency semantics before resuming the translation work described below. A documentation consistency pass is not a declaration that the specification can independently reproduce all Minecraft.
 
 Current implemented constructor closure: Entity → EntityLivingBase → EntityPlayer, actual AbstractClientPlayer/EntityPlayerSP and actual EntityPlayerMP, with one receiver in each live client/server path. The MP path includes ItemInWorldManager construction, selected WorldBorder bodies, floor/add arithmetic and genuine native world/server/clock providers. Named source statements are translated; provider boundaries are tracked in porting.md. Verification compares actual target execution, strict Windows/WSL, TCP, heap snapshots and sanitizers before audited public publication.
 

@@ -4,6 +4,8 @@
 
 Java原本、テクスチャ、音声、モデル、JAR、MCP本体・マッピングは公開リポジトリに含めません。公開するのはC/C++側の移植コードと独自の環境接続処理、テスト、文書です。地形と表示用マテリアルは独自生成です。JavaやMinecraftのインストールはC919同士のプレイに不要です。
 
+現在は実装を増やす前に、[原版互換仕様](docs/specification/README.md)を固めています。通信、NBT・Anvil、ゲーム処理、Java実行モデル、クライアント・リソース、適合性を詳細章へ分け、[仕様の充足表](docs/specification/coverage.md)で原版全1613ファイルに対する不足を追跡します。この仕様も策定中であり、Markdownだけで全Minecraftを再実装できる完成版とはまだ数えません。
+
 [原本からの移植記録](docs/porting.md)では、元クラスの本体、C側の環境処理、未移植の依存先を区別しています。実server/clientの所持品・クラフト枠・カーソル・落下アイテムは、翻訳済みの参照型ItemStack・NBT・Container・DataWatcherを直接所有します。原版のpacket/handler、クリック予測、複数プレイヤーをまとめた保存へ接続しています。描画・地形・物理・多くのItem/World/Entity依存先は引き続き独自の接続処理であり、Minecraft全体の翻訳完了を意味しません。
 
 所持品の毎tick更新とホットバーの受取アニメーションも、原版InventoryPlayer・ItemStack・ItemとGuiIngameの対象メソッドへ接続しています。同じstackが複数枠にある場合も元順で更新し、個数0や負のstackを消しません。Timerの全field・constructor・updateTimerを移植し、原版の経過tickと描画用端数を実clientへ接続しています。全プレイヤーtick・Minecraft.runGameLoop/runTick・RenderItem/FontRenderer全体は未移植で、2つの時計と画像・文字の描画はnative依存です。
